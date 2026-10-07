@@ -764,6 +764,42 @@ describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate ride
     expect(uncited.warnings.some((x) => /the cited option quotes the frozen rate/u.test(x.message))).toBe(false);
   });
 
+  it("useRequestedRate builds at the RFQ's own rate by name: the way to cite a rate-less option, and never applied where it cannot be honoured", async () => {
+    const noRate = withOption((op) => { delete op["rate_override"]; });
+    // The refusal names the parameter and the rate it would use.
+    expect((await cite("0030", noRate)).warnings[0]!.message).toMatch(new RegExp(`Pass jitMarket\\.rateOverride .*, or useRequestedRate: true to build at the rate the RFQ asks for \\(${RFQ_FIXED_RATE}\\)`, "u"));
+    const asked = await cite("0031", noRate, { useRequestedRate: true });
+    expect(asked.state, JSON.stringify(asked.warnings)).toBe("ok");
+    expect((await hookOf(asked.data as Answered)).rateOverride).toBe(RFQ_FIXED_RATE);
+    expect((asked.data as Answered).answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_RATE, rateFrom: "rfq", requestedRate: RFQ_FIXED_RATE });
+    // The option named no rate, and the order builds what the request asked: nothing to differ from.
+    expect(asked.warnings.some((x) => /a different FixedRateOracle/u.test(x.message))).toBe(false);
+    // The cited option names ANOTHER rate: the request's rate wins as asked, and the difference is said.
+    const other = await cite("0032", ctx, { useRequestedRate: true });
+    expect(other.state, JSON.stringify(other.warnings)).toBe("ok");
+    expect((await hookOf(other.data as Answered)).rateOverride).toBe(RFQ_FIXED_RATE);
+    expect((other.data as Answered).answer.fixed).toMatchObject({ rateFrom: "rfq" });
+    expect(other.warnings.some((x) => new RegExp(`the cited option quotes the frozen rate ${RFQ_FIXED_OPTION_RATE}, and useRequestedRate builds this order at ${RFQ_FIXED_RATE} .*or drop useRequestedRate\\. The order still builds`, "u").test(x.message))).toBe(true);
+    // Without the flag the same citation builds at the option's rate.
+    expect((await hookOf((await cite("0033", ctx)).data as Answered)).rateOverride).toBe(RFQ_FIXED_OPTION_RATE);
+    // Two names for one rate are refused as input; the schema's "0" names no rate.
+    await expect(cite("0034", ctx, { useRequestedRate: true, jitMarket: { rateOverride: RFQ_FIXED_RATE } })).rejects.toMatchObject({ issues: [{ path: ["action", "useRequestedRate"] }] });
+    expect((await cite("0035", noRate, { useRequestedRate: true, jitMarket: { rateOverride: "0" } })).state).toBe("ok");
+    // An RFQ that names no rate has none to use.
+    const expiry = (NOW + 20n * 86_400n).toString();
+    const none = await answer("0036", RFQ_OPEN_ID, { expiryTimestamp: expiry, useRequestedRate: true, jitMarket: { recipe: FIXED_RECIPE } });
+    expect(none.state).toBe("unavailable");
+    expect(none.warnings[0]).toMatchObject({ code: "invalid_order_terms" });
+    expect(none.warnings[0]!.message).toMatch(/useRequestedRate: RFQ .* names no admissible frozen rate.*Pass jitMarket\.rateOverride/u);
+    // A recipe that reads an oracle carries no frozen rate: refused, not silently unapplied.
+    const oracle = await answer("0037", RFQ_FIXED_ID, { useRequestedRate: true, jitMarket: { recipe: LIQUIDITY_RECIPE } });
+    expect(oracle.state).toBe("unavailable");
+    expect(oracle.warnings[0]!.message).toMatch(/useRequestedRate with recipe .*, which reads a price oracle.*Drop useRequestedRate/u);
+    // Uncited, the RFQ's rate is the default already: the flag changes nothing.
+    const uncited = await answer("0038", RFQ_FIXED_ID, { useRequestedRate: true });
+    expect((uncited.data as Answered).answer.fixed).toMatchObject({ rateOverride: RFQ_FIXED_RATE, rateFrom: "rfq" });
+  });
+
   it("when the reference's rate cannot be read the order still builds and the answer says the comparison was not made", async () => {
     const wrappers = (lookup: () => string): HandlerContext => ({
       ...ctx,
@@ -899,4 +935,111 @@ describe("the recipe.verify pre-flight (JIT ladder and create-pool): a revert is
       expect(of(yes, "chain_read_failed")).toEqual([]);
     });
   }
+});
+
+describe("answer-rfq: every market term comes from the source that stated it", () => {
+  const NOW = 1_790_000_000n;
+  const ctx = stubContext();
+  const underwriter = SIGNED_LOP_PAYLOAD.order.maker as `0x${string}`;
+  const expiry = (NOW + 20n * 86_400n).toString();
+  type Row = { request: Record<string, any>; answers: Array<{ answer: { options: Array<Record<string, any>> } }> } & Record<string, any>;
+  /** The stub's inline RFQ with its venue row changed before the tool reads it. */
+  const withRow = (change: (row: Row) => void): HandlerContext => ({
+    ...ctx,
+    venueFetch: async (url: string, init?: RequestInit) => {
+      const res = await ctx.venueFetch!(url, init);
+      if (!new URL(url).pathname.endsWith(`/rfqs/v2/${RFQ_INLINE_ID}`)) return res;
+      const row = (await res.json()) as Row;
+      change(row);
+      return new Response(JSON.stringify(row), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  type Built = { typedData: { message: Record<string, string> }; extension: string; answer: { pool: { poolId: string }; inline?: { source: string } } };
+  const feesOf = async (d: Built) => {
+    const jit = ((await runTool("cork_decode", { chainId: 42161, kind: "order", data: { ...d.typedData.message, extension: d.extension } }, ctx)).data as { jit: Record<string, string> }).jit;
+    return { swap: jit["swapFeePercentage"], unwind: jit["unwindSwapFeePercentage"] };
+  };
+  const uncited = (id: string, jitMarket?: Record<string, unknown>, c: HandlerContext = ctx) =>
+    runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: `answer-terms-${id}`, action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, premiumAnnualized: "0.04", expiryTimestamp: expiry, ...(jitMarket !== undefined ? { jitMarket } : {}) } }, c);
+  const cite = (id: string, c: HandlerContext, over: Record<string, unknown> = {}) =>
+    runTool("cork_prepare_orders", { chainId: 42161, account: underwriter, clientRequestId: `answer-terms-${id}`, action: { type: "answer-rfq", rfqId: RFQ_INLINE_ID, answerId: RFQ_INLINE_ANSWER_ID, optionId: "opt1", ...over } }, c);
+  const said = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.filter((w) => w.code === "invalid_order_terms").map((w) => w.message);
+
+  it("a jitMarket object that names no fee keeps the TEMPLATE's fees: the same pool as no jitMarket at all", async () => {
+    // The fees are part of the pool id on the 10-field primary. A schema default of "0" used to
+    // arrive looking like the caller's own "0" and silently built the zero-fee pool.
+    const plain = await uncited("0001");
+    expect(plain.state, JSON.stringify(plain.warnings)).toBe("ok");
+    const pool = (plain.data as Built).answer.pool.poolId;
+    expect(await feesOf(plain.data as Built)).toEqual({ swap: "1000000000000000000", unwind: "0" });
+    for (const [id, jitMarket] of [["0002", {}], ["0003", { permits: [] }], ["0004", { recipe: LIQUIDITY_RECIPE }], ["0005", { enableJitMint: false }]] as const) {
+      const env = await uncited(id, jitMarket);
+      expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+      expect((env.data as Built).answer.pool.poolId, JSON.stringify(jitMarket)).toBe(pool);
+      expect(await feesOf(env.data as Built), JSON.stringify(jitMarket)).toEqual({ swap: "1000000000000000000", unwind: "0" });
+    }
+    // The unwind fee follows the same rule (the stub's template names none, so give it one).
+    const unwindFee = withRow((row) => { row.request["market_template"].inline.oracle_params.unwind_swap_fee_wad = "500000000000000000"; });
+    expect(await feesOf((await uncited("0008", undefined, unwindFee)).data as Built)).toEqual({ swap: "1000000000000000000", unwind: "500000000000000000" });
+    expect(await feesOf((await uncited("0009", {}, unwindFee)).data as Built)).toEqual({ swap: "1000000000000000000", unwind: "500000000000000000" });
+    // The caller's own fee still wins — an explicit "0" included.
+    const zero = await uncited("0006", { swapFeePercentage: "0" });
+    expect((zero.data as Built).answer.pool.poolId).not.toBe(pool);
+    expect(await feesOf(zero.data as Built)).toEqual({ swap: "0", unwind: "0" });
+    const own = await uncited("0007", { unwindSwapFeePercentage: "2000000000000000000" });
+    expect(await feesOf(own.data as Built)).toEqual({ swap: "1000000000000000000", unwind: "2000000000000000000" });
+  });
+
+  it("a cited option that states no recipe and no block: the order borrows the request's, and says which", async () => {
+    const byId = withRow((row) => { row.answers[0]!.answer.options[0]!["market_template"] = { market_template_id: "tmpl_x" }; });
+    const env = await cite("0010", byId);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect((env.data as Built).answer.inline!.source).toBe("rfq");
+    const notice = said(env).find((m) => /states no recipe and no inline block of its own/u.test(m));
+    expect(notice).toMatch(new RegExp(`^cited option opt1 states no recipe and no inline block of its own.*takes the recipe ${LIQUIDITY_RECIPE} and the inline block cork-inline-liquidity/1 .*from the RFQ's template.*pass jitMarket\\.recipe to state the recipe yourself\\. The order still builds$`, "u"));
+    // The caller's own recipe is not borrowed; the block still is.
+    const ownRecipe = await cite("0011", byId, { jitMarket: { recipe: LIQUIDITY_RECIPE } });
+    const only = said(ownRecipe).find((m) => /of its own/u.test(m));
+    expect(only).toMatch(/states no inline block of its own.*takes the inline block cork-inline-liquidity\/1 .*pass the jitMarket fields to state them yourself/u);
+    expect(only).not.toMatch(/no recipe/u);
+    // An option that states both borrows nothing; an uncited answer has no quote to vouch.
+    expect(said(await cite("0012", ctx)).some((m) => /of its own/u.test(m))).toBe(false);
+    expect(said(await uncited("0013")).some((m) => /of its own/u.test(m))).toBe(false);
+  });
+
+  it("a warning about a BORROWED block names the RFQ as its owner, not the cited option", async () => {
+    const other = (NOW + 21n * 86_400n).toString();
+    const byId = withRow((row) => {
+      row.answers[0]!.answer.options[0]!["market_template"] = { market_template_id: "tmpl_x" };
+      row.request["market_template"].inline.oracle_params.expiry = other;
+    });
+    const borrowed = said(await cite("0020", byId)).find((m) => /inline template \(oracle_params\.expiry\) names pool expiry/u.test(m));
+    expect(borrowed).toMatch(/^the RFQ's inline template/u);
+    // The option's own block: the option is the owner.
+    const own = withRow((row) => { row.answers[0]!.answer.options[0]!["market_template"].inline.oracle_params.expiry = other; });
+    expect(said(await cite("0021", own)).find((m) => /inline template \(oracle_params\.expiry\) names pool expiry/u.test(m))).toMatch(/^the cited option's inline template/u);
+  });
+
+  it("the cited option's collateral: the pick on a one_of request, and a difference from the order is named", async () => {
+    const CA = "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2", OTHER = "0xdDb46999F8891663a8F2828d25298f70416d7610", THIRD = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+    const oneOf = (optionCollateral: string | undefined) => withRow((row) => {
+      row.request["collateral_asset"] = { one_of: [CA, THIRD] };
+      if (optionCollateral !== undefined) row.answers[0]!.answer.options[0]!["collateral_asset"] = optionCollateral;
+    });
+    // The quote names its collateral: the caller need not repeat it.
+    const quoted = await cite("0030", oneOf(CA));
+    expect(quoted.state, JSON.stringify(quoted.warnings)).toBe("ok");
+    expect((quoted.data as Built).typedData.message["takerAsset"]!.toLowerCase()).toBe(CA.toLowerCase());
+    expect(said(quoted).some((m) => /the cited option quotes collateral/u.test(m))).toBe(false);
+    // An option that names none, and no pick: still the caller's to choose.
+    await expect(cite("0031", oneOf(undefined))).rejects.toMatchObject({ issues: [{ path: ["action", "collateralAsset"] }] });
+    // The option's collateral outside the request's list is refused as the option's.
+    const outside = await cite("0032", oneOf(OTHER));
+    expect(outside.state).toBe("unavailable");
+    expect(outside.warnings[0]!.message).toMatch(/\(the cited option's collateral_asset\) is not among the collateral tokens the RFQ accepts/u);
+    // The order builds with another collateral than the quote: said, with the venue's verdict.
+    const differs = await cite("0033", withRow((row) => { row.answers[0]!.answer.options[0]!["collateral_asset"] = THIRD; }));
+    expect(differs.state, JSON.stringify(differs.warnings)).toBe("ok");
+    expect(said(differs).some((m) => new RegExp(`the cited option quotes collateral ${THIRD}, and this order builds with ${CA} .*HTTP 400.*The order still builds`, "u").test(m))).toBe(true);
+  });
 });

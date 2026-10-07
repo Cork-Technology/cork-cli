@@ -19,6 +19,11 @@ import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
 
 export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
+/** The book's open-order cap (cork-api limit-orders POST): a maker may have at most this many
+ *  OPEN or PARTIALLY_FILLED, unexpired orders on one chain whose maker and taker assets both
+ *  belong to one pool (the asset PAIR for a JIT order whose pool does not exist yet); the next
+ *  one is refused with HTTP 400. A signed order the venue refuses never rests. */
+export const VENUE_OPEN_ORDERS_PER_POOL = 5;
 
 /** Resolve the venue base and normalize away the retired base-versioned form: a configured
  *  base ending in /v<n> (the pre-0.3.3 convention, when the version lived in the base) would
@@ -43,6 +48,8 @@ export const MIRRORED_VENUE_LOGIC = [
   { gate: "quote_ref citation: answer existence, PARTY rule (requester or the cited answer's underwriter), option/chain/collateral coherence", mirror: "packages/core/src/handlers/submit.ts#resolveCitation", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (Verify RFQ provenance)" },
   { gate: "quote_ref premium acceptance band (parseFloat, fraction x100 canonicalization, strict ratio > 10 || < 0.1, both premiums > 0)", mirror: "packages/core/src/handlers/submit.ts#resolveListingPremium", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (premium scale signal)" },
   { gate: "premiumAnnualized caps: RFQ fraction pattern + < 0.5; book pattern + <= 100 (patterns are structure/R13, caps are policy)", mirror: "packages/core/src/handlers/submit.ts#premiumFractionViolation", venueSource: "src/modules/rfq/v2/schemas/rfq-common.schema.ts (premium fraction) + limit-orders write schemas" },
+  { gate: "listing expiry: the field is ABSENT for an order whose makerTraits carry no expiry (the schema refuses 0, the route refuses a present field beside no-expiry traits)", mirror: "packages/core/src/handlers/submit.ts#lopListingExpiry", venueSource: "src/modules/limit-orders/v1/schemas/post-order.schema.ts (expiry positive optional) + routes/post-order.ts (Expiry mismatch)" },
+  { gate: "open-order cap: at most 5 OPEN/PARTIALLY_FILLED unexpired orders per maker per chain per asset pair; the next POST is a 400", mirror: "packages/core/src/handlers/prepare-orders.ts#openOrderCapNotice", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (openOrdersCount >= 5)" },
   { gate: "listing traits cross-check: expiry/nonce/allowsPartialFills vs the signed makerTraits", mirror: "packages/core/src/handlers/submit.ts#handleSubmit", venueSource: "src/modules/limit-orders/v1/routes/post-order.ts (trait decode)" },
   { gate: "rollover admission battery (deadline ordering, positive premium, distinct tokens/pools, hook shape)", mirror: "packages/core/src/rollover.ts#checkRolloverOrderTerms", venueSource: "rollover post route deterministic checks" },
   { gate: "rfq-counter gates: requester-only (403), expired RFQ (410), optionRef existence", mirror: "packages/core/src/handlers/rfq-write.ts#readRfqTarget", venueSource: "src/modules/rfq/v2/routes/post-counter.ts" },

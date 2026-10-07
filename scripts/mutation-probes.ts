@@ -395,6 +395,30 @@ const CATALOG: Mutant[] = [
     tests: [T.trackForSelfAdapter],
   },
   {
+    // A missing collateral floor must be named: the holder signs 0 without a word otherwise.
+    id: "rollover-floor-notice-ca-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: '...(act.minCaReceived === undefined ? ["minCaReceived (the collateral the src-side unwind returns)"] : [])',
+    replace: "...[]",
+    tests: ["packages/core/test/rollover-hooks.test.ts"],
+  },
+  {
+    // The same for the shares floor.
+    id: "rollover-floor-notice-shares-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: '...(act.minSharesOut === undefined ? ["minSharesOut (the dst share pairs minted)"] : [])',
+    replace: "...[]",
+    tests: ["packages/core/test/rollover-hooks.test.ts"],
+  },
+  {
+    // A STATED floor is the holder's choice: naming it as missing would be a false alarm.
+    id: "rollover-floor-notice-stated-floor-named",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: 'act.minSharesOut === undefined ? ["minSharesOut (the dst share pairs minted)"]',
+    replace: 'act.minSharesOut !== undefined ? ["minSharesOut (the dst share pairs minted)"]',
+    tests: ["packages/core/test/rollover-hooks.test.ts"],
+  },
+  {
     // The pre-hook pulls (token, AMOUNT, allowUnderfill): swapping the amount for the fee flag
     // pulls nothing and the clone has no cPT to burn.
     id: "rollover-hooks-pull-args-swapped",
@@ -646,6 +670,22 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/prepare-orders.ts",
     find: "if (r.makingAmount > prev) groupMax.set(bucket, r.makingAmount);",
     replace: "groupMax.set(bucket, r.makingAmount);",
+    tests: [T.ladder],
+  },
+  {
+    // The venue's cap is a strict "more than": a ladder AT the cap rests whole.
+    id: "ladder-open-order-cap-off-by-one",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (rungs.length > VENUE_OPEN_ORDERS_PER_POOL) warnings.push(openOrderCapNotice(rungs.length));",
+    replace: "if (rungs.length >= VENUE_OPEN_ORDERS_PER_POOL) warnings.push(openOrderCapNotice(rungs.length));",
+    tests: [T.ladder],
+  },
+  {
+    // A ladder beyond the cap must be told; silence signs rungs the venue refuses.
+    id: "ladder-open-order-cap-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (rungs.length > VENUE_OPEN_ORDERS_PER_POOL) warnings.push(openOrderCapNotice(rungs.length));",
+    replace: "",
     tests: [T.ladder],
   },
   {
@@ -1105,9 +1145,9 @@ const CATALOG: Mutant[] = [
   {
     // The cited option's inline block wins over the RFQ's (the option is what the requester lifts).
     id: "answer-inline-option-block-ignored",
-    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "if (optionInline) {\n      inline = optionInline;",
-    replace: "if (false) {\n      inline = optionInline;",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  const inline = sourced(inlineParamsOfTemplate(cited.template), \"cited option\") ?? requestInline;",
+    replace: "  const inline = requestInline;",
     tests: [T.answer],
   },
   {
@@ -3660,8 +3700,8 @@ const CATALOG: Mutant[] = [
     // request cannot be answered without retyping the rate.
     id: "answer-fixed-rate-not-carried",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);",
-    replace: "  const rateOverride = explicitRate;",
+    find: "  const rateOverride = callerRate?.value ?? (isFixed ? templateRate : undefined);",
+    replace: "  const rateOverride = callerRate?.value;",
     tests: ["packages/core/test/answer-rfq.test.ts"],
   },
   {
@@ -3669,8 +3709,8 @@ const CATALOG: Mutant[] = [
     // UnexpectedRateOverride.
     id: "answer-rate-on-oracle-recipe",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);",
-    replace: "  const rateOverride = explicitRate ?? templateRate;",
+    find: "  const rateOverride = callerRate?.value ?? (isFixed ? templateRate : undefined);",
+    replace: "  const rateOverride = callerRate?.value ?? templateRate;",
     tests: ["packages/core/test/answer-rfq.test.ts"],
   },
   {
@@ -4403,8 +4443,8 @@ const CATALOG: Mutant[] = [
     // rival's answer passes — the very third-party stamping the party rule refuses.
     id: "quote-ref-party-any-answer-underwriter",
     file: "packages/core/src/handlers/submit.ts",
-    find: "const underwriter = cited.answer?.underwriter;",
-    replace: "const underwriter = ((rfq.answers ?? []) as CitedAnswer[]).map((a) => a.underwriter).find((u) => typeof u === \"string\" && u.toLowerCase() === action.order.maker.toLowerCase()) ?? cited.answer?.underwriter;",
+    find: "const underwriter = rfqAnswerUnderwriter(cited.answer);",
+    replace: "const underwriter = ((rfq.answers ?? []) as CitedAnswer[]).map((a) => rfqAnswerUnderwriter(a)).find((u) => typeof u === \"string\" && u.toLowerCase() === action.order.maker.toLowerCase()) ?? rfqAnswerUnderwriter(cited.answer);",
     tests: [T.venue],
   },
   {
@@ -6060,12 +6100,31 @@ const CATALOG: Mutant[] = [
     tests: [T.makerReadiness],
   },
   {
-    // The permit escape hatch stops consulting the signer: a CONTRACT maker's embedded permit
-    // counts (ERC-2612 is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
+    // The permit escape hatch stops consulting the signer: a CONTRACT maker's LOP-level permit
+    // counts (that permit is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
     id: "readiness-hatch-ignores-signer",
     file: "packages/core/src/handlers/maker-readiness.ts",
-    find: "      const hatch = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa !== false;",
-    replace: "      const hatch = extensionHatch || permitsCoverMakerAsset;",
+    find: "      const extensionOpen = extensionHatch && f.makerCanSignEcdsa !== false;",
+    replace: "      const extensionOpen = extensionHatch;",
+    tests: [T.makerReadiness],
+  },
+  {
+    // The JIT permit rule forgets the wire: a CONTRACT maker's nested-wire permit (ERC-1271
+    // bytes, adapter 0.5.0) reads as unsignable again, and the readiness verdict excludes a
+    // fillable order.
+    id: "readiness-nested-permit-wire-ignored",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: '  const makerCanSignJitPermit = jit?.wire === "nested" ? true : f.makerCanSignEcdsa;',
+    replace: "  const makerCanSignJitPermit = f.makerCanSignEcdsa;",
+    tests: [T.makerReadiness],
+  },
+  {
+    // The reverse: every wire treated as ERC-1271-capable — the flat (0.3.x) adapter's
+    // ECDSA-only permit stops refuting a contract maker (the incident class returns).
+    id: "readiness-flat-permit-treated-as-erc1271",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: '  const makerCanSignJitPermit = jit?.wire === "nested" ? true : f.makerCanSignEcdsa;',
+    replace: "  const makerCanSignJitPermit = jit !== null ? true : f.makerCanSignEcdsa;",
     tests: [T.makerReadiness],
   },
   {
@@ -6477,6 +6536,41 @@ const CATALOG: Mutant[] = [
   //    denominations, the binding chain, the alias precedence, the salt refusal on flat, the
   //    generation threading, and decode dispatch by classification. Killed by
   //    test/market-registry-nested.test.ts (chain-captured golden bytes) unless noted. ──────────
+  {
+    // The nested permit row reverts to the 0.4.0 adapter's v/r/s tuple: the 0.5.0 adapter
+    // (bytes signature, market-registry PR #65) reads every permit-carrying payload wrongly.
+    id: "nested-permit-row-reverts-to-vrs",
+    file: "packages/core/src/market-registry.ts",
+    find: "  PERMITS_NESTED_ABI,\n];",
+    replace: "  PERMITS_FLAT_ABI,\n];",
+    tests: [T.nested, T.extraData],
+  },
+  {
+    // The layout diff stops comparing the permit signature: a decoder that read other signature
+    // bytes than we wrote would pass the round-trip.
+    id: "layout-diff-permit-signature-blind",
+    file: "packages/core/src/market-registry.ts",
+    find: "ep.deadline !== dp.deadline || lc(ep.signature) !== lc(dp.signature)) out.push",
+    replace: "ep.deadline !== dp.deadline) out.push",
+    tests: [T.extraData],
+  },
+  {
+    // Both permit forms accepted at once: `signature` silently wins over a disagreeing v/r/s.
+    id: "permit-both-forms-accepted",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if (p.signature !== undefined && split > 0) {",
+    replace: "  if (false) {",
+    tests: [T.nested],
+  },
+  {
+    // A non-ECDSA (ERC-1271) signature reaches the flat (0.3.x) encoder, whose adapter takes
+    // only v/r/s — the refusal must happen at input, with teaching.
+    id: "permit-flat-erc1271-not-refused",
+    file: "packages/core/src/handlers/jit.ts",
+    find: '    if (wire !== "nested" && splitPermitSignature(signature) === null) {',
+    replace: "    if (false) {",
+    tests: [T.nested],
+  },
   {
     // oracleSalt is MarketParams index 7, between the bytes and the fees; swapping it with the
     // bytes moves every trailing word — the adapter's own encodeExtraData bytes disagree.
@@ -7740,33 +7834,33 @@ const CATALOG: Mutant[] = [
   {
     // A cited option brings its OWN rate: falling back to the request's rate signs an order for a pool the cited quote never named.
     id: "answer-fixed-cited-falls-back-to-rfq-rate",
-    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "    templateRate = fixedRateOverrideOfTemplate(found.option.market_template);\n",
-    replace: "    templateRate = fixedRateOverrideOfTemplate(found.option.market_template) ?? templateRate;\n",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "rate: sourced(fixedRateOverrideOfTemplate(cited.template), \"cited option\"), requestedRate, borrowed };",
+    replace: "rate: sourced(fixedRateOverrideOfTemplate(cited.template), \"cited option\") ?? sourced(requestedRate, \"rfq\"), requestedRate, borrowed };",
     tests: [T.answer],
   },
   {
     // A cited answer's rate is the cited option's, and the echo says so whether or not it equals the request's.
     id: "answer-fixed-cited-rate-source-mislabeled",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited ? \"cited option\" : \"rfq\";",
-    replace: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited && templateRate !== requestedRate ? \"cited option\" : \"rfq\";",
+    find: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited && !action.useRequestedRate ? \"cited option\" : \"rfq\";",
+    replace: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited && !action.useRequestedRate && templateRate !== requestedRate ? \"cited option\" : \"rfq\";",
     tests: [T.answer],
   },
   {
     // An explicit rate that differs from the cited option's makes the order cite a quote it does not back: the venue checks the premium only.
     id: "answer-fixed-explicit-vs-cited-unsaid",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
-    replace: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== requestedRate) {",
+    find: "  if (isFixed && cited && callerRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {",
+    replace: "  if (isFixed && cited && callerRate !== undefined && templateRate !== undefined && callerRate.value !== requestedRate) {",
     tests: [T.answer],
   },
   {
     // Uncited, there is no cited quote to differ from.
     id: "answer-fixed-explicit-vs-cited-when-uncited",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
-    replace: "  if (isFixed && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {",
+    find: "  if (isFixed && cited && callerRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {",
+    replace: "  if (isFixed && callerRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {",
     tests: [T.answer],
   },
   {
@@ -8525,6 +8619,414 @@ const CATALOG: Mutant[] = [
     find: "filters: { kind: \"orders\", rfqId: r.rfq_id as string, fillable: true } }",
     replace: "filters: { kind: \"orders\", rfqId: r.rfq_id as string } }",
     tests: [T.rfqRollover],
+  },
+  {
+    // useRequestedRate is the caller's named choice of the RFQ's rate; ignored, a rate-less cited option refuses and a rated one wins.
+    id: "answer-requested-rate-flag-ignored",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const callerRate = explicitRate !== undefined ? { value: explicitRate, param: \"jitMarket.rateOverride\" } : action.useRequestedRate && requestedRate !== undefined ? { value: requestedRate, param: \"useRequestedRate\" } : undefined;",
+    replace: "  const callerRate = explicitRate !== undefined ? { value: explicitRate, param: \"jitMarket.rateOverride\" } : undefined;",
+    tests: [T.answer],
+  },
+  {
+    // Two names for one rate: the flag beside an explicit rate would let one of them lose silently.
+    id: "answer-requested-rate-and-explicit-both-accepted",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (action.useRequestedRate && action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== \"0\") {",
+    replace: "  if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // The schema's "0" names no rate, so it does not collide with the flag.
+    id: "answer-requested-rate-zero-is-a-rate",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (action.useRequestedRate && action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== \"0\") {",
+    replace: "  if (action.useRequestedRate && action.jitMarket?.rateOverride !== undefined) {",
+    tests: [T.answer],
+  },
+  {
+    // A recipe that reads an oracle carries no frozen rate: the flag is refused there, never carried into a fill that reverts.
+    id: "answer-requested-rate-on-oracle-recipe",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (action.useRequestedRate) {\n    if (recipeSource !== undefined && !isFixed) {",
+    replace: "  if (action.useRequestedRate) {\n    if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // An RFQ that names no rate has none to use; the refusal says so in the flag's own words.
+    id: "answer-requested-rate-without-a-request-rate",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    if (requestedRate === undefined) {\n      return unavailable(chainId, \"invalid_order_terms\", `useRequestedRate: RFQ",
+    replace: "    if (false) {\n      return unavailable(chainId, \"invalid_order_terms\", `useRequestedRate: RFQ",
+    tests: [T.answer],
+  },
+  {
+    // A rate taken from the request by the flag is the request's, also on a cited answer.
+    id: "answer-requested-rate-source-mislabeled",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited && !action.useRequestedRate ? \"cited option\" : \"rfq\";",
+    replace: "  const rateFrom = explicitRate !== undefined ? \"jitMarket.rateOverride\" : cited ? \"cited option\" : \"rfq\";",
+    tests: [T.answer],
+  },
+  {
+    // The flag can build another rate than the cited option quotes; that difference is said like an explicit rate's.
+    id: "answer-requested-rate-vs-cited-unsaid",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (isFixed && cited && callerRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {",
+    replace: "  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {",
+    tests: [T.answer],
+  },
+  {
+    // The warning names the parameter the caller actually passed, so its advice can be followed.
+    id: "answer-requested-rate-param-misnamed",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const callerRate = explicitRate !== undefined ? { value: explicitRate, param: \"jitMarket.rateOverride\" } : action.useRequestedRate && requestedRate !== undefined ? { value: requestedRate, param: \"useRequestedRate\" } : undefined;",
+    replace: "  const callerRate = explicitRate !== undefined ? { value: explicitRate, param: \"jitMarket.rateOverride\" } : action.useRequestedRate && requestedRate !== undefined ? { value: requestedRate, param: \"jitMarket.rateOverride\" } : undefined;",
+    tests: [T.answer],
+  },
+  {
+    // The refusal of a rate-less cited option names the flag and the rate it would use.
+    id: "answer-requested-rate-hint-dropped",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    const viaRequest = cited && requestedRate !== undefined ?",
+    replace: "    const viaRequest = false ?",
+    tests: [T.answer],
+  },
+  {
+    // A cited option's own recipe is the quote's recipe.
+    id: "terms-option-recipe-ignored",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  const recipe = sourced(recipeAddressOfTemplate(cited.template), \"cited option\") ?? requestRecipe;",
+    replace: "  const recipe = requestRecipe;",
+    tests: ["packages/core/test/answer-terms.test.ts"],
+  },
+  {
+    // A recipe taken from the request is the request's: labelling it the option's hides that the quote never stated it.
+    id: "terms-borrowed-recipe-claimed-as-quoted",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  const recipe = sourced(recipeAddressOfTemplate(cited.template), \"cited option\") ?? requestRecipe;",
+    replace: "  const recipe = sourced(recipeAddressOfTemplate(cited.template) ?? requestRecipe?.value, \"cited option\");",
+    tests: ["packages/core/test/answer-terms.test.ts"],
+  },
+  {
+    // A borrowed recipe is listed, so the handler can name it.
+    id: "terms-borrowed-recipe-unlisted",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  const borrowed: BorrowedTerm[] = [...(recipe?.from === \"rfq\" ? ([\"recipe\"] as const) : []), ...(inline?.from === \"rfq\" ? ([\"inline block\"] as const) : [])];",
+    replace: "  const borrowed: BorrowedTerm[] = [...(inline?.from === \"rfq\" ? ([\"inline block\"] as const) : [])];",
+    tests: ["packages/core/test/answer-terms.test.ts", T.answer],
+  },
+  {
+    // A borrowed inline block is listed, so the handler can name it.
+    id: "terms-borrowed-block-unlisted",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  const borrowed: BorrowedTerm[] = [...(recipe?.from === \"rfq\" ? ([\"recipe\"] as const) : []), ...(inline?.from === \"rfq\" ? ([\"inline block\"] as const) : [])];",
+    replace: "  const borrowed: BorrowedTerm[] = [...(recipe?.from === \"rfq\" ? ([\"recipe\"] as const) : [])];",
+    tests: ["packages/core/test/answer-terms.test.ts", T.answer],
+  },
+  {
+    // A cited option with no template is still a cited answer: its rate is not the request's.
+    id: "terms-templateless-option-read-as-uncited",
+    file: "packages/core/src/handlers/answer-terms.ts",
+    find: "  if (cited === undefined) return {",
+    replace: "  if (cited === undefined || cited.template === undefined) return {",
+    tests: ["packages/core/test/answer-terms.test.ts"],
+  },
+  {
+    // What a cited answer takes from the request is named: the quote does not vouch for it.
+    id: "answer-borrowed-terms-unsaid",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (borrowed.length > 0) {",
+    replace: "  if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // The caller's own recipe is not borrowed from the request.
+    id: "answer-own-recipe-called-borrowed",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const borrowed = terms.borrowed.filter((t) => !(t === \"recipe\" && action.jitMarket?.recipe !== undefined));",
+    replace: "  const borrowed = terms.borrowed;",
+    tests: [T.answer],
+  },
+  {
+    // A warning about a borrowed block names the RFQ as its owner.
+    id: "answer-borrowed-block-owner-misnamed",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  const blockOwner = terms.inline?.from === \"cited option\" ? \"cited option's\" : \"RFQ's\";",
+    replace: "  const blockOwner = cited ? \"cited option's\" : \"RFQ's\";",
+    tests: [T.answer],
+  },
+  {
+    // The echoed source of the inline block is where it came from, not whether the answer is cited.
+    id: "answer-inline-source-echo-by-citation",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "              source: terms.inline?.from ?? \"rfq\",",
+    replace: "              source: cited ? \"cited option\" : \"rfq\",",
+    tests: [T.answer],
+  },
+  {
+    // On a one_of request the cited option's collateral is the pick when the caller names none.
+    id: "answer-cited-collateral-not-the-pick",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "    const picked = action.collateralAsset ?? quotedCollateral;",
+    replace: "    const picked = action.collateralAsset;",
+    tests: [T.answer],
+  },
+  {
+    // An order that builds with another collateral than its cited option is one the venue refuses: said before the signature.
+    id: "answer-cited-collateral-difference-unsaid",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "  if (quotedCollateral !== undefined && quotedCollateral.toLowerCase() !== collateralAsset.toLowerCase()) {",
+    replace: "  if (false) {",
+    tests: [T.answer],
+  },
+  {
+    // A refused collateral that came from the cited option is named as the option's, not as the caller's input.
+    id: "answer-cited-collateral-refusal-unattributed",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "${action.collateralAsset === undefined ? \" (the cited option's collateral_asset)\" : \"\"}",
+    replace: "${\"\"}",
+    tests: [T.answer],
+  },
+  {
+    // The answer's fee fields carry no default: a default "0" reads as the caller's own and overrides the template's fees (part of the pool id).
+    id: "answer-fee-defaults-restored",
+    file: "packages/schemas/src/tools.ts",
+    find: ".partial().extend({ swapFeePercentage: AnswerSwapFeeWire, unwindSwapFeePercentage: AnswerUnwindSwapFeeWire }).optional()",
+    replace: ".partial().optional()",
+    tests: [T.answer],
+  },
+  {
+    // Same, the swap fee alone.
+    id: "answer-swap-fee-default-restored",
+    file: "packages/schemas/src/tools.ts",
+    find: "const AnswerSwapFeeWire = UintStr.optional()",
+    replace: "const AnswerSwapFeeWire = UintStr.default(\"0\")",
+    tests: [T.answer],
+  },
+  {
+    // Same, the unwind fee alone.
+    id: "answer-unwind-fee-default-restored",
+    file: "packages/schemas/src/tools.ts",
+    find: "const AnswerUnwindSwapFeeWire = UintStr.optional()",
+    replace: "const AnswerUnwindSwapFeeWire = UintStr.default(\"0\")",
+    tests: [T.answer],
+  },
+  {
+    // A no-expiry order relays NO expiry field: the venue's schema refuses 0 and its route refuses a present field beside no-expiry traits.
+    id: "submit-listing-expiry-zero-relayed",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "  return expiry === 0 ? {} : { expiry };",
+    replace: "  return { expiry };",
+    tests: ["packages/core/test/venue.test.ts"],
+  },
+  {
+    // An order whose traits carry an expiry relays that value.
+    id: "submit-listing-expiry-dropped",
+    file: "packages/core/src/handlers/submit.ts",
+    find: "  return expiry === 0 ? {} : { expiry };",
+    replace: "  return {};",
+    tests: ["packages/core/test/venue.test.ts"],
+  },
+  {
+    // The venue's full view serves the underwriter inside the answer payload; unread, the party rule never runs.
+    id: "rfq-answer-underwriter-payload-unread",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  return typeof inner === \"string\" ? inner : undefined;",
+    replace: "  return undefined;",
+    tests: ["packages/core/test/venue.test.ts"],
+  },
+  {
+    // The current view (and the offers join) serve the underwriter at row level.
+    id: "rfq-answer-underwriter-row-unread",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "  if (typeof r.underwriter === \"string\") return r.underwriter;\n",
+    replace: "",
+    tests: ["packages/core/test/venue.test.ts"],
+  },
+  {
+    // The registry and creator are per-generation contracts: checked against the primary alone, the tool's own bytes for an older active set read 'do not sign'.
+    id: "decode-market-primary-only",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "      const verdict = role === \"marketCreator\" ? verifyAcrossGenerations(c.to, trust.marketCreator, trust.marketCreators) : verifyAcrossGenerations(c.to, trust.marketRegistry, trust.marketRegistries);",
+    replace: "      const verdict = verifyAgainst(c.to, role === \"marketCreator\" ? trust.marketCreator : trust.marketRegistry);",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // A registry call at a creator is not a registry call: each role has its own book.
+    id: "decode-market-roles-interchangeable",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "      const verdict = role === \"marketCreator\" ? verifyAcrossGenerations(c.to, trust.marketCreator, trust.marketCreators) : verifyAcrossGenerations(c.to, trust.marketRegistry, trust.marketRegistries);",
+    replace: "      const verdict = role === \"marketCreator\" ? verifyAcrossGenerations(c.to, trust.marketCreator, trust.marketCreators) : verifyAcrossGenerations(c.to, trust.marketRegistry, trust.marketCreators);",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // A contract of a non-primary generation is trusted AND labeled with that generation.
+    id: "decode-other-generation-unlabeled",
+    file: "packages/core/src/bundle/decode.ts",
+    find: "    return { verification: \"trusted\", generation: other.label };\n  }\n  return verifyAgainst(to, primary);",
+    replace: "    return { verification: \"trusted\" };\n  }\n  return verifyAgainst(to, primary);",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // Every generation's registry is in the decode book.
+    id: "decode-market-registries-unlisted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "(g.marketRegistry?.registry ? [{ address: g.marketRegistry.registry as `0x${string}`, label: g.label }] : [])",
+    replace: "([] as { address: `0x${string}`; label: string }[])",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // Every generation's creator is in the decode book.
+    id: "decode-market-creators-unlisted",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "(g.marketRegistry?.marketCreator ? [{ address: g.marketRegistry.marketCreator as `0x${string}`, label: g.label }] : [])",
+    replace: "([] as { address: `0x${string}`; label: string }[])",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // A signed tx to an older generation's registry is a known Cork target, named with its generation.
+    id: "decode-tx-older-registry-unknown",
+    file: "packages/core/src/handlers/decode.ts",
+    find: "        if (m === undefined || isPrimary(m.registry, mr?.registry)) return [];",
+    replace: "        if (m !== null) return [];",
+    tests: ["packages/core/test/decode-market-generations.test.ts"],
+  },
+  {
+    // A fill of an order whose signed expiry has passed reverts OrderExpired(): named from the signed bytes.
+    id: "fill-expired-order-unsaid",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "  if (expiry === 0n || expiry >= nowSecs) return undefined;",
+    replace: "  if (expiry >= 0n) return undefined;",
+    tests: ["packages/core/test/taker-fill-inline.test.ts"],
+  },
+  {
+    // The LOP's comparison is expiry < block.timestamp: at the expiry second the order still fills.
+    id: "fill-expiry-off-by-one",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "  if (expiry === 0n || expiry >= nowSecs) return undefined;",
+    replace: "  if (expiry === 0n || expiry > nowSecs) return undefined;",
+    tests: ["packages/core/test/taker-fill-inline.test.ts"],
+  },
+  {
+    // Expiry 0 is no expiry, never an expired order.
+    id: "fill-no-expiry-called-expired",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "  if (expiry === 0n || expiry >= nowSecs) return undefined;",
+    replace: "  if (expiry >= nowSecs) return undefined;",
+    tests: ["packages/core/test/taker-fill-inline.test.ts"],
+  },
+  {
+    // The expiry notice reaches the result.
+    id: "fill-expired-notice-not-returned",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "    warnings: [...(expiredWarning ? [expiredWarning] : []), ...jitWarnings,",
+    replace: "    warnings: [...jitWarnings,",
+    tests: ["packages/core/test/taker-fill-inline.test.ts"],
+  },
+  {
+    // An EOA holder that did not sign is a definitive refusal: the settler reverts on it.
+    id: "rollover-fill-eoa-holder-unrefuted",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "      if (code === \"no-code\") return refuted(",
+    replace: "      if (code === \"never\") return refuted(",
+    tests: ["packages/core/test/rollover-fill.test.ts"],
+  },
+  {
+    // A contract holder whose isValidSignature rejects is refused.
+    id: "rollover-fill-contract-holder-rejection-ignored",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "        else if (v.kind === \"erc1271_rejected\") return refuted(",
+    replace: "        else if (v.kind === (\"never\" as string)) return refuted(",
+    tests: ["packages/core/test/rollover-fill.test.ts"],
+  },
+  {
+    // The verdict says eoa-verified only when ecrecover yields the holder.
+    id: "rollover-fill-holder-verdict-forged",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "    if (eoa.signer !== null && isAddressEqual(eoa.signer, order.user)) holderSignature = \"eoa-verified\";",
+    replace: "    if (eoa.signer !== null) holderSignature = \"eoa-verified\";",
+    tests: ["packages/core/test/rollover-fill.test.ts"],
+  },
+  {
+    // Without an RPC a non-recovering signature is not refuted (a contract holder nobody could ask): it rides unverified, and says so.
+    id: "rollover-fill-offline-mismatch-refused",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "    else if (!resolved) warnings.push({ code: \"funding_needs_rpc\", message: `the holder's signature does not ecrecover",
+    replace: "    else if (!resolved) return refuted(\"no RPC\", \"config\"); else if (!resolved) warnings.push({ code: \"funding_needs_rpc\", message: `the holder's signature does not ecrecover",
+    tests: ["packages/core/test/rollover-fill.test.ts"],
+  },
+  {
+    // A contract holder's accepted signature reads erc1271-verified.
+    id: "rollover-fill-contract-verdict-unset",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "        if (v.kind === \"erc1271\") holderSignature = \"erc1271-verified\";",
+    replace: "        if (v.kind === \"erc1271\") holderSignature = \"unverified\";",
+    tests: ["packages/core/test/rollover-fill.test.ts"],
+  },
+  {
+    // The taker-side JIT gate uses the target generation's fee rule, as the maker side does, never the compiled 5% cap.
+    id: "taker-jit-fee-rule-compiled-cap",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs, { feeRule: await resolveFeeRule(chainId, \"adapter\", ctx) });\n  if (valueGate) return { gate: valueGate };",
+    replace: "  const valueGate = jitValueGate(chainId, ctx, swapFee, unwindFee, expiryTimestamp, nowSecs);\n  if (valueGate) return { gate: valueGate };",
+    tests: ["packages/core/test/venue.test.ts"],
+  },
+  {
+    // A simulation on a defaulted chain says so: the artifact carries no chain, and the wrong chain reads green.
+    id: "simulate-chain-default-unsaid",
+    file: "packages/core/src/handlers/track.ts",
+    find: "    if (input.chainId === undefined) {\n      warnings.push({ code: \"chainid_defaulted\", message: \"chainId was not supplied \u2014 simulated",
+    replace: "    if (false) {\n      warnings.push({ code: \"chainid_defaulted\", message: \"chainId was not supplied \u2014 simulated",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // A call to an address without code succeeds and does nothing: the clean answer is labeled.
+    id: "simulate-codeless-target-unsaid",
+    file: "packages/core/src/handlers/track.ts",
+    find: "      if (targetHasCode === false) {",
+    replace: "      if (false) {",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // "0x" and an absent answer both mean no code.
+    id: "simulate-empty-code-read-as-code",
+    file: "packages/core/src/handlers/track.ts",
+    find: "    return code !== undefined && code !== \"0x\";",
+    replace: "    return code !== undefined;",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // "0x" and an absent answer both mean no code.
+    id: "simulate-absent-code-read-as-code",
+    file: "packages/core/src/handlers/track.ts",
+    find: "    return code !== undefined && code !== \"0x\";",
+    replace: "    return code !== \"0x\";",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // A code read that fails is not 'no code'.
+    id: "simulate-failed-code-read-is-a-verdict",
+    file: "packages/core/src/handlers/track.ts",
+    find: "  } catch {\n    return undefined;\n  }\n}\n\nexport async function handleTrack(",
+    replace: "  } catch {\n    return false;\n  }\n}\n\nexport async function handleTrack(",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // A plain value transfer (empty data) to an account is not a contract call.
+    id: "simulate-value-transfer-judged",
+    file: "packages/core/src/handlers/track.ts",
+    find: "      const targetHasCode = data === \"0x\" ? undefined : await readHasCode(",
+    replace: "      const targetHasCode = await readHasCode(",
+    tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // The verdict is in data, where a caller that reads wouldRevert reads it.
+    id: "simulate-code-verdict-not-in-data",
+    file: "packages/core/src/handlers/track.ts",
+    find: "wouldRevert: false, ...(targetHasCode !== undefined ? { targetHasCode } : {}), to,",
+    replace: "wouldRevert: false, to,",
+    tests: ["packages/core/test/track-simulate.test.ts"],
   },
 ];
 

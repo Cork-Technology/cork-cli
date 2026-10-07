@@ -19,6 +19,7 @@
 //    Cork JIT adapter, which needs its own ERC-20 allowance.
 import { encodeFunctionData, parseAbi } from "viem";
 import { erc20Abi, permit2AllowanceAbi } from "./chain/abis.ts";
+import type { MarketRegistryWire } from "./generations.ts";
 
 /** Canonical Uniswap Permit2 — the same CREATE2 address on every chain this tool serves. */
 export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
@@ -59,8 +60,9 @@ export interface ApprovalRequirement {
   amount: string | null;
   kind: "exact" | "cap";
   /** Which wallet kinds can satisfy it. Approval TXS work for EOAs and contract wallets alike
-   *  (a contract wallet executes the same payload through its own flow); an ERC-2612 permit
-   *  needs an ECDSA signature, so it is EOA-only. */
+   *  (a contract wallet executes the same payload through its own flow). A JIT ERC-2612 permit
+   *  is EOA-only on the flat wire (ECDSA v/r/s); on the nested wire (adapter 0.5.0+) it carries
+   *  signature bytes, so a contract wallet signs it through ERC-1271. */
   wallets: "eoa+contract" | "eoa-only";
   note: string;
   /** The unsigned grant tx [K1]; null for erc2612-permit (a signature, not a transaction). */
@@ -92,19 +94,20 @@ export function makerApprovalRequirements(a: {
   usePermit2: boolean;
   /** Absolute unix seconds from the makerTraits expiry slot; 0/undefined = no expiry. */
   orderExpiry?: bigint;
-  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` | null };
+  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` | null; wire?: MarketRegistryWire };
 }): ApprovalRequirement[] {
   const out: ApprovalRequirement[] = [];
   const predictedCst = a.jit?.predictedCorkSwapToken;
   const makerAssetIsJitCst = predictedCst != null && lc(predictedCst) === lc(a.makerAsset);
+  const contractCanPermit = a.jit?.wire === "nested";
   const amount = a.makingAmount.toString();
 
   if (makerAssetIsJitCst) {
     out.push({
       role: "maker", stage: "with-order-signature", holder: a.maker, token: a.makerAsset,
       tokenRole: "makerAsset (predicted cST)", spender: a.lop, spenderRole: "1inch LOP",
-      mechanism: "erc2612-permit", amount, kind: "exact", wallets: "eoa-only",
-      note: "the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits, together with jitMarket.constraint = the constraint this prepare resolved (the pool's identity; without the pin an oracle tick re-derives a different cST than the permit covers). A CONTRACT maker cannot produce this ECDSA signature; its path is cork_prepare_market create-pool — create the pool AHEAD of the fill (same derivation, idempotent), then approve the now-existing cST to the LOP and sign the order with no permits.",
+      mechanism: "erc2612-permit", amount, kind: "exact", wallets: contractCanPermit ? "eoa+contract" : "eoa-only",
+      note: `the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits, together with jitMarket.constraint = the constraint this prepare resolved (the pool's identity; without the pin an oracle tick re-derives a different cST than the permit covers). ${contractCanPermit ? "On this (nested) wire a CONTRACT maker can sign it too: the permit carries signature bytes that the cST checks with ERC-1271 (e.g. a Safe). Another path for any maker" : "A CONTRACT maker cannot produce this ECDSA signature (only the nested-wire JIT adapter 0.5.0+ takes an ERC-1271 permit); its path"} is cork_prepare_market create-pool — create the pool AHEAD of the fill (same derivation, idempotent), then approve the now-existing cST to the LOP and sign the order with no permits.`,
       unsignedTx: null,
     });
   } else if (a.usePermit2) {
@@ -155,11 +158,12 @@ export function takerApprovalRequirements(a: {
   lop: `0x${string}`;
   forSelfAdapter?: `0x${string}`;
   auction?: boolean;
-  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; predictedCorkSwapToken?: `0x${string}` | null };
+  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; predictedCorkSwapToken?: `0x${string}` | null; wire?: MarketRegistryWire };
 }): ApprovalRequirement[] {
   const out: ApprovalRequirement[] = [];
   const predictedCst = a.jit?.predictedCorkSwapToken;
   const takerAssetIsJitCst = predictedCst != null && lc(predictedCst) === lc(a.takerAsset);
+  const contractCanPermit = a.jit?.wire === "nested";
   const amount = a.requiredTakingAmount.toString();
   const capNote = a.auction
     ? "cap = the auction curve's CEILING (the cap must sit above the current decayed price for the whole window, or the fill reverts mid-decay); the fill consumes only the current price"
@@ -169,8 +173,8 @@ export function takerApprovalRequirements(a: {
     out.push({
       role: "taker", stage: "with-order-signature", holder: a.taker, token: a.takerAsset,
       tokenRole: "takerAsset (predicted cST)", spender: a.lop, spenderRole: "1inch LOP",
-      mechanism: "erc2612-permit", amount, kind: "exact", wallets: "eoa-only",
-      note: "the taker delivers a cST that is minted DURING the fill — sign an ERC-2612 permit (owner = taker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits so the LOP can pull the just-minted token. A CONTRACT taker cannot produce this signature; its path is cork_prepare_market create-pool (create the pool AHEAD of the fill), then mint the cST directly (cork_prepare_phoenix deposit), approve it to the LOP, and fill WITHOUT a taker JIT interaction.",
+      mechanism: "erc2612-permit", amount, kind: "exact", wallets: contractCanPermit ? "eoa+contract" : "eoa-only",
+      note: `the taker delivers a cST that is minted DURING the fill — sign an ERC-2612 permit (owner = taker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits so the LOP can pull the just-minted token. ${contractCanPermit ? "On this (nested) wire a CONTRACT taker can sign it too: the permit carries signature bytes that the cST checks with ERC-1271 (e.g. a Safe). Another path for any taker" : "A CONTRACT taker cannot produce this ECDSA signature (only the nested-wire JIT adapter 0.5.0+ takes an ERC-1271 permit); its path"} is cork_prepare_market create-pool (create the pool AHEAD of the fill), then mint the cST directly (cork_prepare_phoenix deposit), approve it to the LOP, and fill WITHOUT a taker JIT interaction.`,
       unsignedTx: null,
     });
   } else if (a.forSelfAdapter) {

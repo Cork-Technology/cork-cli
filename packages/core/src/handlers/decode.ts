@@ -318,12 +318,16 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   // Cork's own deployment and may be called trusted, labeled with its generation; an integrator's
   // adapter is not in any config and stays unverified (the 2026-10-01 integration triage, item 2, 2026-10-01).
   const forSelfAdapters = generations.flatMap((g) => (g.forSelf?.adapter ? [{ address: g.forSelf.adapter as `0x${string}`, label: g.label }] : []));
+  // The registry and the creator are PER GENERATION like the adapters: cork_prepare_market
+  // builds for any active generation, and its own bytes must decode as trusted.
+  const marketRegistries = generations.flatMap((g) => (g.marketRegistry?.registry ? [{ address: g.marketRegistry.registry as `0x${string}`, label: g.label }] : []));
+  const marketCreators = generations.flatMap((g) => (g.marketRegistry?.marketCreator ? [{ address: g.marketRegistry.marketCreator as `0x${string}`, label: g.label }] : []));
   const adapters = generations.flatMap((g) => (g.marketRegistry?.adapter ? [{ address: g.marketRegistry.adapter as `0x${string}`, label: g.label, status: g.status, wire: g.marketRegistry.wire }] : []));
   return {
     // The Phoenix adapter book is PER GENERATION too: a bundle built for a pool on an older
     // generation runs at THAT generation's adapter (every pool the venue serves today), so each
     // configured generation's corkAdapter is trusted and the matched leg carries its label.
-    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, corkAdapters, forSelfAdapters, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator },
+    targets: { bundler3: dep?.bundler3, corkAdapter: dep?.corkAdapter, corkAdapters, forSelfAdapters, lop: LOP_ADDRESSES[chainId], marketRegistry: mr?.registry, marketCreator: mr?.marketCreator, marketRegistries, marketCreators },
     jitTrust: { adapters, generations },
     dep,
     depWarn,
@@ -631,6 +635,14 @@ export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): P
       ["marketRegistry", mr?.registry],
       ["corkMarketCreator", mr?.marketCreator],
       ["corkLimitOrderAdapter (JIT)", mr?.adapter],
+      // The same three contracts of every OTHER generation, named with their generation: a tx
+      // this tool built for an older active set goes to a genuine Cork contract.
+      ...(trust.jitTrust.generations ?? []).flatMap((g): Array<[string, string | undefined]> => {
+        const m = g.marketRegistry;
+        const isPrimary = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+        if (m === undefined || isPrimary(m.registry, mr?.registry)) return [];
+        return [[`marketRegistry (${g.label} generation)`, m.registry], [`corkMarketCreator (${g.label} generation)`, m.marketCreator], [`corkLimitOrderAdapter (JIT, ${g.label} generation)`, m.adapter]];
+      }),
       // The reference ForSelf adapter of each generation (Cork's own deployment per the
       // Distribution record): named with its generation, like the rollover sets below.
       ...(trust.jitTrust.generations ?? []).flatMap((g): Array<[string, string | undefined]> => (g.forSelf?.adapter ? [[`forSelfAdapter (reference, ${g.label} generation)`, g.forSelf.adapter]] : [])),

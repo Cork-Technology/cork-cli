@@ -17,7 +17,7 @@ function workspace() {
   copyFileSync(join(root, "mise.toml"), join(dir, "mise.toml"));
   writeFileSync(join(dir, "tracked.txt"), "pinned source\n");
   const git = (...args: string[]) => {
-    const r = spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: dir, encoding: "utf8" });
+    const r = spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "tag.forceSignAnnotated=false", ...args], { cwd: dir, encoding: "utf8" });
     if (r.status !== 0) throw new Error(r.stderr);
     return r.stdout.trim();
   };

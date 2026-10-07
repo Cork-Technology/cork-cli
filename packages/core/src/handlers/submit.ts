@@ -14,7 +14,7 @@ import { parseQuotedOrder } from "../rfq-quotes.ts";
 import { answerOptionOrderViolation, checkQuotedOptions, proveRfqWrite, readRfqTarget, resolveRfqAuth, rfqKindFieldsViolation, signatureRefused } from "./rfq-write.ts";
 import { checkRolloverWrite, readRolloverQuote } from "./rfq-rollover.ts";
 import { rolloverQuoteRefMismatch } from "../rfq-rollover.ts";
-import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, rfqAnswerUnderwriter, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
 
 /**
@@ -120,6 +120,14 @@ interface CitedAnswer {
  * rule. A missing OPTION inside a resolved answer is definitive: an embedded answer row carries
  * its whole payload.
  */
+/** The listing's `expiry` as the venue takes it: the field is ABSENT for an order whose signed
+ *  makerTraits carry no expiry. The venue's schema is `positive().optional()`, so 0 is a 400
+ *  ("Too small"), and its route refuses a present field beside no-expiry traits ("Expiry
+ *  mismatch"). Our own listing says 0 = no expiry; the two meet here. */
+export function lopListingExpiry(expiry: number): { expiry?: number } {
+  return expiry === 0 ? {} : { expiry };
+}
+
 function resolveCitation(rfq: Record<string, unknown>, answerId: string, optionId: string): { answer: CitedAnswer | undefined; option: Record<string, unknown> | undefined; unresolved: boolean } {
   const answers = (rfq.answers ?? []) as CitedAnswer[];
   const answer = answers.find((a) => String(a.answer_id) === answerId);
@@ -518,7 +526,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // when both are present and neither is the maker; otherwise the venue's full store
         // decides (a relay must never out-reject its venue).
         const requester = (rfq.request as Record<string, unknown> | undefined)?.requester;
-        const underwriter = cited.answer?.underwriter;
+        const underwriter = rfqAnswerUnderwriter(cited.answer);
         const parties = [requester, underwriter].filter((p): p is string => typeof p === "string");
         const makerIsParty = parties.some((p) => p.toLowerCase() === action.order.maker.toLowerCase());
         const partiesKnown = typeof requester === "string" && typeof underwriter === "string";
@@ -549,7 +557,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           if (typeof optCollateral === "string" && ![action.order.makerAsset.toLowerCase(), action.order.takerAsset.toLowerCase()].includes(optCollateral.toLowerCase())) {
             return unavailable(chainId, "invalid_order_terms", `quote_ref option's collateral asset ${optCollateral} is not a leg of this order (${action.order.makerAsset} / ${action.order.takerAsset}) — the cited option must describe THIS order (venue 400)`, ctx);
           }
-          const quotedOrderProblem = quotedOrderCitationViolation({ chainId, option, underwriter: cited.answer?.underwriter, maker: action.order.maker, orderHash });
+          const quotedOrderProblem = quotedOrderCitationViolation({ chainId, option, underwriter: rfqAnswerUnderwriter(cited.answer), maker: action.order.maker, orderHash });
           if (quotedOrderProblem) return unavailable(chainId, "invalid_order_terms", quotedOrderProblem, ctx);
           // Deliberately STRICTER than the venue on one point: a cited premium that does not
           // parse to a positive number makes the venue skip its band silently — here that is a
@@ -622,7 +630,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // The removed percent `premium` is never relayed — resolveListingPremium refuses any
         // payload carrying it before this point (the venue 400s on presence since 0.3.15).
         premium_annualized: action.premiumAnnualized!,
-        expiry: action.expiry,
+        ...lopListingExpiry(action.expiry),
         nonce: action.nonce,
         allowsPartialFills: action.allowsPartialFills,
         chainId,

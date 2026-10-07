@@ -8,16 +8,17 @@ import { buildMakerOrder, classifyInvalidatorWord, decodeMakerTraits, hashLopOrd
 import { type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements } from "../order-approvals.ts";
 import { getLopOrderbook, getRfq, parseSignedLopOrder } from "../datasources/venue.ts";
 import { erc20Abi } from "../chain/abis.ts";
-import { answerOcoGroup, coverMakingAmount, fixedRateOverrideOfTemplate, impliedPremiumWad, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, inlineParamsOfTemplate, premiumAmount, premiumFraction, recipeAddressOfTemplate, reRestExpirySeconds, type InlineTemplateParams } from "../orders-answer.ts";
+import { answerOcoGroup, coverMakingAmount, impliedPremiumWad, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, premiumAmount, premiumFraction, reRestExpirySeconds } from "../orders-answer.ts";
 import { COVER_RFQ_MODE, type CoverKind, coverKindOfRecipeName, inlineBlockWarnings } from "../cover.ts";
 import { quotedOrderWire } from "../rfq-quotes.ts";
 import { impairmentDurationOfArgs } from "../market-registry.ts";
 import type { MarketRegistryWire } from "../generations.ts";
 import { blockBytesFor, blockIsRecipesOwn, classifyRecipeAddress, durationBeyondLifeNote, readFixedRatePosition, readRecipeSource, readReferenceLoss } from "./cover-reading.ts";
-import { chainReadFailed, envelope, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { chainReadFailed, envelope, getRpc, type HandlerContext, rfqAnswerUnderwriter, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
 import { quoteRefOf } from "./query-offers.ts";
+import { quotedTerms } from "./answer-terms.ts";
 
 type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-order" }>;
 
@@ -83,6 +84,10 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   if (!cited && (action.premiumAnnualized === undefined || action.expiryTimestamp === undefined)) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.premiumAnnualized === undefined ? "premiumAnnualized" : "expiryTimestamp"], message: "an UNCITED answer needs premiumAnnualized (decimal-fraction string, \"0.041\" = 4.1%) AND expiryTimestamp (the pool expiry, unix seconds) — or cite one of your posted options with answerId + optionId" }]);
   }
+  // One rate, named once: the flag IS "jitMarket.rateOverride = the RFQ's rate".
+  if (action.useRequestedRate && action.jitMarket?.rateOverride !== undefined && action.jitMarket.rateOverride !== "0") {
+    throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "useRequestedRate"], message: "useRequestedRate and jitMarket.rateOverride are mutually exclusive: each names the frozen rate this order builds at — pass the rate itself, or ask for the RFQ's" }]);
+  }
   if (action.premiumAnnualized !== undefined) {
     try { premiumFraction(action.premiumAnnualized); } catch (e) { throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "premiumAnnualized"], message: (e as Error).message }]); }
   }
@@ -106,7 +111,12 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const requester = isAddr(rfq.requester) ? rfq.requester : undefined;
   const referenceAsset = isAddr(rfq.reference_asset) ? rfq.reference_asset : undefined;
   if (!referenceAsset) return unavailable(chainId, "invalid_service_response", "the RFQ record carries no reference_asset address", ctx);
-  // collateral: `exact`, or the caller's pick from `one_of`.
+  // The cited option, when there is one: it states the quote's own terms, the collateral included.
+  const found = cited ? findRfqOption(rfq, action.answerId!, action.optionId!) : undefined;
+  if (found === "no-answer") return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} is not on RFQ ${action.rfqId} (the venue serves ${Array.isArray(rfq.answers) ? (rfq.answers as unknown[]).length : 0} answers)`, ctx);
+  if (found === "no-option") return unavailable(chainId, "invalid_order_terms", `option ${action.optionId} is not on answer ${action.answerId}`, ctx);
+  const quotedCollateral = found !== undefined && isAddr(found.option.collateral_asset) ? found.option.collateral_asset : undefined;
+  // collateral: `exact`, or a pick from `one_of` — the caller's, else the cited option's own.
   const ca = rfq.collateral_asset as { exact?: unknown; one_of?: unknown } | undefined;
   let collateralAsset: `0x${string}` | undefined;
   if (ca && isAddr(ca.exact)) {
@@ -116,37 +126,38 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     }
   } else if (ca && Array.isArray(ca.one_of)) {
     const accepted = (ca.one_of as unknown[]).filter(isAddr).map((a) => a.toLowerCase());
-    if (action.collateralAsset === undefined) {
+    const picked = action.collateralAsset ?? quotedCollateral;
+    if (picked === undefined) {
       throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "collateralAsset"], message: `this RFQ accepts any of ${accepted.length} collateral tokens (${accepted.join(", ")}) — pick one with collateralAsset` }]);
     }
-    if (!accepted.includes(action.collateralAsset.toLowerCase())) {
-      return unavailable(chainId, "invalid_order_terms", `${action.collateralAsset} is not among the collateral tokens the RFQ accepts (${accepted.join(", ")})`, ctx);
+    if (!accepted.includes(picked.toLowerCase())) {
+      return unavailable(chainId, "invalid_order_terms", `${picked}${action.collateralAsset === undefined ? " (the cited option's collateral_asset)" : ""} is not among the collateral tokens the RFQ accepts (${accepted.join(", ")})`, ctx);
     }
-    collateralAsset = action.collateralAsset;
+    collateralAsset = picked;
   } else if (action.collateralAsset !== undefined) {
     collateralAsset = action.collateralAsset;
   }
   if (!collateralAsset) return unavailable(chainId, "invalid_service_response", "the RFQ record names no acceptable collateral asset (collateral_asset.exact / one_of) — pass collateralAsset", ctx);
+  // The venue ties a citation to the order: the cited option's collateral must be a leg of it.
+  if (quotedCollateral !== undefined && quotedCollateral.toLowerCase() !== collateralAsset.toLowerCase()) {
+    warnings.push({ code: "invalid_order_terms", message: `the cited option quotes collateral ${quotedCollateral}, and this order builds with ${collateralAsset} — the venue refuses an order whose cited option's collateral is not one of its legs (HTTP 400), and cork_submit refuses it before relay. Cite an option that quotes ${collateralAsset}, or answer uncited. The order still builds` });
+  }
 
   // ── the quote: a cited option or the caller's own terms ──
   let premiumAnnualized: string;
   let expiryTimestamp: bigint;
-  let citedTemplate: unknown;
-  let templateRecipe: `0x${string}` | undefined = recipeAddressOfTemplate(rfq.market_template);
-  // The frozen rate the REQUEST names (cork-api 0.4.4 `rate_override`). An uncited answer builds
-  // at it. A CITED answer builds at the cited option's own rate and never at the request's:
-  // every option carries its own template, so an option without a rate quoted no rate.
-  const requestedRate = fixedRateOverrideOfTemplate(rfq.market_template);
-  let templateRate = requestedRate;
-  // The requester's inline block (anchor, expiry, fees) — the cited option's when it carries one.
-  let inline: InlineTemplateParams | undefined = inlineParamsOfTemplate(rfq.market_template);
-  let inlineSource: "rfq" | "cited option" = "rfq";
+  const citedTemplate: unknown = found?.option.market_template;
+  // Each market term with the source that stated it (answer-terms.ts holds the rule): on a
+  // cited answer the recipe and the inline block may be BORROWED from the request, and are then
+  // named; the frozen rate never is — an option without a rate quoted no rate.
+  const terms = quotedTerms(rfq.market_template, found !== undefined ? { template: citedTemplate } : undefined);
+  const requestedRate = terms.requestedRate;
+  const templateRate = terms.rate?.value;
+  const inline = terms.inline?.value;
+  const blockOwner = terms.inline?.from === "cited option" ? "cited option's" : "RFQ's";
   let optionEcho: Record<string, unknown> | null = null;
-  if (cited) {
-    const found = findRfqOption(rfq, action.answerId!, action.optionId!);
-    if (found === "no-answer") return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} is not on RFQ ${action.rfqId} (the venue serves ${Array.isArray(rfq.answers) ? (rfq.answers as unknown[]).length : 0} answers)`, ctx);
-    if (found === "no-option") return unavailable(chainId, "invalid_order_terms", `option ${action.optionId} is not on answer ${action.answerId}`, ctx);
-    const underwriter = str(found.answer.underwriter) ?? str((found.answer.answer as Record<string, unknown> | undefined)?.underwriter);
+  if (found !== undefined) {
+    const underwriter = rfqAnswerUnderwriter(found.answer);
     if (underwriter !== undefined && underwriter.toLowerCase() !== input.account.toLowerCase()) {
       return unavailable(chainId, "invalid_order_terms", `answer ${action.answerId} was posted by ${underwriter}, not by ${input.account} — an underwriter re-quotes only its OWN answer (the new answer supersedes it). Answer uncited with premiumAnnualized + expiryTimestamp instead`, ctx);
     }
@@ -155,14 +166,6 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     if (p === undefined || e === undefined || !/^\d+$/.test(e)) return unavailable(chainId, "invalid_service_response", `option ${action.optionId} carries no usable premium_annualized/expiry`, ctx);
     premiumAnnualized = p;
     expiryTimestamp = BigInt(e);
-    citedTemplate = found.option.market_template;
-    templateRecipe = recipeAddressOfTemplate(found.option.market_template) ?? templateRecipe;
-    templateRate = fixedRateOverrideOfTemplate(found.option.market_template);
-    const optionInline = inlineParamsOfTemplate(found.option.market_template);
-    if (optionInline) {
-      inline = optionInline;
-      inlineSource = "cited option";
-    }
     optionEcho = { answerId: action.answerId, optionId: action.optionId, premiumAnnualized: p, expiry: e, ...(str(found.option.notional_max_assets) !== undefined ? { notionalMaxAssets: str(found.option.notional_max_assets) } : {}) };
     const maxNotional = str(found.option.notional_max_assets);
     const wanted = action.notionalAssets ?? str(rfq.notional_assets);
@@ -173,9 +176,17 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     premiumAnnualized = action.premiumAnnualized!;
     expiryTimestamp = BigInt(action.expiryTimestamp!);
   }
-  const recipe = action.jitMarket?.recipe ?? templateRecipe;
+  const recipe = action.jitMarket?.recipe ?? terms.recipe?.value;
   if (!recipe) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "recipe"], message: `neither the RFQ nor the cited option names a recipe (market_template.inline.oracle_recipe) — pass jitMarket.recipe (the approved recipe CONTRACT ADDRESS; discover with cork_query resource:"registry-recipes")` }]);
+  }
+  // A cited quote that does not state a term cannot vouch for it: what the order took from the
+  // request instead is named, so the underwriter checks it against what it meant to quote.
+  const borrowed = terms.borrowed.filter((t) => !(t === "recipe" && action.jitMarket?.recipe !== undefined));
+  if (borrowed.length > 0) {
+    const taken = borrowed.map((t) => (t === "recipe" ? `the recipe ${terms.recipe!.value}` : `the inline block ${terms.inline!.value.schema} (anchor, fees, salt, and the recipe's own words)`)).join(" and ");
+    const ownWay = borrowed.includes("recipe") ? "pass jitMarket.recipe to state the recipe yourself" : "pass the jitMarket fields to state them yourself";
+    warnings.push({ code: "invalid_order_terms", message: `cited option ${action.optionId} states no ${borrowed.join(" and no ")} of its own in a form this tool can read (an option that carries a market_template_id, or an inline template without it), so this order takes ${taken} from the RFQ's template. The cited quote does not vouch for those terms: check that they are the ones you quoted, or ${ownWay}. The order still builds` });
   }
   // ── a fixed recipe carries a RATE, every other recipe carries bytes ──
   // The recipe itself says which (`source()`): a fixed recipe's oracle is keyed on the frozen
@@ -200,18 +211,31 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   if (recipeSource !== undefined && !isFixed && explicitRate !== undefined) {
     return unavailable(chainId, "invalid_order_terms", `jitMarket.rateOverride ${explicitRate} with recipe ${recipe}, which reads a ${recipeSource} oracle: a fill that carries a non-zero rateOverride on such a recipe reverts UnexpectedRateOverride. Remove jitMarket.rateOverride, or answer with the fixed recipe (jitMarket.recipe) for fixed-rate cover`, ctx);
   }
-  const rateOverride = explicitRate ?? (isFixed ? templateRate : undefined);
-  const rateFrom = explicitRate !== undefined ? "jitMarket.rateOverride" : cited ? "cited option" : "rfq";
+  // The caller may ask for the REQUEST's rate by name instead of retyping it. It is the caller's
+  // own choice of rate like an explicit one, so it meets the same refusals and the same
+  // comparison with a cited quote; it is never applied where it cannot be honoured.
+  if (action.useRequestedRate) {
+    if (recipeSource !== undefined && !isFixed) {
+      return unavailable(chainId, "invalid_order_terms", `useRequestedRate with recipe ${recipe}, which reads a ${recipeSource} oracle: such a recipe carries no frozen rate (a fill with a non-zero rateOverride reverts UnexpectedRateOverride). Drop useRequestedRate, or answer with the fixed recipe (jitMarket.recipe) for fixed-rate cover`, ctx);
+    }
+    if (requestedRate === undefined) {
+      return unavailable(chainId, "invalid_order_terms", `useRequestedRate: RFQ ${action.rfqId} names no admissible frozen rate (market_template.inline.oracle_params.rate_override, a decimal string, ABSOLUTE 1e18 = 1.0), so there is no requested rate to build at. Pass jitMarket.rateOverride — the rate the pool freezes at`, ctx);
+    }
+  }
+  const callerRate = explicitRate !== undefined ? { value: explicitRate, param: "jitMarket.rateOverride" } : action.useRequestedRate && requestedRate !== undefined ? { value: requestedRate, param: "useRequestedRate" } : undefined;
+  const rateOverride = callerRate?.value ?? (isFixed ? templateRate : undefined);
+  const rateFrom = explicitRate !== undefined ? "jitMarket.rateOverride" : cited && !action.useRequestedRate ? "cited option" : "rfq";
   if (isFixed && rateOverride === undefined) {
-    return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is the FIXED-rate recipe, and neither the ${cited ? "cited option" : "RFQ"} nor this call names the frozen rate: the template carries no admissible market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0). Pass jitMarket.rateOverride — the rate the pool freezes at`, ctx);
+    const viaRequest = cited && requestedRate !== undefined ? `, or useRequestedRate: true to build at the rate the RFQ asks for (${requestedRate})` : "";
+    return unavailable(chainId, "invalid_order_terms", `recipe ${recipe} is the FIXED-rate recipe, and neither the ${cited ? "cited option" : "RFQ"} nor this call names the frozen rate: the template carries no admissible market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0). Pass jitMarket.rateOverride — the rate the pool freezes at${viaRequest}`, ctx);
   }
   if (isFixed && requestedRate !== undefined && rateOverride !== requestedRate) {
     warnings.push({ code: "invalid_order_terms", message: `the RFQ asks for the frozen rate ${requestedRate}, and this answer builds at ${rateOverride} (${rateFrom}) — a different FixedRateOracle and so a different pool: a visible counter-proposal the requester may ignore. The order still builds` });
   }
   // The order CITES an option, and the venue cross-checks the cited premium only: a rate of the
   // caller's own builds another pool than the one the cited quote names.
-  if (isFixed && cited && explicitRate !== undefined && templateRate !== undefined && explicitRate !== templateRate) {
-    warnings.push({ code: "invalid_order_terms", message: `the cited option quotes the frozen rate ${templateRate}, and jitMarket.rateOverride builds this order at ${explicitRate} — a different FixedRateOracle and so a different pool than the quote it cites (the venue checks the cited premium, not the rate). Post a revised answer at ${explicitRate} and cite that option, or drop jitMarket.rateOverride. The order still builds` });
+  if (isFixed && cited && callerRate !== undefined && templateRate !== undefined && callerRate.value !== templateRate) {
+    warnings.push({ code: "invalid_order_terms", message: `the cited option quotes the frozen rate ${templateRate}, and ${callerRate.param} builds this order at ${callerRate.value} — a different FixedRateOracle and so a different pool than the quote it cites (the venue checks the cited premium, not the rate). Post a revised answer at ${callerRate.value} and cite that option, or drop ${callerRate.param}. The order still builds` });
   }
   // The template against the recipe, in the words rfq-open uses for the same contradiction: a
   // block written for another cover, a rate on a recipe that reads an oracle.
@@ -231,7 +255,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     }
   }
   if (inline?.expiry !== undefined && inline.expiry !== expiryTimestamp) {
-    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template (oracle_params.expiry) names pool expiry ${inline.expiry}, but this answer builds at ${expiryTimestamp} — the requester derived its pool at ${inline.expiry}; the expiry is part of pool identity, so a different value is a different pool. The order still builds` });
+    warnings.push({ code: "invalid_order_terms", message: `the ${blockOwner} inline template (oracle_params.expiry) names pool expiry ${inline.expiry}, but this answer builds at ${expiryTimestamp} — the requester derived its pool at ${inline.expiry}; the expiry is part of pool identity, so a different value is a different pool. The order still builds` });
   }
 
   // ── the requester's inline block: carried as the recipe's additionalData, BY SCHEMA ──
@@ -253,7 +277,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const extraData: `0x${string}` | undefined = explicitBytes ?? inlineData;
   if (inline?.schema === INLINE_IMPAIRMENT_SCHEMA && blockIsRecipesOwn(kind, inline) && inlineData === undefined && explicitBytes === undefined) {
     const missing = (["anchorRate", "durationSeconds", "apySpreadPercentage"] as const).filter((k) => inline![k as keyof typeof inline] === undefined);
-    warnings.push({ code: "invalid_order_terms", message: `the ${cited ? "cited option's" : "RFQ's"} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT extraData and the recipe will refuse to resolve. Pass jitMarket.extraData (encodeImpairmentArgs) or ask the requester for a complete block` });
+    warnings.push({ code: "invalid_order_terms", message: `the ${blockOwner} inline template is ${INLINE_IMPAIRMENT_SCHEMA} but its oracle_params block lacks ${missing.join(" + ")} — the impairment recipe's additionalData is exactly three words (anchor_rate 1e18 = 1.0, duration_seconds, apy_spread_percentage 1e18 = 1%), so none was derived; the order builds WITHOUT extraData and the recipe will refuse to resolve. Pass jitMarket.extraData (encodeImpairmentArgs) or ask the requester for a complete block` });
   }
 
   // ── reach: the declared FILL SENDER, or open when nobody declared one ──
@@ -317,7 +341,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const carriedDuration = !carriesImpairmentBytes ? undefined : explicitBytes !== undefined ? impairmentDurationOfArgs(explicitBytes) : inlineData !== undefined && inline?.schema === INLINE_IMPAIRMENT_SCHEMA ? inline.durationSeconds : undefined;
   if (carriedDuration !== undefined) {
     const tenor = expiryTimestamp - nowSecs;
-    const whose = explicitBytes !== undefined ? "jitMarket.extraData sizes" : `the ${cited ? "cited option's" : "RFQ's"} impairment block sizes`;
+    const whose = explicitBytes !== undefined ? "jitMarket.extraData sizes" : `the ${blockOwner} impairment block sizes`;
     const beyondLife = dd.pool.exists ? undefined : durationBeyondLifeNote(dd.input.wire as MarketRegistryWire, carriedDuration, tenor);
     if (beyondLife !== undefined) {
       warnings.push({ code: "would_revert", message: `${whose} the rate window for a duration of ${carriedDuration} s, and this answer's market expires at ${expiryTimestamp} (now ${nowSecs}): the fill that creates the pool reverts RecipeRejectedConstraint. ${beyondLife}` });
@@ -486,7 +510,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         inline: inline
           ? {
               schema: inline.schema,
-              source: inlineSource,
+              source: terms.inline?.from ?? "rfq",
               anchorRate: inline.anchorRate?.toString() ?? null,
               expiry: inline.expiry?.toString() ?? null,
               swapFeeWad: inline.swapFeeWad ?? null,

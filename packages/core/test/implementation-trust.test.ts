@@ -246,7 +246,7 @@ describe("roles resolve INSIDE the selected generation; the allowlist is the uni
 
   it("the checker fingerprints the SELECTED generation's addresses (primary by default), and an unknown label fingerprints nothing", async () => {
     const byDefault = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES });
-    expect(byDefault.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x3e01c558fc0854e92e6ef2a84c19d6bf9d82b104"], ["marketRegistry", "0xe1f569f152bdb6ebb2d49cfd9d4ab98ecee955c5"]]);
+    expect(byDefault.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x960cd94b31121806b1b0ff02230d189ad0310616"], ["marketRegistry", "0xe1f569f152bdb6ebb2d49cfd9d4ab98ecee955c5"]]);
     const flatChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "phoenix/v0.3-rc.1" });
     expect(flatChecks.map((c) => [c.role, c.address.toLowerCase()]).sort()).toEqual([["jitAdapter", "0x8902a88912a334263fe3d731d03c267715b9374f"], ["marketRegistry", "0xa78d8137b01058dd23e545b6557209ebbc9611f1"]]);
     const legacyChecks = await checkApprovedImplementations(reader, 42161, { allowlist: BUNDLED_DEFAULTS, roles: JIT_IMPLEMENTATION_ROLES, generation: "arbitrum-v1.1" });
@@ -264,7 +264,7 @@ describe("roles resolve INSIDE the selected generation; the allowlist is the uni
       "0x0fc7787ec85619dfc68dab244ac8e3b0696672b3ce7c5a14609c07129d69cb0c", // pre-2.1.0 (legacy)
     ]);
     expect(chain.jitAdapter!.approved).toEqual([
-      "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
+      "0x24a11fba142a4b681a3bfbadf0ed74566fdf6281102137794d35c217f004225d", // adapter 0.5.0 (bytes permit, 2026-10-07; replaces 0.4.0 0x2fe70bac…, whose permit row this build no longer encodes)
       "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320",
       "0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1",
     ]);

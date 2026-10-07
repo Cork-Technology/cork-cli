@@ -393,6 +393,17 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     const body = seen[0]!.body as Record<string, unknown>;
     expect(String(body.orderHash)).toMatch(/^0x[0-9a-f]{64}$/); // locally recomputed, never caller-supplied
     expect(body.extension).toBe(""); // plain orders send the empty string per the venue contract
+    // The signed traits carry no expiry, so the relay body carries no `expiry` field at all: the
+    // venue's schema refuses 0 ("Too small") and its route refuses a present field beside
+    // no-expiry traits ("Expiry mismatch"). Measured on the venue's own server at 0.4.4.
+    expect("expiry" in body).toBe(false);
+    // An order whose traits DO carry an expiry relays exactly that value.
+    const EXPIRES = 1795000000;
+    const dated = { ...order, salt: "124", makerTraits: (BigInt(EXPIRES) << 80n).toString() };
+    const seenDated: Seen[] = [];
+    const datedEnv = await runTool("cork_submit", { ...base, clientRequestId: "test-lop-0001-dated", action: { ...base.action, order: dated, signature: await signLop(1, dated), expiry: EXPIRES } }, ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seenDated));
+    expect(datedEnv.state, JSON.stringify(datedEnv.warnings)).toBe("ok");
+    expect((seenDated[0]!.body as Record<string, unknown>)["expiry"]).toBe(EXPIRES);
 
     const badExt = await runTool(
       "cork_submit",
@@ -827,6 +838,20 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     const underwriter = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [answer("ans_1", SIGNER.address.toUpperCase().replace("0X", "0x"))] });
     expect(underwriter.state).toBe("ok");
     expect(underwriter.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
+
+    // The venue's FULL view (the view this relay reads) serves the underwriter INSIDE the stored
+    // answer payload, not at row level: `{ answer_id, received_at, answer: { underwriter, … } }`
+    // (read from the venue's own server at 0.4.4). The rule must run on that shape too — a
+    // row-level read alone never found the underwriter, so no rival was ever refused locally and
+    // every own-answer citation was told the party check could not run.
+    const fullView = (answerId: string, who: string) => ({ answer_id: answerId, received_at: 1789000000, answer: { underwriter: who, status: "quoted", options: [goodOption] } });
+    const rivalFull = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [fullView("ans_1", RIVAL)] });
+    expect(rivalFull.state).toBe("unavailable");
+    expect(rivalFull.warnings[0]).toMatchObject({ code: "invalid_order_terms" });
+    expect(rivalFull.warnings[0]?.message).toContain(RIVAL);
+    const ownFull = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [fullView("ans_1", SIGNER.address)] });
+    expect(ownFull.state).toBe("ok");
+    expect(ownFull.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
 
     // The underwriter of ANOTHER answer on the same RFQ, citing a rival's answer → refused: the
     // venue matches the underwriter recorded on the cited answer, not any underwriter on the RFQ.
@@ -1464,6 +1489,27 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
         // The stub mirrors the FLAT (0.3.3) JIT stack — name its generation (the primary is nested).
         { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: 1_790_000_000n, generation: "phoenix/v0.3-rc.1", resolveRpc: rpcStub(over, code) },
       );
+
+    it("the fee rule is the TARGET GENERATION's, as on the maker side: 5e18 inclusive on 8-field, below 100e18 on the 10-field primary", async () => {
+      const feeGate = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.find((w) => w.code === "invalid_order_terms" && /1e18 = 1% and/u.test(w.message))?.message;
+      // 8-field (the flat generation this stub mirrors): 5% passes the gate, 6% is refused.
+      expect(feeGate(await fillJit({ swapFeePercentage: "5000000000000000000" }))).toBeUndefined();
+      const six8 = await fillJit({ unwindSwapFeePercentage: "6000000000000000000" });
+      expect(six8.state).toBe("unavailable");
+      expect(feeGate(six8)).toMatch(/capped at 5e18 \(5%\) INCLUSIVE .*8-field generation/u);
+      // 10-field primary: a 6% fee is legal there, and was refused "capped at 5e18" by the
+      // compiled fallback. The gate now states the primary's own rule.
+      const onPrimary = (fee: string) =>
+        runTool(
+          "cork_prepare_orders",
+          { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-fee", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, swapFeePercentage: fee } }, format: "concise" },
+          { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: rpcStub() },
+        );
+      expect(feeGate(await onPrimary("6000000000000000000"))).toBeUndefined();
+      const hundred = await onPrimary("100000000000000000000");
+      expect(hundred.state).toBe("unavailable");
+      expect(feeGate(hundred)).toMatch(/strictly below 100e18/u);
+    });
 
     it("builds the interaction (adapter ++ extraData), packs its length at bits 200-223, and reports the taker-side jit data", async () => {
       const env = await fillJit();
