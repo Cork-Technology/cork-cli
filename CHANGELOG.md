@@ -7,7 +7,7 @@ covered.
 
 ## [0.7.0-rc.1] — preparation, not yet published
 
-A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. This preparation targets a private-only cut; it does not publish a tag, Release, package, image, or hosted MCP deployment. Independent exposure/review and compatibility approval, removal notice and usage evidence, and private-platform/signing prerequisites remain release gates.
+A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. This public candidate does not publish a tag, Release, package, image, or hosted MCP deployment. Independent exposure/review and compatibility approval, removal notice and usage evidence, and release signing prerequisites remain release gates.
 
 Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.5 at `4fb7eb3` on 2026-10-07, including the full-answer proof fix. The committed OpenAPI capture is refreshed from production. The API still serves v1 alongside v2; **this CLI/MCP/SDK RFQ surface serves v2 only**, with no v1 compatibility shim. See [the migration guide](docs/cli.md#12-migrate-from-06-to-07) before upgrading.
 
