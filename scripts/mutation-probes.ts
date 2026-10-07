@@ -117,6 +117,7 @@ const T = {
   evalHygiene: "evals/task-hygiene.test.ts",
   decodeJit: "packages/core/test/decode-jit-order.test.ts",
   decodeLop: "packages/core/test/decode-lop-call.test.ts",
+  cancelSweep: "packages/core/test/cancel-sweep.test.ts",
   decodeTrust: "packages/core/test/decode-trust.test.ts",
   implTrust: "packages/core/test/implementation-trust.test.ts",
   makerCode: "packages/core/test/maker-code-probe.test.ts",
@@ -716,6 +717,88 @@ const CATALOG: Mutant[] = [
     find: "so owner must have approved the cork adapter (${adapter})",
     replace: "so owner must have approved the pool manager (${adapter})",
     tests: [T.funding],
+  },
+  {
+    // The slot layout helper the sweep ledger and the decode label read from: a shifted slot
+    // boundary puts every listed order in the wrong word.
+    id: "orders-slot-coordinates-shift",
+    file: "packages/core/src/orders.ts",
+    find: "return { slot: nonce >> 8n, bitIndex: Number(nonce & 0xffn) };",
+    replace: "return { slot: nonce >> 7n, bitIndex: Number(nonce & 0x7fn) };",
+    tests: [T.cancelSweep],
+  },
+  {
+    // cork-cli-private#15: the sweep's ABI args swapped — the LOP would read the mask as traits.
+    id: "orders-bits-invalidate-args-swapped",
+    file: "packages/core/src/orders.ts",
+    find: 'functionName: "bitsInvalidateForOrder", args: [makerTraits, additionalMask] })',
+    replace: 'functionName: "bitsInvalidateForOrder", args: [additionalMask, makerTraits] })',
+    tests: [T.cancelSweep],
+  },
+  {
+    // The slot comparison is dropped: every bit-mode order of the maker joins the mask,
+    // whatever its slot word — bits land in the wrong word on chain.
+    id: "sweep-slot-compare-dropped",
+    file: "packages/core/src/orders.ts",
+    find: 'if (cp.slot !== plan.slot) { skipped.push({ orderHash: c.orderHash, reason: "other-slot" }); continue; }',
+    replace: "",
+    tests: [T.cancelSweep],
+  },
+  {
+    // The maker check is dropped: a stranger's rows join the sweep ledger.
+    id: "sweep-maker-filter-dropped",
+    file: "packages/core/src/orders.ts",
+    find: 'if (c.maker.toLowerCase() !== maker.toLowerCase()) { skipped.push({ orderHash: c.orderHash, reason: "other-maker" }); continue; }',
+    replace: "",
+    tests: [T.cancelSweep],
+  },
+  {
+    // A shared-bit sibling's bit is OR-ed into the additional mask (it equals the anchor bit).
+    id: "sweep-shared-bit-in-mask",
+    file: "packages/core/src/orders.ts",
+    find: 'if (relation === "same-slot") additionalMask |= cp.mask;',
+    replace: "additionalMask |= cp.mask;",
+    tests: [T.cancelSweep],
+  },
+  {
+    // The handler builds from a partial book instead of failing closed.
+    id: "handler-sweep-partial-book-built",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "  if (!book.complete) {\n    return envelope({\n      state: \"conflict\",\n      data: { orderHash: action.orderHash, scope: \"slot\",",
+    replace: "  if (false) {\n    return envelope({\n      state: \"conflict\",\n      data: { orderHash: action.orderHash, scope: \"slot\",",
+    tests: [T.cancelSweep],
+  },
+  {
+    // The supplied-vs-signed traits check is dropped: the wrong slot word is swept.
+    id: "handler-sweep-traits-check-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "if (localHash.toLowerCase() === action.orderHash.toLowerCase() && parsed.value.order.makerTraits !== traits) {",
+    replace: "if (false) {",
+    tests: [T.cancelSweep],
+  },
+  {
+    // The venue is asked for EVERY maker's rows (the maker filter dropped from the query).
+    id: "handler-sweep-maker-query-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "getLopOrderbook(deps, { chainId, maker: account, limit: 100,",
+    replace: "getLopOrderbook(deps, { chainId, limit: 100,",
+    tests: [T.cancelSweep],
+  },
+  {
+    // The decoder mislabels the sweep as a plain cancel.
+    id: "decode-bits-invalidate-fn-mislabeled",
+    file: "packages/core/src/orders.ts",
+    find: 'return { fn: "bitsInvalidateForOrder", makerTraits, additionalMask };',
+    replace: 'return { fn: "bitsInvalidateForOrder", makerTraits: additionalMask, additionalMask: makerTraits };',
+    tests: [T.cancelSweep],
+  },
+  {
+    // The epoch flag no longer reaches the summary.
+    id: "summary-epoch-note-dropped",
+    file: "packages/core/src/bundle/summary.ts",
+    find: "return t.needCheckEpochManager ? `; checks the epoch of series ${t.series} — an epoch bump retires it too` : \"\";",
+    replace: 'return "";',
+    tests: [T.cancelSweep],
   },
   {
     // cancel's `retires` must come from the SIGNED traits' nonce, not a placeholder.
@@ -8141,8 +8224,8 @@ const CATALOG: Mutant[] = [
     // the flags alone.
     id: "http-readyz-summary-carries-rpc",
     file: "packages/mcp/src/http.ts",
-    find: "subsystems: { rpc: { degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: false } },",
-    replace: "subsystems: { rpc: { ...diag.rpc, degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: false } },",
+    find: "subsystems: { rpc: { degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: configDegraded } },",
+    replace: "subsystems: { rpc: { ...diag.rpc, degraded: rpcDegraded }, venue: { degraded: venueDegraded }, admission: { degraded: false }, config: { degraded: configDegraded } },",
     tests: [T.mcpHttp],
   },
   {

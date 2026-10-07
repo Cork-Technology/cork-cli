@@ -2,8 +2,8 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { describeForeignTargets, extensionTargets, foreignExtensionTargets } from "../extension-targets.ts";
 import { isAddressEqual, zeroHash } from "viem";
-import { ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
-import { allowedSenderSuffix, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, readLopInvalidator, reconstructMakerOrder, type TakerFillResult } from "../orders.ts";
+import { type ChainId, ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
+import { allowedSenderSuffix, buildBitsInvalidateForOrder, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, maskBits, planSlotSweep, readLopInvalidator, reconstructMakerOrder, type SlotSweepCandidate, slotCoordinates, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
 import type { MarketRegistryWire } from "../generations.ts";
 import { buildDeployFixedRateOracleCall, buildJitExtension, deriveJitMarket, type JITMarketParams, predictShares, wireCodec } from "../market-registry.ts";
@@ -508,16 +508,17 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
     const traits = BigInt(action.makerTraits);
-    const cancel = buildCancelOrder(traits, action.orderHash);
-    // What this cancel retires is decided by the SIGNED traits, not the hash: on the bit
+    // What a cancel retires is decided by the SIGNED traits, not the hash: on the bit
     // invalidator, cancelOrder spends the (maker, nonce) bit, so every order by this maker that
     // carries the same nonce — a one-cancels-the-other group — is retired by this one transaction.
     // On the remaining-amount invalidator only this order hash is retired.
     const plan = lopInvalidatorPlan(traits);
+    if (action.scope === "slot") return handleCancelSlotSweep({ ctx, chainId, account: input.account, action, lop, traits, plan });
+    const cancel = buildCancelOrder(traits, action.orderHash);
     const retires = plan.mode === "bit"
       ? { invalidator: "bit" as const, nonce: plan.nonceOrEpoch.toString(), scope: `every order by ${input.account} whose makerTraits carry nonce ${plan.nonceOrEpoch} — a shared-nonce (ocoGroup) ladder is retired as one` }
       : { invalidator: "remaining" as const, nonce: null, scope: "this order hash only (remaining-amount invalidator)" };
-    return envelope({ state: "ok", data: { kind: "cancel", to: lop, calldata: cancel.data, orderHash: action.orderHash, retires, execution: executionEthTransaction() }, chainId, source: "config", ctx });
+    return envelope({ state: "ok", data: { kind: "cancel", scope: "order", to: lop, calldata: cancel.data, orderHash: action.orderHash, retires, execution: executionEthTransaction() }, chainId, source: "config", ctx });
   }
 
   if (action.type === "rollover-intent") {
@@ -1459,6 +1460,113 @@ async function buildTakerFillArtifact(a: {
     chainId,
     source: a.artifactSource,
     warnings: [...(expiredWarning ? [expiredWarning] : []), ...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...a.acquisitionWarnings],
+    ctx,
+  });
+}
+
+/** The invalidator a traits word selects, for a message: its slot, or none. */
+function slotLabel(makerTraits: bigint): string {
+  const p = lopInvalidatorPlan(makerTraits);
+  return p.mode === "bit" ? `slot ${p.slot}` : "the remaining-amount invalidator (no slot word)";
+}
+
+/** `cancel` with scope `slot` (cork-cli-private#15): LOP.bitsInvalidateForOrder for the anchor
+ *  order's slot word, the mask = every OTHER resting order of this maker in that slot, read from
+ *  the venue book. The book is DISCOVERY, not authority [K3]: every row is re-hashed locally and
+ *  judged from its SIGNED makerTraits (maker, invalidator mode, slot); a row that does not hash
+ *  to its own claim is skipped and counted. Fail-closed on an incomplete traversal: a mask built
+ *  from a partial book under-sweeps and the `retires` list would lie, so a conflict names the
+ *  reason and the cursor instead (raise maxPages). A remaining-invalidator anchor refuses before
+ *  the venue is contacted — the contract would revert OrderIsNotSuitableForMassInvalidation. */
+async function handleCancelSlotSweep(a: {
+  ctx: HandlerContext;
+  chainId: ChainId;
+  account: `0x${string}`;
+  action: Extract<PrepareOrdersInput["action"], { type: "cancel" }>;
+  lop: `0x${string}`;
+  traits: bigint;
+  plan: ReturnType<typeof lopInvalidatorPlan>;
+}): Promise<Envelope> {
+  const { ctx, chainId, account, action, lop, traits, plan } = a;
+  if (plan.mode !== "bit") {
+    return unavailable(chainId, "invalid_order_terms", `scope 'slot' needs a bit-invalidator order (NO_PARTIAL_FILLS set or ALLOW_MULTIPLE_FILLS unset — every Cork-built order); these makerTraits select the remaining-amount invalidator, where there is no slot word to sweep and the LOP reverts OrderIsNotSuitableForMassInvalidation. Use scope 'order' (cancelOrder) for this order`, ctx);
+  }
+  const deps = venueDepsOf(ctx);
+  let book: Awaited<ReturnType<typeof collectVenuePages>>;
+  try {
+    // The venue's own maker filter narrows the walk to this account's rows; the local maker
+    // check below still runs, because the filter is the venue's claim and the signed order is
+    // the fact.
+    book = await collectVenuePages({ maxPages: action.maxPages }, (cursor) => getLopOrderbook(deps, { chainId, maker: account, limit: 100, ...(cursor ? { cursor } : {}) }));
+  } catch (err) {
+    return venueFailed(chainId, err, ctx);
+  }
+  if (!book.complete) {
+    return envelope({
+      state: "conflict",
+      data: { orderHash: action.orderHash, scope: "slot", pagesFetched: book.pagesFetched, reason: book.reason, ...(book.nextCursor ? { nextCursor: book.nextCursor } : {}) },
+      chainId,
+      source: "service",
+      warnings: [{ code: "pagination_incomplete", message: `the walk over your resting orders was incomplete (${book.reason}) after ${book.pagesFetched} page(s): a slot mask built from a partial book would retire orders this result could not name, so no bytes were built — raise maxPages (max 50) or cancel with scope 'order'` }],
+      ctx,
+    });
+  }
+  const candidates: SlotSweepCandidate[] = [];
+  const unreadable: Array<{ venueOrderHash: string | null; reason: string }> = [];
+  for (const row of book.items) {
+    const parsed = parseSignedLopOrder(row);
+    if (!parsed.ok) { unreadable.push({ venueOrderHash: null, reason: `malformed row: ${parsed.error}` }); continue; }
+    const localHash = hashLopOrder(chainId, lop, parsed.value.order);
+    if (parsed.value.venueOrderHash !== undefined && parsed.value.venueOrderHash.toLowerCase() !== localHash.toLowerCase()) {
+      unreadable.push({ venueOrderHash: parsed.value.venueOrderHash, reason: "row does not hash to its own claimed orderHash — skipped (order_hash_mismatch)" });
+      continue;
+    }
+    // The anchor row, when the book carries it, is the one place the caller's claim can be
+    // checked against the SIGNED traits: a disagreement means the caller's slot is not the
+    // order's slot, and a sweep of the wrong word must not be built.
+    if (localHash.toLowerCase() === action.orderHash.toLowerCase() && parsed.value.order.makerTraits !== traits) {
+      return unavailable(chainId, "invalid_order_terms", `the makerTraits supplied (${traits}) are not the SIGNED makerTraits of the order the venue holds under ${action.orderHash} (${parsed.value.order.makerTraits}): the supplied traits select slot ${plan.slot}, the signed ones ${slotLabel(parsed.value.order.makerTraits)} — pass the traits verbatim from the resting order; no bytes were built`, ctx);
+    }
+    candidates.push({ orderHash: localHash, makerTraits: parsed.value.order.makerTraits, maker: parsed.value.order.maker });
+  }
+  const sweep = planSlotSweep({ orderHash: action.orderHash, makerTraits: traits }, account, candidates);
+  const built = buildBitsInvalidateForOrder(traits, sweep.additionalMask);
+  const anchorListed = candidates.some((c) => c.orderHash.toLowerCase() === action.orderHash.toLowerCase());
+  const siblings = sweep.retires.filter((r) => r.relation !== "anchor");
+  const sameSlot = siblings.filter((r) => r.relation === "same-slot");
+  const sharedBit = siblings.filter((r) => r.relation === "shared-bit");
+  const anchorBitIndex = slotCoordinates(sweep.nonce).bitIndex;
+  const additionalBits = maskBits(sweep.additionalMask);
+  const retires = {
+    invalidator: "bit" as const,
+    nonce: sweep.nonce.toString(),
+    slot: sweep.slot.toString(),
+    anchorBit: sweep.anchorBit.toString(),
+    additionalMask: `0x${sweep.additionalMask.toString(16).padStart(64, "0")}` as `0x${string}`,
+    additionalBits,
+    scope: sameSlot.length > 0
+      ? `every order by ${account} whose makerTraits carry nonce ${sweep.nonce} (bit ${anchorBitIndex} of slot ${sweep.slot}) AND the ${sameSlot.length} other resting order(s) of yours whose nonce shares slot ${sweep.slot} (bits ${additionalBits.join(",")}) — one transaction`
+      : `every order by ${account} whose makerTraits carry nonce ${sweep.nonce} (bit ${anchorBitIndex} of slot ${sweep.slot}); the venue lists no other resting order of yours in that slot, so this sweep retires exactly what cancelOrder would`,
+    orders: sweep.retires.map((r) => ({ orderHash: r.orderHash, nonce: r.nonce.toString(), bit: r.bitIndex, relation: r.relation, listed: r.relation === "anchor" ? anchorListed : true })),
+    skipped: sweep.skipped,
+    book: { rows: book.items.length, pagesFetched: book.pagesFetched, complete: book.complete, unreadable },
+  };
+  const warnings: Array<{ code: string; message: string }> = [];
+  warnings.push({
+    code: "cancel_sweep_notice",
+    message: sameSlot.length > 0
+      ? `this sweep retires ${sweep.retires.length} resting order(s) in one transaction: the anchor ${action.orderHash}${sharedBit.length > 0 ? `, ${sharedBit.length} sharing its bit (an ocoGroup — dead under a plain cancel too)` : ""}, and ${sameSlot.length} on other bits of slot ${sweep.slot} (${sameSlot.map((r) => r.orderHash).join(", ")}) that ONLY this sweep reaches. The venue does not index cancels: every one of these rows stays OPEN on the book until a chain read drops it (status_mismatch) — re-read the bit before ranking or filling. An order of yours in this slot that the venue does not list dies too`
+      : `no other resting order of yours shares slot ${sweep.slot} (${book.items.length} row(s) read, ${sweep.skipped.length} skipped), so this bitsInvalidateForOrder spends exactly the bit cancelOrder would${sharedBit.length > 0 ? ` — and the ${sharedBit.length} ocoGroup sibling(s) on that bit die with it, as under scope 'order'` : ""}. Cork derives nonces from keccak seeds, so two independent orders share a slot in about one pair in 2^32; a sweep pays off only for nonces pinned to one slot (SDK nonce) or chosen by another tool. The venue does not index cancels: the row stays OPEN on the book until a chain read drops it (status_mismatch)`,
+  });
+  if (!anchorListed) {
+    warnings.push({ code: "order_not_found", message: `the venue lists no resting order of yours under ${action.orderHash}: the sweep is built from the supplied makerTraits alone (the chain is the authority — a bit the venue never saw is spent all the same), and the mask covers the siblings the venue DID list` });
+  }
+  return envelope({
+    state: "ok",
+    data: { kind: "cancel", scope: "slot", to: lop, calldata: built.data, orderHash: action.orderHash, retires, execution: executionEthTransaction() },
+    chainId,
+    source: "service",
+    warnings,
     ctx,
   });
 }

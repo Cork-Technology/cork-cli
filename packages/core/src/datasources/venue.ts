@@ -364,11 +364,13 @@ export interface LopBookParams extends PageParams {
   poolId?: string;
   side?: string;
   status?: string;
+  /** Only this maker's rows (the venue's `maker` query, get-orderbook.schema.ts). */
+  maker?: string;
 }
 
 /** GET /limit-orders/v1/orderbook — resting orders (each row carries the full signed order). */
 export async function getLopOrderbook(deps: VenueDeps, p: LopBookParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/v1/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, cursor: p.cursor, limit: p.limit })}`), "orderbook");
+  return asList(await getJson(deps, `/limit-orders/v1/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, maker: p.maker, cursor: p.cursor, limit: p.limit })}`), "orderbook");
 }
 
 /** GET /limit-orders/v1/fills. */

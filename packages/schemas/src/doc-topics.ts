@@ -157,8 +157,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "artifact life",
     envelope: "ok",
     contract:
-      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), or a defaulted/ignored input the caller should know about",
-    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
+      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), a slot sweep's reach (cancel_sweep_notice: which resting orders one bitsInvalidateForOrder retires, and that the venue keeps listing them until a chain read drops them), or a defaulted/ignored input the caller should know about",
+    codes: ["cancel_sweep_notice", "unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
   },
 ] as const;
 
@@ -506,15 +506,16 @@ The venue has no push and no \`updated_after\`, so monitoring is client-side pol
 - \`wait\` long-polls: re-read the book every 2 s until \`changes.changed\` or the seconds run out (max 25, under the HTTP ingress deadline); \`waited\` says how it ended. The CLI's \`ch query orderbook --watch [--interval s] [--iterations n]\` loops this, printing the first read and then only the ticks that changed.
 - A watermark is per fill sender: reach and exclusion differ per sender, so a token taken for another account is refused.
 Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key under the \`oco-group:\` namespace, a prefix no clientRequestId may carry — so a group seed and an id seed are never the same string; what remains is the 40-bit truncation any two seeds share, birthday-rare, disclosed on every maker-order); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
-Because the rungs share one bit, cancelling ANY rung (\`cancel\`) retires the whole group; \`bitsInvalidateForOrder(makerTraits, mask)\` additionally spends other bits of the same 256-bit slot word in one transaction — a sweep across orders whose nonces share a slot, not built here.
+Because the rungs share one bit, cancelling ANY rung (\`cancel\`, scope \`order\`) retires the whole group. \`cancel\` with scope \`slot\` builds \`bitsInvalidateForOrder(makerTraits, mask)\` instead: one transaction that spends the rung's bit AND the bit of every other resting order of yours in the same 256-bit slot word (nonce >> 8), read from the venue book by maker; the result lists every order the sweep retires (\`retires.orders\`, relation \`shared-bit\` for a group sibling, \`same-slot\` for a different nonce in the word). Honest sizing: nonces here derive from keccak seeds, so two independent orders share a slot in about one pair in 2^32 — the sweep retires more than a plain cancel only when nonces were pinned to one slot (SDK \`nonce\`) or chosen by another tool, and the result says when it found no sibling. The venue does not index cancels: a swept row stays OPEN on the book until a chain read drops it.
 
 ## Series and epoch: mass cancel
 
 A maker with many independent orders can stamp them with a \`series\` and require the maker's
 current **epoch** (flag 250, \`needCheckEpochManager\`): bumping the epoch (\`increaseEpoch\`) retires
 every order of that series at once. Orders retired this way are **dead-by-epoch** — like
-dead-by-sibling, invisible to the venue until it re-syncs. This surface decodes \`series\`; it does
-not yet prepare the bump.
+dead-by-sibling, invisible to the venue until it re-syncs. This surface decodes \`series\` and
+labels the flag on every order and cancel it decodes (the summary of a cancel names the series an
+epoch bump would also retire); it does not yet prepare the bump.
 
 ## Price shape: fixed or decaying
 

@@ -55,7 +55,7 @@ describe("decodeLopCall — the rehearsal's real fill and cancel bytes", () => {
   it("fillOrderArgs: recovers the signed order, the amount, the traits, the compact signature, and the JIT extension", () => {
     const d = decodeLopCall(fixture.fill.calldata as Hex);
     expect(d.fn).toBe("fillOrderArgs");
-    if (d.fn === "cancelOrder") throw new Error("unreachable");
+    if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     const expected = fixtureOrder();
     expect({ ...d.order, maker: lc(d.order.maker), makerAsset: lc(d.order.makerAsset), takerAsset: lc(d.order.takerAsset), receiver: lc(d.order.receiver) })
       .toEqual({ ...expected, maker: lc(expected.maker), makerAsset: lc(expected.makerAsset), takerAsset: lc(expected.takerAsset), receiver: lc(expected.receiver) });
@@ -75,7 +75,7 @@ describe("decodeLopCall — the rehearsal's real fill and cancel bytes", () => {
 
   it("the decoded order hashes to the orderHash the prepare reported, under the chain-8453 LOP domain", () => {
     const d = decodeLopCall(fixture.fill.calldata as Hex);
-    if (d.fn === "cancelOrder") throw new Error("unreachable");
+    if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     expect(lc(hashLopOrder(8453, LOP, d.order))).toBe(lc(fixture.jitOrder.orderHash));
   });
 
@@ -122,7 +122,7 @@ describe("decodeLopCall — every builder output round-trips", () => {
     const f = buildTakerFill({ order, signature, taker: TAKER });
     expect(f.functionName).toBe("fillOrder");
     const d = decodeLopCall(f.calldata);
-    if (d.fn === "cancelOrder") throw new Error("unreachable");
+    if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     expect(d.fn).toBe("fillOrder");
     expect(d.order).toEqual(order);
     expect(d.amount).toBe(order.makingAmount);
@@ -135,7 +135,7 @@ describe("decodeLopCall — every builder output round-trips", () => {
     const extension = `0x${"cd".repeat(40)}` as const;
     const f = buildTakerFill({ order, signature, taker: TAKER, receiver, extension });
     const d = decodeLopCall(f.calldata);
-    if (d.fn === "cancelOrder") throw new Error("unreachable");
+    if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     expect(d.fn).toBe("fillOrderArgs");
     expect(d.takerTraits.argsHasReceiver).toBe(true);
     expect(lc(d.args.receiver!)).toBe(receiver);
@@ -148,7 +148,7 @@ describe("decodeLopCall — every builder output round-trips", () => {
     const interaction = `0x${"11".repeat(20)}${"22".repeat(4)}` as const;
     const f = buildTakerFill({ order, signature, makerAccountType: "ERC1271", taker: TAKER, extension, interaction, fillMakingAmount: 10n ** 18n, maximumTakingAmount: 7n * 10n ** 16n });
     const d = decodeLopCall(f.calldata);
-    if (d.fn === "cancelOrder") throw new Error("unreachable");
+    if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     expect(d.fn).toBe("fillContractOrderArgs");
     expect(d.signature).toEqual({ bytes: signature });
     expect(d.amount).toBe(10n ** 18n);

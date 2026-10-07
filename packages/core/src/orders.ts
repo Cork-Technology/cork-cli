@@ -504,11 +504,96 @@ export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<Fin
 export const ERC1271_MAGIC = "0x1626ba7e" as const;
 export const erc1271Abi = parseAbi(["function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4 magicValue)"]);
 
-export const lopCancelAbi = parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orderHash)"]);
+/** The three LOP v4 cancel entrypoints (IOrderMixin): one order, a list, and the slot sweep.
+ *  `MakerTraits` is `type MakerTraits is uint256` on chain, so the ABI word is uint256. */
+export const lopCancelAbi = parseAbi([
+  "function cancelOrder(uint256 makerTraits, bytes32 orderHash)",
+  "function cancelOrders(uint256[] makerTraits, bytes32[] orderHashes)",
+  "function bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)",
+]);
 
 /** Build LOP.cancelOrder(makerTraits, orderHash) calldata (a direct call, not typed data). */
 export function buildCancelOrder(makerTraits: bigint, orderHash: `0x${string}`): { to: null; data: `0x${string}` } {
   return { to: null, data: encodeFunctionData({ abi: lopCancelAbi, functionName: "cancelOrder", args: [makerTraits, orderHash] }) };
+}
+
+/** Build LOP.bitsInvalidateForOrder(makerTraits, additionalMask) calldata: ONE transaction that
+ *  spends the order's own bit AND every bit set in `additionalMask` inside the order's 256-bit
+ *  slot word (BitInvalidatorLib.massInvalidate: `word |= (1 << (nonce & 0xff)) | additionalMask`).
+ *  Throws for a remaining-invalidator order — the contract reverts
+ *  OrderIsNotSuitableForMassInvalidation there, so no bytes are built. */
+export function buildBitsInvalidateForOrder(makerTraits: bigint, additionalMask: bigint): { to: null; data: `0x${string}` } {
+  if (lopInvalidatorPlan(makerTraits).mode !== "bit") {
+    throw new Error("bitsInvalidateForOrder needs a bit-invalidator order (NO_PARTIAL_FILLS set or ALLOW_MULTIPLE_FILLS unset): the LOP reverts OrderIsNotSuitableForMassInvalidation for a remaining-invalidator order");
+  }
+  if (additionalMask < 0n || additionalMask > U256_MAX) throw new Error("additionalMask must be a uint256");
+  return { to: null, data: encodeFunctionData({ abi: lopCancelAbi, functionName: "bitsInvalidateForOrder", args: [makerTraits, additionalMask] }) };
+}
+
+/** Where a 40-bit nonce lands in the bit invalidator (BitInvalidatorLib): the slot word
+ *  `nonce >> 8` and the bit index `nonce & 0xff` inside it. The ONE place the new sweep code
+ *  reads the layout from; lopInvalidatorPlan keeps its own line (probe-anchored). */
+export function slotCoordinates(nonce: bigint): { slot: bigint; bitIndex: number } {
+  return { slot: nonce >> 8n, bitIndex: Number(nonce & 0xffn) };
+}
+
+/** One resting order considered for a slot sweep: what the venue book (or the caller) says about
+ *  it. `maker` is compared case-insensitively with the sweeping account. */
+export interface SlotSweepCandidate {
+  orderHash: `0x${string}`;
+  makerTraits: bigint;
+  maker: `0x${string}`;
+}
+
+export type SlotSweepRelation = "anchor" | "shared-bit" | "same-slot";
+export type SlotSweepSkipReason = "other-maker" | "remaining-invalidator" | "other-slot";
+
+export interface SlotSweepPlan {
+  /** The anchor order's 40-bit nonce, slot (nonce >> 8) and bit (1 << (nonce & 0xff)). */
+  nonce: bigint;
+  slot: bigint;
+  anchorBit: bigint;
+  /** The OTHER bits of the slot word this sweep spends — the anchor's own bit is spent by the
+   *  call regardless and is left out, so the mask reads as "in addition to the anchor". */
+  additionalMask: bigint;
+  /** Every candidate the sweep retires, the anchor first: `shared-bit` = the same nonce (a
+   *  one-cancels-the-other sibling, dead with the anchor under a plain cancel too), `same-slot` =
+   *  another nonce in the slot word (dies ONLY under this sweep). One entry per order hash. */
+  retires: Array<{ orderHash: `0x${string}`; nonce: bigint; bit: bigint; bitIndex: number; relation: SlotSweepRelation }>;
+  /** Candidates the sweep does not touch, and why. */
+  skipped: Array<{ orderHash: `0x${string}`; reason: SlotSweepSkipReason }>;
+}
+
+/** Plan a slot sweep for `anchor` over `candidates` (pure; the chain effect is decided by the
+ *  SIGNED traits, so every judgement reads makerTraits, never venue metadata). A candidate joins
+ *  when it is the same maker's, lives in the bit invalidator, and its nonce >> 8 is the anchor's
+ *  slot. The anchor itself is listed once (`anchor`) whether or not the book carried it. */
+export function planSlotSweep(anchor: { orderHash: `0x${string}`; makerTraits: bigint }, maker: `0x${string}`, candidates: readonly SlotSweepCandidate[]): SlotSweepPlan {
+  const plan = lopInvalidatorPlan(anchor.makerTraits);
+  if (plan.mode !== "bit") throw new Error("planSlotSweep: the anchor is a remaining-invalidator order — there is no slot to sweep");
+  const retires: SlotSweepPlan["retires"] = [{ orderHash: anchor.orderHash, nonce: plan.nonceOrEpoch, bit: plan.mask, bitIndex: slotCoordinates(plan.nonceOrEpoch).bitIndex, relation: "anchor" }];
+  const skipped: SlotSweepPlan["skipped"] = [];
+  const seen = new Set<string>([anchor.orderHash.toLowerCase()]);
+  let additionalMask = 0n;
+  for (const c of candidates) {
+    if (seen.has(c.orderHash.toLowerCase())) continue;
+    seen.add(c.orderHash.toLowerCase());
+    if (c.maker.toLowerCase() !== maker.toLowerCase()) { skipped.push({ orderHash: c.orderHash, reason: "other-maker" }); continue; }
+    const cp = lopInvalidatorPlan(c.makerTraits);
+    if (cp.mode !== "bit") { skipped.push({ orderHash: c.orderHash, reason: "remaining-invalidator" }); continue; }
+    if (cp.slot !== plan.slot) { skipped.push({ orderHash: c.orderHash, reason: "other-slot" }); continue; }
+    const relation: SlotSweepRelation = cp.nonceOrEpoch === plan.nonceOrEpoch ? "shared-bit" : "same-slot";
+    if (relation === "same-slot") additionalMask |= cp.mask;
+    retires.push({ orderHash: c.orderHash, nonce: cp.nonceOrEpoch, bit: cp.mask, bitIndex: slotCoordinates(cp.nonceOrEpoch).bitIndex, relation });
+  }
+  return { nonce: plan.nonceOrEpoch, slot: plan.slot, anchorBit: plan.mask, additionalMask, retires, skipped };
+}
+
+/** The bit positions (0..255) set in a slot-word mask, ascending — for labels and summaries. */
+export function maskBits(mask: bigint): number[] {
+  const bits: number[] = [];
+  for (let i = 0; i < 256; i += 1) if (((mask >> BigInt(i)) & 1n) === 1n) bits.push(i);
+  return bits;
 }
 
 // ── Taker fill ───────────────────────────────────────────────────────────────
@@ -723,7 +808,9 @@ export type DecodedLopCall =
       signature: { r: `0x${string}`; vs: `0x${string}` } | { bytes: `0x${string}` };
       args: SplitTakerArgs;
     }
-  | { fn: "cancelOrder"; makerTraits: bigint; orderHash: `0x${string}` };
+  | { fn: "cancelOrder"; makerTraits: bigint; orderHash: `0x${string}` }
+  | { fn: "cancelOrders"; orders: Array<{ makerTraits: bigint; orderHash: `0x${string}` }> }
+  | { fn: "bitsInvalidateForOrder"; makerTraits: bigint; additionalMask: bigint };
 
 const LOP_CALL_ABI = [...lopFillAbi, ...lopCancelAbi] as const;
 const LOP_CALL_SELECTORS: ReadonlyMap<string, string> = new Map(LOP_CALL_ABI.map((f) => [toFunctionSelector(f).toLowerCase(), f.name]));
@@ -740,6 +827,16 @@ export function decodeLopCall(data: `0x${string}`): DecodedLopCall {
   if (functionName === "cancelOrder") {
     const [makerTraits, orderHash] = args;
     return { fn: "cancelOrder", makerTraits, orderHash };
+  }
+  if (functionName === "cancelOrders") {
+    const [traits, hashes] = args;
+    // The contract reverts MismatchArraysLengths; a decode of such bytes is a malformed call.
+    if (traits.length !== hashes.length) throw new Error(`cancelOrders: ${traits.length} makerTraits for ${hashes.length} orderHashes — the LOP reverts MismatchArraysLengths`);
+    return { fn: "cancelOrders", orders: traits.map((makerTraits, i) => ({ makerTraits, orderHash: hashes[i]! })) };
+  }
+  if (functionName === "bitsInvalidateForOrder") {
+    const [makerTraits, additionalMask] = args;
+    return { fn: "bitsInvalidateForOrder", makerTraits, additionalMask };
   }
   const order = orderFromUintTuple(args[0] as readonly bigint[]);
   const contract = functionName === "fillContractOrder" || functionName === "fillContractOrderArgs";

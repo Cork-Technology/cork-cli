@@ -1,0 +1,40 @@
+{
+  "$comment": "The three cancel entrypoints of 1inch Limit Order Protocol v4, copied from contracts/interfaces/IOrderMixin.sol (OrderMixin.sol implements them). `MakerTraits` is `type MakerTraits is uint256`, so its ABI word is uint256. Selectors: cancelOrder 0xb68fb020, cancelOrders 0x89e7c650, bitsInvalidateForOrder 0x05b1ea03. The deployed LOP (0x111111125421cA6dc452d289314280a0f8842A65 on every chain this tool serves) answers these; experiments/fork-harness/script/cancel-sweep-rehearsal.ts drives them on a fork.",
+  "functions": [
+    {
+      "name": "cancelOrder",
+      "selector": "0xb68fb020",
+      "inputs": [
+        { "name": "makerTraits", "type": "uint256", "internalType": "MakerTraits" },
+        { "name": "orderHash", "type": "bytes32", "internalType": "bytes32" }
+      ],
+      "effect": "bit invalidator: massInvalidate(nonceOrEpoch, 0) — spends the (maker, nonce) bit; remaining invalidator: marks the hash fully filled"
+    },
+    {
+      "name": "cancelOrders",
+      "selector": "0x89e7c650",
+      "inputs": [
+        { "name": "makerTraits", "type": "uint256[]", "internalType": "MakerTraits[]" },
+        { "name": "orderHashes", "type": "bytes32[]", "internalType": "bytes32[]" }
+      ],
+      "effect": "cancelOrder for each pair; reverts MismatchArraysLengths when the arrays differ in length"
+    },
+    {
+      "name": "bitsInvalidateForOrder",
+      "selector": "0x05b1ea03",
+      "inputs": [
+        { "name": "makerTraits", "type": "uint256", "internalType": "MakerTraits" },
+        { "name": "additionalMask", "type": "uint256", "internalType": "uint256" }
+      ],
+      "effect": "bit invalidator only (reverts OrderIsNotSuitableForMassInvalidation otherwise): word[nonce >> 8] |= (1 << (nonce & 0xff)) | additionalMask; emits BitInvalidatorUpdated(maker, nonce >> 8, word)"
+    }
+  ],
+  "event": {
+    "name": "BitInvalidatorUpdated",
+    "inputs": [
+      { "name": "maker", "type": "address", "indexed": true },
+      { "name": "slotIndex", "type": "uint256", "indexed": false },
+      { "name": "slotValue", "type": "uint256", "indexed": false }
+    ]
+  }
+}
