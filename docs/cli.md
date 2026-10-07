@@ -29,6 +29,11 @@ Every result is one envelope: `{ state, data, warnings[], provenance }`. Read `s
 `ok` means use `data`. `unavailable` means the call could not be served, and `warnings[0].code`
 says why. `conflict` means the tool ran and found a mismatch you must not paper over. The exit
 code mirrors the state: `0` ok, `2` invalid input, `3` unavailable, `4` conflict, `1` unexpected.
+Schema/CLI rejection writes an error to **stderr**, not a result envelope to stdout. Domain
+and preflight rejection can instead return an `unavailable` result on **stdout** (exit `3`).
+With `--json`, inspect both the exit code and the appropriate JSON channel. A nonempty
+`warnings` array alone does not mean failure: an `ok` preparation still exits `0` and returns
+its unsigned artifact. Read each warning before deciding whether to sign or proceed.
 
 ## 2. Generations
 
@@ -385,6 +390,35 @@ transaction with `ch decode tx` and send it through your own RPC.
 A venue listing carries one premium field, `premiumAnnualized`, a fraction string: `"0.041"` is
 4.1%. `ch` recomputes every commitment before relay and refuses a payload whose signature does
 not recover to its maker.
+
+### RFQ mode and failure contract
+
+`rfq-open` requires **one to three unique modes**, chosen from `liquidity_only`,
+`liquidity_impairment`, and `fixed_rate`. The input schema enforces the list length
+(`minItems: 1`, `maxItems: 3`); domain preflight enforces uniqueness. A request naming
+`fixed_rate` also needs an inline template with a positive decimal uint256
+`oracle_params.rate_override` (absolute scale: 1e18 = 1.0).
+
+For otherwise valid inputs, the JSON-mode contract is:
+
+| Case | Rejection/result layer | Exit | stdout | stderr |
+|---|---|---|---|---|
+| Four or more modes, including an overlength list with repeats | Local input schema, before domain preflight or relay | `2` | Empty | JSON error with `error.code: "invalid_input"` |
+| Duplicate modes within the one-to-three length bound | Local domain/preflight, before relay | `3` | JSON result: `state: "unavailable"`, warning code `invalid_order_terms` | Empty |
+| `rfq-open` succeeds with `recipe_generation_notice` or `cover_mode_mismatch` | Relay with warnings | `0` | JSON result: `state: "ok"`, RFQ data and warnings | Empty |
+
+Local rejection is not a venue response: do not expect `venue_rejected` for either invalid
+mode-list case. `venue_rejected` reports a venue refusal of a relayed request, not these local
+checks. Scripts must handle exit `2` and stderr as well as exit `3` result envelopes.
+Without JSON mode, the same exits and channels apply, rendered as human-readable text.
+
+`recipe_generation_notice` identifies the generation selected by an inline recipe rather
+than assuming it is the primary generation. `cover_mode_mismatch` identifies disagreement
+between requested modes and the cover supplied by the template recipe; modes do not change
+the recipe or onchain cover. These codes currently accompany `rfq-open` results, not
+order-preparation artifacts. Warnings can also accompany successful unsigned preparations;
+neither an `ok` state nor a warning is proof of settlement safety or permission to ignore
+the mismatch. Use `state`, exit code, and warning details together.
 
 ## 10. Discover
 
