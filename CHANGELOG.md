@@ -5,6 +5,19 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
 covered.
 
+## [Unreleased]
+
+### Changed
+
+- **The JIT adapter of the primary generation moved to CorkLimitOrderAdapter 0.5.0.** The `phoenix/v0.4-rc.1` set on Arbitrum One and Base now names `0x960Cd94B31121806b1b0Ff02230D189Ad0310616` (market-registry PR #65, commit `77ce65f`, version() `0.5.0`, verified live on both chains on 2026-10-07). It replaces `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (0.4.0), which stays deployed. The nested wire's permit row is now `(address token, uint256 value, uint256 deadline, bytes signature)` in place of `v`, `r`, `s`, so a 0.4.0 payload with a permit no longer decodes on the new adapter, and the reverse. The flat (0.3.x) wire does not change: its bytes are identical to the previous build.
+- **A contract wallet can sign a JIT permit on the nested wire.** The share token checks the permit with ECDSA for an EOA and ERC-1271 for a contract (for example a Safe). `data.approvals` marks the nested-wire permit `wallets: "eoa+contract"` (flat stays `eoa-only`). `contract_maker_pre_rest` on the nested wire names both paths (sign the permit through ERC-1271, or create the pool first), and a maker-order that already carries a permit over the predicted cST no longer gets the create-pool-first execution. The maker-readiness classifier no longer reports `contract-maker-unborn-cst` for a nested-wire JIT permit. The flat wire keeps the ECDSA-only rule.
+- **Allowlist.** The approved-implementations `jitAdapter` list gains `0x24a11fba…225d` (the 0.5.0 runtime code, the same on both chains) and drops `0x2fe70bac…d35a` (0.4.0): this build encodes only the 0.5.0 permit row, so it must not build JIT bytes for the 0.4.0 adapter, even from a stale remote config.
+
+### Added
+
+- **`signature` on every JIT permit input** (`jitMarket.permits[]` on maker-order and taker-fill): the permit signature as bytes, the canonical form. `v`, `r`, `s` stay accepted and are normalized to `r‖s‖v`. Pass one form: both, neither, or a partial `v`/`r`/`s` is refused as invalid input. On the flat wire a signature that is not 65 bytes is refused with teaching, because that adapter takes ECDSA only.
+- **SDK:** `PermitParams` now carries `signature` in place of `v`, `r`, `s` (the API-surface fixture is regenerated). New exports `permitSignatureOfVrs`, `splitPermitSignature`, `permitOfFlatRow` and the type `FlatPermitRow`. `encodeJitExtraData("flat", …)` throws on a non-65-byte signature.
+
 ## [0.7.0-rc.1] — preparation, not yet published
 
 A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. This public candidate does not publish a tag, Release, package, image, or hosted MCP deployment. Independent exposure/review and compatibility approval, removal notice and usage evidence, and release signing prerequisites remain release gates.

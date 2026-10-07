@@ -425,6 +425,10 @@
       "kind": "type"
     },
     {
+      "name": "FlatPermitRow",
+      "kind": "type"
+    },
+    {
       "name": "ForSelfAllowance",
       "kind": "type"
     },
@@ -2621,6 +2625,14 @@
       "kind": "value"
     },
     {
+      "name": "permitOfFlatRow",
+      "kind": "value"
+    },
+    {
+      "name": "permitSignatureOfVrs",
+      "kind": "value"
+    },
+    {
       "name": "planRfqWrite",
       "kind": "value"
     },
@@ -2986,6 +2998,10 @@
     },
     {
       "name": "spenderRoleOf",
+      "kind": "value"
+    },
+    {
+      "name": "splitPermitSignature",
       "kind": "value"
     },
     {
@@ -5631,6 +5647,10 @@
       "kind": "type"
     },
     {
+      "name": "FlatPermitRow",
+      "kind": "type"
+    },
+    {
       "name": "ImplementedMarketRegistryWire",
       "kind": "type"
     },
@@ -5871,6 +5891,14 @@
       "kind": "value"
     },
     {
+      "name": "permitOfFlatRow",
+      "kind": "value"
+    },
+    {
+      "name": "permitSignatureOfVrs",
+      "kind": "value"
+    },
+    {
       "name": "predictShares",
       "kind": "value"
     },
@@ -5912,6 +5940,10 @@
     },
     {
       "name": "simulateLegFailure",
+      "kind": "value"
+    },
+    {
+      "name": "splitPermitSignature",
       "kind": "value"
     },
     {

@@ -166,9 +166,10 @@ const Erc2612PermitWire = z.strictObject({
   token: Address,
   value: TokenAmount.describe("amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports"),
   deadline: UnixSeconds,
-  v: z.number().int().min(0).max(255),
-  r: Bytes32,
-  s: Bytes32,
+  signature: Hex.optional().describe("the permit signature as bytes — the canonical form. An EOA signs 65 bytes (r‖s‖v). On the nested wire (the phoenix/v0.4-rc.1 primary, adapter 0.5.0+) a contract wallet (ERC-1271, e.g. a Safe) can sign too: pass its signature bytes. The flat (0.3.x) wire takes a 65-byte ECDSA signature only. Pass this OR v/r/s, not both"),
+  v: z.number().int().min(0).max(255).optional().describe("ECDSA v — the older split form, accepted for backward compatibility; pass all three of v/r/s, or `signature` instead"),
+  r: Bytes32.optional().describe("ECDSA r — the older split form (see v)"),
+  s: Bytes32.optional().describe("ECDSA s — the older split form (see v)"),
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -585,7 +586,7 @@ const MakerJitMarketWire = z
           .array(Erc2612PermitWire)
           .max(8)
           .optional()
-          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP; an EOA or, on the nested wire, a contract wallet through ERC-1271 can sign) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
         legacy: z.boolean().optional().describe("build against the DEPRECATED pre-2.1.0 adapter/registry generation (mode-string extraData, constraint derived at FILL time) — requires CORK_ENABLE_DEPRECATED=1 and `mode`. Kept because that adapter still holds the controller roles until governance grants the 2.1.0 ones"),
       })
       .optional()
@@ -682,7 +683,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
           .array(Erc2612PermitWire)
           .max(8)
           .optional()
-          .describe("pre-signed ERC-2612 permits the adapter executes after the mint — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (an EOA or, on the nested wire, a contract wallet through ERC-1271 can sign) — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
       })
       .optional()
       .describe(
@@ -871,7 +872,7 @@ export const PrepareMarketInput = z.object({
       swapFeePercentage: CreatorSwapFeeWire,
       unwindSwapFeePercentage: CreatorUnwindSwapFeeWire,
     })
-      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
+      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE permit-free path (needed by a smart account on the flat 0.3.x wire, whose JIT permits are ECDSA-only; on the nested wire a smart account can instead sign the JIT permit through ERC-1271): batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
   ]),
   format: Format,
 });
