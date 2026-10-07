@@ -248,7 +248,7 @@ ch prepare order finalize-maker-order --chain-id <id> --account <0x…> --client
 ch fill --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> \
   [--fill-making-amount <amt>] [--for-self '{"adapter":"0x…","poolId":"0x…"}']                        # unsigned fill calldata
 ch prepare order refresh-order --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…>   # re-rest on the same nonce
-ch prepare order cancel --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> --maker-traits <n>
+ch prepare order cancel --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> --maker-traits <n> [--scope order|slot] [--max-pages <n>]
 ch prepare order rollover-intent --chain-id <id> --account <0x…> --client-request-id <id> --settler <0x…> …   # signable ERC-7683 order
 ```
 

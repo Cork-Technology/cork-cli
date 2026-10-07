@@ -1397,6 +1397,22 @@
       "kind": "type"
     },
     {
+      "name": "SlotSweepCandidate",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepPlan",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepRelation",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepSkipReason",
+      "kind": "type"
+    },
+    {
       "name": "SplitTakerArgs",
       "kind": "type"
     },
@@ -1670,6 +1686,10 @@
     },
     {
       "name": "buildAuthorityTx",
+      "kind": "value"
+    },
+    {
+      "name": "buildBitsInvalidateForOrder",
       "kind": "value"
     },
     {
@@ -2529,6 +2549,10 @@
       "kind": "value"
     },
     {
+      "name": "maskBits",
+      "kind": "value"
+    },
+    {
       "name": "max",
       "kind": "value"
     },
@@ -2642,6 +2666,10 @@
     },
     {
       "name": "planRfqWrite",
+      "kind": "value"
+    },
+    {
+      "name": "planSlotSweep",
       "kind": "value"
     },
     {
@@ -3002,6 +3030,10 @@
     },
     {
       "name": "simulateLegFailure",
+      "kind": "value"
+    },
+    {
+      "name": "slotCoordinates",
       "kind": "value"
     },
     {
@@ -5061,6 +5093,22 @@
       "kind": "type"
     },
     {
+      "name": "SlotSweepCandidate",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepPlan",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepRelation",
+      "kind": "type"
+    },
+    {
+      "name": "SlotSweepSkipReason",
+      "kind": "type"
+    },
+    {
       "name": "SplitTakerArgs",
       "kind": "type"
     },
@@ -5162,6 +5210,10 @@
     },
     {
       "name": "buildAuctionAmountData",
+      "kind": "value"
+    },
+    {
+      "name": "buildBitsInvalidateForOrder",
       "kind": "value"
     },
     {
@@ -5497,6 +5549,10 @@
       "kind": "value"
     },
     {
+      "name": "maskBits",
+      "kind": "value"
+    },
+    {
       "name": "ocoGroupNonce",
       "kind": "value"
     },
@@ -5526,6 +5582,10 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "planSlotSweep",
       "kind": "value"
     },
     {
@@ -5598,6 +5658,10 @@
     },
     {
       "name": "settlerStatusAbi",
+      "kind": "value"
+    },
+    {
+      "name": "slotCoordinates",
       "kind": "value"
     },
     {

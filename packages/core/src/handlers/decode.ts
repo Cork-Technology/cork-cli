@@ -2,7 +2,7 @@
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { keccak256, parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { Address, Bytes32, ChainId, DecodeInput, Envelope, Hex, UintStr } from "@cork/schemas";
-import { decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, saltExtensionBinding, type DecodedMakerTraits, type LopOrder } from "../orders.ts";
+import { type DecodedMakerTraits, decodeMakerTraits, decodeOrderTuple, hashLopOrder, LOP_ADDRESSES, type LopOrder, maskBits, saltExtensionBinding, slotCoordinates } from "../orders.ts";
 import { type decodeJitExtraData, jitExtensionTarget, type ResolvedConstraint } from "../market-registry.ts";
 import { decodeJitExtensionFor } from "../jit-extension.ts";
 import { type ExtensionTarget, extensionTargets, foreignExtensionTargets } from "../extension-targets.ts";
@@ -268,9 +268,16 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
  *  fill carries — the same labels kind:"order" gives the resting order. */
 export interface LopLegLabel {
   orderHash: `0x${string}` | null;
-  makerTraits: DecodedMakerTraits;
+  /** The order's traits breakdown — of the anchor order on a bitsInvalidateForOrder leg; null on
+   *  a cancelOrders leg, whose per-order breakdowns ride in `orders`. */
+  makerTraits: DecodedMakerTraits | null;
   fusion?: FusionLabel;
   jit?: JitLabel;
+  /** cancelOrders: every (orderHash, traits) pair the call retires, in call order. */
+  orders?: Array<{ orderHash: `0x${string}`; makerTraits: DecodedMakerTraits }>;
+  /** bitsInvalidateForOrder: the slot word the call writes and the bits it spends — the anchor's
+   *  own bit (always) plus the additional mask's bits, in one transaction. */
+  sweep?: { slot: string; nonce: string; anchorBit: number; additionalMask: `0x${string}`; additionalBits: number[] };
 }
 
 /** Attach LopLegLabel to every 1inch leg in a decoded tree (nested bundles included). Pure:
@@ -282,6 +289,23 @@ export function labelLopLegs(legs: DecodedLeg[], chainId: ChainId, jitTrust: Jit
     if (leg.kind !== "lop") return leg;
     if (leg.call.fn === "cancelOrder") {
       return { ...leg, label: { orderHash: leg.call.orderHash, makerTraits: decodeMakerTraits(leg.call.makerTraits) } };
+    }
+    if (leg.call.fn === "cancelOrders") {
+      return { ...leg, label: { orderHash: null, makerTraits: null, orders: leg.call.orders.map((o) => ({ orderHash: o.orderHash, makerTraits: decodeMakerTraits(o.makerTraits) })) } };
+    }
+    if (leg.call.fn === "bitsInvalidateForOrder") {
+      // The nonce field reads the same under either invalidator; a remaining-mode traits word
+      // is labeled too (the summary says the call reverts), never left unreadable.
+      const makerTraits = decodeMakerTraits(leg.call.makerTraits);
+      const { slot, bitIndex } = slotCoordinates(makerTraits.nonce);
+      return {
+        ...leg,
+        label: {
+          orderHash: null,
+          makerTraits,
+          sweep: { slot: slot.toString(), nonce: makerTraits.nonce.toString(), anchorBit: bitIndex, additionalMask: `0x${leg.call.additionalMask.toString(16).padStart(64, "0")}`, additionalBits: maskBits(leg.call.additionalMask) },
+        },
+      };
     }
     const { order, args } = leg.call;
     return {
