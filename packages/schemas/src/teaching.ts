@@ -84,7 +84,17 @@ interface ZodIssueLike {
   received?: unknown;
   values?: ReadonlyArray<unknown>;
   options?: ReadonlyArray<unknown>;
+  keys?: ReadonlyArray<unknown>;
 }
+
+/** Input KEYS that moved, per variant (exact-match teaching, like RENAMED_VALUES): a caller on
+ *  the old surface gets the new shape instead of a bare "unrecognized key". */
+export const MOVED_KEYS: Record<string, Record<string, string>> = {
+  // RFQ v2 (venue 0.4.5): a write is proven, and the proof is a choice — signature or API key.
+  "rfq-open": { signature: "`signature` moved into auth: {method: 'signature', signature} (or {method: 'apiKey'}) — sign the typed data cork_prepare_orders rfq-write returns" },
+  "rfq-answer": { signature: "`signature` moved into auth: {method: 'signature', signature} (or {method: 'apiKey'}) — sign the typed data cork_prepare_orders rfq-write returns" },
+  "rfq-counter": { signature: "`signature` moved into auth: {method: 'signature', signature} (or {method: 'apiKey'}) — sign the typed data cork_prepare_orders rfq-write returns" },
+};
 
 /** The discriminator that selects a tool VARIANT, read defensively from any input shape:
  *  action.type (prepare/submit), params.kind (compute), resource (query), kind (decode),
@@ -142,6 +152,9 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
       }
       if (out.expected === undefined) out.expected = legal.join(" | ");
     }
+    const moved = MOVED_KEYS[variantOf(rawInput) ?? ""];
+    const movedKey = i.code === "unrecognized_keys" ? i.keys?.find((k): k is string => typeof k === "string" && moved?.[k] !== undefined) : undefined;
+    if (movedKey !== undefined) out.suggestion = moved![movedKey]!;
     return out;
   });
 

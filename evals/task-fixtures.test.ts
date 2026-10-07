@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { CST, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
+import { SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, CST, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -202,7 +202,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
   it("submit-rfq-open: the venue stub assigns rfq_eval1 (the answer regex's ground truth)", async () => {
     const env = await runTool(
       "cork_submit",
-      { chainId: 42161, clientRequestId: "eval-rfq-0001", action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: "0xdDb46999F8891663a8F2828d25298f70416d7610", collateralAsset: { exact: "0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2" }, modes: ["liquidity_only"], packageIds: ["pkg_default"], expiryWindow: { notBefore: 1900000000, notAfter: 1910000000 }, notionalAssets: "1000000000000000000000", validUntil: 1795000000, signature: `0x${"ab".repeat(65)}` } },
+      { chainId: 42161, clientRequestId: "eval-rfq-0001", action: SIGNED_RFQ_OPEN },
       stubContext(),
     );
     expect(env.state).toBe("ok");
@@ -360,12 +360,11 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
   });
 
   it("submit-rfq-answer: the option's FRACTION premium relays, and a percent number is refused", async () => {
-    const answer = (premium: string, id: string) =>
-      runTool(
-        "cork_submit",
-        { chainId: 42161, clientRequestId: id, action: { type: "rfq-answer", rfqId: RFQ_OPEN_ID, underwriter: DEMO_ACCOUNT, status: "quoted", options: [{ option_id: "opt1", premium_annualized: premium }], signature: `0x${"ab".repeat(65)}` } },
-        stubContext(),
-      );
+    // The signed fixture relays as given; the percent spelling is refused before any proof is read.
+    const answer = (premium: string, id: string) => {
+      const options = (SIGNED_RFQ_ANSWER.options as Array<Record<string, unknown>>).map((o) => ({ ...o, premium_annualized: premium }));
+      return runTool("cork_submit", { chainId: 42161, clientRequestId: id, action: { ...SIGNED_RFQ_ANSWER, options } }, stubContext());
+    };
     const ok = await answer("0.038", "eval-ans-0001");
     expect(ok.state).toBe("ok");
     expect(JSON.stringify(ok.data)).toContain(RFQ_ANSWER_ID);

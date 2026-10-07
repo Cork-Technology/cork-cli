@@ -57,6 +57,10 @@ const NUMERIC_ALLOWLIST: Record<string, string> = {
   "cork_submit :: action<oneOf2>.expiryWindow.notAfter": "venue RFQ field: absolute unix int, bounded <= year 2100 + handler window checks",
   "cork_submit :: action<oneOf2>.validUntil": "venue RFQ field: absolute unix int, bounded <= year 2100 + future check",
   "cork_submit :: action<oneOf4>.freshUntil": "venue RFQ counter field: absolute unix int, bounded <= year 2100 (advisory freshness clock, same semantics as answer options)",
+  "cork_prepare_orders :: action<oneOf10>.request<oneOf0>.expiryWindow.notBefore": "venue RFQ field under rfq-write (the SAME shape cork_submit rfq-open takes): absolute unix int, bounded <= year 2100 + handler window checks",
+  "cork_prepare_orders :: action<oneOf10>.request<oneOf0>.expiryWindow.notAfter": "venue RFQ field under rfq-write: absolute unix int, bounded <= year 2100 + handler window checks",
+  "cork_prepare_orders :: action<oneOf10>.request<oneOf0>.validUntil": "venue RFQ field under rfq-write: absolute unix int, bounded <= year 2100 + future check",
+  "cork_prepare_orders :: action<oneOf10>.request<oneOf2>.freshUntil": "venue RFQ counter field under rfq-write: absolute unix int, bounded <= year 2100 (advisory freshness clock)",
   // Tiny fixed-width protocol values.
   "cork_prepare_orders :: action<oneOf0>.jitMarket.permits[].v": "ECDSA recovery byte 0..255",
   "cork_prepare_orders :: action<oneOf7>.jitMarket.permits[].v": "ECDSA recovery byte 0..255 (the shared MakerJitMarketWire under a ladder)",

@@ -8,8 +8,9 @@
 // being producible by us.)
 import { renameSync, writeFileSync } from "node:fs";
 
-export function atomicWriteFileSync(path: string, data: string): void {
+export function atomicWriteFileSync(path: string, data: string, mode?: number): void {
   const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, data);
+  // A secret file is created private from its first byte, never chmod'ed after the fact.
+  writeFileSync(tmp, data, mode === undefined ? undefined : { mode });
   renameSync(tmp, path);
 }

@@ -31,8 +31,11 @@ const labels = (o: Record<string, unknown>): boolean =>
  *    schema's x-units markers (schema-lint's jurisdiction, gated there);
  *  - `typedData` / `order` / `venuePost` / `intent`: wire-verbatim signable/relayable structs —
  *    injecting a scales key would change the very bytes they exist to reproduce. The labels for
- *    their amounts sit BESIDE them in `data` (the maker-order/finalize scales blocks). */
-const SKIP_SUBTREES = new Set(["input", "examples", "typedData", "order", "venuePost", "intent"]);
+ *    their amounts sit BESIDE them in `data` (the maker-order/finalize scales blocks);
+ *  - `body` / `submitAction`: rfq-write's RFQ v2 write — `body` is the exact bytes the venue
+ *    hashes (a label inside would break the signature) and `submitAction` is the INPUT echoed
+ *    back for the submit, whose units the input schema owns. */
+const SKIP_SUBTREES = new Set(["input", "examples", "typedData", "order", "venuePost", "intent", "body", "submitAction"]);
 
 /** Fields that MATCH the money regex but are legitimately unlabeled — each with a reason. Keyed
  *  by the LEAF key name; a `path:`-prefixed entry pins one exact location instead. */

@@ -132,7 +132,7 @@ describe("listing premium — the venue's 0.3.15 resolution, op-for-op", () => {
   });
 
   it("quote_ref band runs on the canonical percent — a fraction-declared order needs NO ×100 of its own", async () => {
-    const rfq = (fraction: string) => ({ match: "/rfqs/v1/rfq_p", body: { rfq_id: "rfq_p", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } });
+    const rfq = (fraction: string) => ({ match: "/rfqs/v2/rfq_p", body: { rfq_id: "rfq_p", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: fraction }] } }] } });
     const quoteRef = { rfqId: "rfq_p", answerId: "ans_1", optionId: "1" };
     const good = await runTool("cork_submit", await lop({ premiumAnnualized: "0.041", quoteRef }), ctxWith([rfq("0.036"), { match: "/limit-orders/v1", status: 201, body: {} }]));
     expect(good.state).toBe("ok");

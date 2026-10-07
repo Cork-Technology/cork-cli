@@ -123,6 +123,46 @@ if (argv[0] === "mcp") {
 } else {
   const { runCli } = await import("./app.ts");
 
+  // A secret for `ch auth set-key`: typed at a prompt that does not echo it, or piped in.
+  const readSecret = async (prompt: string): Promise<string> => {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) {
+      let data = "";
+      for await (const chunk of stdin) data += String(chunk);
+      return data.replace(/\r?\n$/u, "");
+    }
+    process.stderr.write(prompt);
+    stdin.setRawMode(true);
+    stdin.resume();
+    try {
+      return await new Promise<string>((resolve, reject) => {
+        let typed = "";
+        const onData = (buf: Buffer): void => {
+          for (const ch of buf.toString("utf8")) {
+            if (ch === "\r" || ch === "\n") {
+              stdin.off("data", onData);
+              process.stderr.write("\n");
+              resolve(typed);
+              return;
+            }
+            if (ch === "\u0003") {
+              stdin.off("data", onData);
+              process.stderr.write("\n");
+              reject(new Error("cancelled"));
+              return;
+            }
+            if (ch === "\u007f" || ch === "\b") typed = typed.slice(0, -1);
+            else typed += ch;
+          }
+        };
+        stdin.on("data", onData);
+      });
+    } finally {
+      stdin.setRawMode(false);
+      stdin.pause();
+    }
+  };
+
   // The environment is passed in rather than read inside runCli so tests can drive output
   // mode (CORK_JSON / CORK_EXPLAIN_JSON) without mutating the process they run in. TTY-ness
   // rides the same way (per stream): it decides SGR color for the prose renderers, and a
@@ -130,6 +170,7 @@ if (argv[0] === "mcp") {
   const { code, stdout, stderr } = await runCli(argv, ctx, process.env, {
     stdoutIsTTY: process.stdout.isTTY === true,
     stderrIsTTY: process.stderr.isTTY === true,
+    readSecret,
   });
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);

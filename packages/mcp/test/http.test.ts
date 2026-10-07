@@ -61,6 +61,30 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
     expect(env.data.body).toBe(DOC_TOPICS.signing!.body);
   });
 
+  it("an RFQ write with auth apiKey is refused over HTTP even when the operator has a key — nothing reaches the venue", async () => {
+    const prev = process.env.CORK_RFQ_API_KEY;
+    process.env.CORK_RFQ_API_KEY = "operator-key-should-never-leave";
+    try {
+      let venueCalls = 0;
+      const handler = createHttpHandler({ ctx: { nowSeconds: NOW, venueFetch: async () => { venueCalls++; return new Response("{}", { status: 201 }); } } });
+      const transport = new StreamableHTTPClientTransport(new URL("http://cork.test/mcp"), { fetch: fetchInto(handler) });
+      const client = new Client({ name: "http-test", version: "0" });
+      await client.connect(transport as unknown as Parameters<typeof client.connect>[0]);
+      const res = (await client.callTool({
+        name: "cork_submit",
+        arguments: { chainId: 42161, clientRequestId: "test-http-apikey-01", action: { type: "rfq-counter", rfqId: "rfq_1", requester: "0x1111111111111111111111111111111111111111", premiumAnnualized: "0.03", auth: { method: "apiKey" } } },
+      })) as { structuredContent?: { state: string; warnings: Array<{ code: string; message: string }> } };
+      expect(res.structuredContent?.state).toBe("unavailable");
+      expect(res.structuredContent?.warnings[0]?.code).toBe("api_key_missing");
+      expect(res.structuredContent?.warnings[0]?.message).toContain("HTTP MCP endpoint");
+      expect(JSON.stringify(res)).not.toContain("operator-key-should-never-leave");
+      expect(venueCalls).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env.CORK_RFQ_API_KEY;
+      else process.env.CORK_RFQ_API_KEY = prev;
+    }
+  });
+
   it("bearer auth: rejects a missing/wrong token with 401, admits the right one", async () => {
     const handler = createHttpHandler({ token: "sekrit" });
     const bare = await handler(new Request("http://cork.test/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }) }));

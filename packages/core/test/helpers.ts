@@ -112,3 +112,66 @@ export function poolTokensRpc(): NonNullable<HandlerContext["resolveRpc"]> {
     } as never,
   });
 }
+
+/** An RFQ v2 write signed the way a writer would: the signer field (requester on open and
+ *  counter, underwriter on answer) set to `signer`, then the CorkRfqWrite typed data that
+ *  cork_prepare_orders rfq-write hands out signed into auth. `kind` is the target RFQ's. */
+export async function proveRfqWrite<T extends { chainId: number; clientRequestId: string; action: Record<string, unknown> }>(
+  signer: { address: `0x${string}`; signTypedData: (td: never) => Promise<`0x${string}`> },
+  input: T,
+  kind?: "new_position" | "rollover",
+): Promise<T> {
+  const { planRfqWrite } = await import("../src/rfq-bodies.ts");
+  const action = { ...input.action };
+  delete action.auth;
+  if (action.type === "rfq-answer") action.underwriter = signer.address;
+  else action.requester = signer.address;
+  let signature: `0x${string}` = "0x00";
+  try {
+    const plan = planRfqWrite({ chainId: input.chainId, clientRequestId: input.clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
+    signature = await signer.signTypedData(plan.typedData as never);
+  } catch {
+    // An input the tool must refuse in words (a bigint where a string belongs) cannot be
+    // hashed; it keeps a placeholder proof and is refused before the proof is read.
+  }
+  return { ...input, action: { ...action, auth: { method: "signature", signature } } };
+}
+
+/** A value as the venue stores it: every address and bytes32 lowercased, everything else kept. */
+export function asStored<T>(value: T): T {
+  if (typeof value === "string") return (/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : value) as T;
+  if (Array.isArray(value)) return value.map(asStored) as T;
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, asStored(v)])) as T;
+  return value;
+}
+
+/** A v2 RFQ record as GET /rfqs/v2/{id} serves it (row facts beside the stored request). */
+export function rfqRecord(o: { rfqId?: string; requester: string; kind?: "new_position" | "rollover"; chainId?: number; state?: "open" | "expired"; answers?: unknown[]; truncated?: boolean }): Record<string, unknown> {
+  return {
+    rfq_id: o.rfqId ?? "rfq_1",
+    state: o.state ?? "open",
+    kind: o.kind ?? "new_position",
+    version: 1,
+    received_at: 1_790_000_000,
+    answers: o.answers ?? [],
+    truncated: o.truncated ?? false,
+    request: { schema_version: "2", kind: o.kind ?? "new_position", requester: o.requester.toLowerCase(), chain_id: o.chainId ?? 42161 },
+  };
+}
+
+/** A cover order an RFQ v2 option can carry: it sells a (placeholder) cST for `collateral`, made
+ *  by `maker` — the shape cork_submit holds every quoted option to. */
+export function coverQuoteOrder(maker: string, collateral: string, salt: number | string = 1): Record<string, string> {
+  return { salt: String(salt), maker, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c", takerAsset: collateral, makingAmount: "1", takingAmount: "1", makerTraits: "0" };
+}
+
+/** Quoted options with a GENUINE order_signature by `signer` over each option's order (chain
+ *  42161's LOP domain) — the proof cork_submit checks before relay. */
+export async function signQuotes(signer: { sign: (a: { hash: `0x${string}` }) => Promise<`0x${string}`> }, options: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+  const { hashLopOrder, LOP_ADDRESSES } = await import("../src/orders.ts");
+  const { parseQuotedOrder } = await import("../src/rfq-quotes.ts");
+  return Promise.all(options.map(async (o) => {
+    const parsed = parseQuotedOrder(o.order);
+    return parsed.ok ? { ...o, order_signature: await signer.sign({ hash: hashLopOrder(42161, LOP_ADDRESSES[42161]!, parsed.order) }) } : o;
+  }));
+}

@@ -888,7 +888,7 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
     const venueFetch = async (url: string) => {
       urls.push(url);
       if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: books[Math.min(bookCall++, books.length - 1)], hasMore: false }), { status: 200 });
-      if (url.includes("/rfqs/v1")) return new Response(JSON.stringify({ items: feeds[Math.min(feedCall++, feeds.length - 1)], next_cursor: null }), { status: 200 });
+      if (url.includes("/rfqs/v2")) return new Response(JSON.stringify({ items: feeds[Math.min(feedCall++, feeds.length - 1)], next_cursor: null }), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     };
     const sleeps: number[] = [];
@@ -896,7 +896,7 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
     expect(r.code, r.stderr).toBe(EXIT.ok);
     expect(sleeps).toEqual([2000, 2000, 2000]);
     // Every feed read embeds answers (the firm join needs them), whatever the caller passed.
-    expect(urls.filter((u) => u.includes("/rfqs/v1")).every((u) => u.includes("with_answers=true"))).toBe(true);
+    expect(urls.filter((u) => u.includes("/rfqs/v2")).every((u) => u.includes("with_answers=true"))).toBe(true);
     const ticks = r.stdout.trim().split(/\n(?=\{)/).map((t) => JSON.parse(t) as { tick: number; state: string; data: { items: Array<{ rfq_id: string; firmQuotes: number }>; changes: { changed: boolean; appeared: string[]; moved: unknown[]; unbacked: Array<{ rfqId: string; counter: { answerId: string; optionId: string }; firmQuotes: number; counterFresh: boolean; reason: string }>; backedNow: string[] } } });
     expect(ticks.map((t) => t.tick)).toEqual([1, 3, 4]);
     expect(ticks[0]!.data.changes).toMatchObject({ changed: false, appeared: ["rfq_w"], unbacked: [] });

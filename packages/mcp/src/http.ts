@@ -139,7 +139,7 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
         // pure projections of the compiled registry, so per-request construction is cheap and the
         // transport never accumulates session state. The deadline signal rides in the context, so
         // a request that outlives its budget stops its own in-flight upstream work.
-        const server = createCorkServer({ ...(opts.ctx ?? {}), signal });
+        const server = createCorkServer({ ...(opts.ctx ?? {}), signal, apiKeys: "refuse" });
         // sessionIdGenerator undefined = stateless (the SDK types the field optional-but-not-
         // undefined under exactOptionalPropertyTypes; spreading nothing expresses the same).
         const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });

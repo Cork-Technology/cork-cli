@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.4.4"
+  "version": "0.4.5"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -17238,6 +17238,3447 @@
     ]
    }
   },
+  "/rfqs/v2/": {
+   "get": {
+    "parameters": [
+     {
+      "in": "query",
+      "name": "chain_id",
+      "required": false,
+      "schema": {
+       "exclusiveMinimum": true,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "state",
+      "required": false,
+      "schema": {
+       "default": "open",
+       "enum": [
+        "open",
+        "expired"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "kind",
+      "required": false,
+      "schema": {
+       "enum": [
+        "new_position",
+        "rollover"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "reference_asset",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "requester",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "underwriter",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{40}$",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 256,
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 25,
+       "maximum": 100,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "Exclude RFQs whose request_id starts with this literal prefix (e.g. \"healthcheck-\" to drop status-page heartbeats). Matching is literal: LIKE wildcards in the prefix are escaped.",
+      "in": "query",
+      "name": "exclude_request_prefix",
+      "required": false,
+      "schema": {
+       "maxLength": 64,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "with_answers",
+      "required": false,
+      "schema": {
+       "enum": [
+        "true",
+        "false"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "view",
+      "required": false,
+      "schema": {
+       "default": "full",
+       "enum": [
+        "full",
+        "current"
+       ],
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "items": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "answer_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "answers": {
+              "items": {
+               "additionalProperties": false,
+               "properties": {
+                "answer": {
+                 "additionalProperties": {},
+                 "type": "object"
+                },
+                "answer_id": {
+                 "type": "string"
+                },
+                "received_at": {
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "revisions": {
+                 "maximum": 9007199254740991,
+                 "minimum": -9007199254740991,
+                 "type": "integer"
+                },
+                "underwriter": {
+                 "type": "string"
+                }
+               },
+               "required": [
+                "answer_id",
+                "received_at",
+                "answer"
+               ],
+               "type": "object"
+              },
+              "type": "array"
+             },
+             "answers_truncated": {
+              "type": "boolean"
+             },
+             "counter": {
+              "additionalProperties": false,
+              "nullable": true,
+              "properties": {
+               "counter": {
+                "additionalProperties": {},
+                "type": "object"
+               },
+               "counter_id": {
+                "type": "string"
+               },
+               "received_at": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+               }
+              },
+              "required": [
+               "counter_id",
+               "received_at",
+               "counter"
+              ],
+              "type": "object"
+             },
+             "kind": {
+              "enum": [
+               "new_position",
+               "rollover"
+              ],
+              "type": "string"
+             },
+             "received_at": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "request": {
+              "additionalProperties": {},
+              "type": "object"
+             },
+             "rfq_id": {
+              "type": "string"
+             },
+             "state": {
+              "enum": [
+               "open",
+               "expired"
+              ],
+              "type": "string"
+             },
+             "version": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "rfq_id",
+             "kind",
+             "state",
+             "received_at",
+             "answer_count",
+             "version",
+             "request"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "next_cursor": {
+           "nullable": true,
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "items",
+          "next_cursor"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "RFQ"
+    ]
+   },
+   "post": {
+    "parameters": [
+     {
+      "description": "Partner API key. Proves the write instead of a signature when it covers the address and operation (see docs/rfq-v2-signing.md).",
+      "in": "header",
+      "name": "x-cork-api-key",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "oneOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "chain_id": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           },
+           "collateral_asset": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "properties": {
+               "exact": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+               }
+              },
+              "required": [
+               "exact"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": false,
+              "properties": {
+               "one_of": {
+                "items": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array"
+               }
+              },
+              "required": [
+               "one_of"
+              ],
+              "type": "object"
+             }
+            ]
+           },
+           "expiry_window": {
+            "additionalProperties": false,
+            "properties": {
+             "not_after": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "type": "integer"
+             },
+             "not_before": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "not_before",
+             "not_after"
+            ],
+            "type": "object"
+           },
+           "kind": {
+            "enum": [
+             "new_position"
+            ],
+            "type": "string"
+           },
+           "market_template": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "properties": {
+               "market_template_id": {
+                "pattern": "^0x[a-fA-F0-9]{64}$",
+                "type": "string"
+               }
+              },
+              "required": [
+               "market_template_id"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": false,
+              "properties": {
+               "inline": {
+                "additionalProperties": false,
+                "properties": {
+                 "nav_source_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 },
+                 "oracle_params": {
+                  "additionalProperties": {
+                   "anyOf": [
+                    {
+                     "maxLength": 256,
+                     "type": "string"
+                    },
+                    {
+                     "type": "number"
+                    },
+                    {
+                     "type": "boolean"
+                    },
+                    {
+                     "enum": [
+                      null
+                     ],
+                     "nullable": true,
+                     "type": "string"
+                    }
+                   ]
+                  },
+                  "type": "object"
+                 },
+                 "oracle_recipe": {
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "type": "string"
+                 },
+                 "price_source_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 },
+                 "rate_band_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "oracle_recipe",
+                 "oracle_params"
+                ],
+                "type": "object"
+               }
+              },
+              "required": [
+               "inline"
+              ],
+              "type": "object"
+             }
+            ],
+            "description": "When modes includes fixed_rate, require an inline template with oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). In mixed-mode requests it specifies the fixed-rate alternative; each answer option carries its own template. This is the order rateOverride, not recipe additionalData."
+           },
+           "modes": {
+            "items": {
+             "enum": [
+              "liquidity_only",
+              "liquidity_impairment",
+              "fixed_rate"
+             ],
+             "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+           },
+           "notional_assets": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+           },
+           "package_ids": {
+            "items": {
+             "maxLength": 64,
+             "minLength": 1,
+             "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+           },
+           "reference_asset": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "requester": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           },
+           "valid_until": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "schema_version",
+           "kind",
+           "request_id",
+           "requester",
+           "chain_id",
+           "reference_asset",
+           "collateral_asset",
+           "modes",
+           "package_ids",
+           "expiry_window",
+           "notional_assets",
+           "valid_until"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "chain_id": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           },
+           "collateral_asset": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "properties": {
+               "exact": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+               }
+              },
+              "required": [
+               "exact"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": false,
+              "properties": {
+               "one_of": {
+                "items": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array"
+               }
+              },
+              "required": [
+               "one_of"
+              ],
+              "type": "object"
+             }
+            ]
+           },
+           "expiry_window": {
+            "additionalProperties": false,
+            "properties": {
+             "not_after": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "type": "integer"
+             },
+             "not_before": {
+              "exclusiveMinimum": true,
+              "maximum": 9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "not_before",
+             "not_after"
+            ],
+            "type": "object"
+           },
+           "kind": {
+            "enum": [
+             "rollover"
+            ],
+            "type": "string"
+           },
+           "market_template": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "properties": {
+               "market_template_id": {
+                "pattern": "^0x[a-fA-F0-9]{64}$",
+                "type": "string"
+               }
+              },
+              "required": [
+               "market_template_id"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": false,
+              "properties": {
+               "inline": {
+                "additionalProperties": false,
+                "properties": {
+                 "nav_source_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 },
+                 "oracle_params": {
+                  "additionalProperties": {
+                   "anyOf": [
+                    {
+                     "maxLength": 256,
+                     "type": "string"
+                    },
+                    {
+                     "type": "number"
+                    },
+                    {
+                     "type": "boolean"
+                    },
+                    {
+                     "enum": [
+                      null
+                     ],
+                     "nullable": true,
+                     "type": "string"
+                    }
+                   ]
+                  },
+                  "type": "object"
+                 },
+                 "oracle_recipe": {
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "type": "string"
+                 },
+                 "price_source_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 },
+                 "rate_band_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "oracle_recipe",
+                 "oracle_params"
+                ],
+                "type": "object"
+               }
+              },
+              "required": [
+               "inline"
+              ],
+              "type": "object"
+             }
+            ]
+           },
+           "premium_token": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "properties": {
+               "exact": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+               }
+              },
+              "required": [
+               "exact"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": false,
+              "properties": {
+               "one_of": {
+                "items": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array"
+               }
+              },
+              "required": [
+               "one_of"
+              ],
+              "type": "object"
+             }
+            ]
+           },
+           "reference_asset": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "requester": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           },
+           "source": {
+            "additionalProperties": false,
+            "properties": {
+             "pool_id": {
+              "pattern": "^0x[a-fA-F0-9]{64}$",
+              "type": "string"
+             },
+             "shares": {
+              "pattern": "^[1-9][0-9]*$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "pool_id",
+             "shares"
+            ],
+            "type": "object"
+           },
+           "valid_until": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "schema_version",
+           "kind",
+           "request_id",
+           "requester",
+           "chain_id",
+           "source",
+           "reference_asset",
+           "collateral_asset",
+           "expiry_window",
+           "premium_token",
+           "valid_until"
+          ],
+          "type": "object"
+         }
+        ]
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "rfq_id": {
+           "type": "string"
+          },
+          "state": {
+           "enum": [
+            "open",
+            "expired"
+           ],
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "rfq_id",
+          "state"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "rfq_id": {
+           "type": "string"
+          },
+          "state": {
+           "enum": [
+            "open",
+            "expired"
+           ],
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "rfq_id",
+          "state"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "409": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "RFQ"
+    ]
+   }
+  },
+  "/rfqs/v2/{rfq_id}": {
+   "get": {
+    "parameters": [
+     {
+      "in": "query",
+      "name": "view",
+      "required": false,
+      "schema": {
+       "default": "full",
+       "enum": [
+        "full",
+        "current"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "rfq_id",
+      "required": true,
+      "schema": {
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "answer_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "answers": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "answer": {
+              "additionalProperties": {},
+              "type": "object"
+             },
+             "answer_id": {
+              "type": "string"
+             },
+             "received_at": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "revisions": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "underwriter": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "answer_id",
+             "received_at",
+             "answer"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "counter": {
+           "additionalProperties": false,
+           "nullable": true,
+           "properties": {
+            "counter": {
+             "additionalProperties": {},
+             "type": "object"
+            },
+            "counter_id": {
+             "type": "string"
+            },
+            "received_at": {
+             "maximum": 9007199254740991,
+             "minimum": -9007199254740991,
+             "type": "integer"
+            }
+           },
+           "required": [
+            "counter_id",
+            "received_at",
+            "counter"
+           ],
+           "type": "object"
+          },
+          "counter_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "counters": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "counter": {
+              "additionalProperties": {},
+              "type": "object"
+             },
+             "counter_id": {
+              "type": "string"
+             },
+             "received_at": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "counter_id",
+             "received_at",
+             "counter"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "counters_truncated": {
+           "type": "boolean"
+          },
+          "kind": {
+           "enum": [
+            "new_position",
+            "rollover"
+           ],
+           "type": "string"
+          },
+          "received_at": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "request": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "rfq_id": {
+           "type": "string"
+          },
+          "state": {
+           "enum": [
+            "open",
+            "expired"
+           ],
+           "type": "string"
+          },
+          "truncated": {
+           "type": "boolean"
+          },
+          "version": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "rfq_id",
+          "kind",
+          "state",
+          "received_at",
+          "version",
+          "request",
+          "answers",
+          "answer_count",
+          "truncated",
+          "counter",
+          "counters",
+          "counter_count",
+          "counters_truncated"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "RFQ"
+    ]
+   }
+  },
+  "/rfqs/v2/{rfq_id}/answers": {
+   "post": {
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rfq_id",
+      "required": true,
+      "schema": {
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Partner API key. Proves the write instead of a signature when it covers the address and operation (see docs/rfq-v2-signing.md).",
+      "in": "header",
+      "name": "x-cork-api-key",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "oneOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "kind": {
+            "enum": [
+             "new_position"
+            ],
+            "type": "string"
+           },
+           "options": {
+            "items": {
+             "additionalProperties": false,
+             "properties": {
+              "chain_id": {
+               "exclusiveMinimum": true,
+               "maximum": 9007199254740991,
+               "type": "integer"
+              },
+              "collateral_asset": {
+               "pattern": "^0x[a-fA-F0-9]{40}$",
+               "type": "string"
+              },
+              "expiry": {
+               "exclusiveMinimum": true,
+               "maximum": 9007199254740991,
+               "type": "integer"
+              },
+              "fresh_until": {
+               "exclusiveMinimum": true,
+               "maximum": 9007199254740991,
+               "type": "integer"
+              },
+              "market_template": {
+               "anyOf": [
+                {
+                 "additionalProperties": false,
+                 "properties": {
+                  "market_template_id": {
+                   "pattern": "^0x[a-fA-F0-9]{64}$",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "market_template_id"
+                 ],
+                 "type": "object"
+                },
+                {
+                 "additionalProperties": false,
+                 "properties": {
+                  "inline": {
+                   "additionalProperties": false,
+                   "properties": {
+                    "nav_source_id": {
+                     "maxLength": 128,
+                     "minLength": 1,
+                     "type": "string"
+                    },
+                    "oracle_params": {
+                     "additionalProperties": {
+                      "anyOf": [
+                       {
+                        "maxLength": 256,
+                        "type": "string"
+                       },
+                       {
+                        "type": "number"
+                       },
+                       {
+                        "type": "boolean"
+                       },
+                       {
+                        "enum": [
+                         null
+                        ],
+                        "nullable": true,
+                        "type": "string"
+                       }
+                      ]
+                     },
+                     "type": "object"
+                    },
+                    "oracle_recipe": {
+                     "pattern": "^0x[a-fA-F0-9]{40}$",
+                     "type": "string"
+                    },
+                    "price_source_id": {
+                     "maxLength": 128,
+                     "minLength": 1,
+                     "type": "string"
+                    },
+                    "rate_band_id": {
+                     "maxLength": 128,
+                     "minLength": 1,
+                     "type": "string"
+                    }
+                   },
+                   "required": [
+                    "oracle_recipe",
+                    "oracle_params"
+                   ],
+                   "type": "object"
+                  }
+                 },
+                 "required": [
+                  "inline"
+                 ],
+                 "type": "object"
+                }
+               ],
+               "description": "For fixed_rate, require inline.oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). Map it to the order rateOverride, with empty recipe additionalData. Each option declares its own proposed rate; answers remain non-committal counter-proposals."
+              },
+              "mode": {
+               "enum": [
+                "liquidity_only",
+                "liquidity_impairment",
+                "fixed_rate"
+               ],
+               "type": "string"
+              },
+              "notional_max_assets": {
+               "pattern": "^[1-9][0-9]*$",
+               "type": "string"
+              },
+              "option_id": {
+               "maxLength": 64,
+               "minLength": 1,
+               "type": "string"
+              },
+              "order": {
+               "additionalProperties": false,
+               "properties": {
+                "maker": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "makerAsset": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "makerTraits": {
+                 "pattern": "^[0-9]+$",
+                 "type": "string"
+                },
+                "makingAmount": {
+                 "pattern": "^[1-9][0-9]*$",
+                 "type": "string"
+                },
+                "receiver": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "salt": {
+                 "pattern": "^[0-9]+$",
+                 "type": "string"
+                },
+                "takerAsset": {
+                 "pattern": "^0x[a-fA-F0-9]{40}$",
+                 "type": "string"
+                },
+                "takingAmount": {
+                 "pattern": "^[1-9][0-9]*$",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "salt",
+                "maker",
+                "receiver",
+                "makerAsset",
+                "takerAsset",
+                "makingAmount",
+                "takingAmount",
+                "makerTraits"
+               ],
+               "type": "object"
+              },
+              "order_signature": {
+               "pattern": "^0x[a-fA-F0-9]+$",
+               "type": "string"
+              },
+              "package_id": {
+               "maxLength": 64,
+               "minLength": 1,
+               "type": "string"
+              },
+              "premium_annualized": {
+               "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
+               "pattern": "^(0|0\\.[0-9]{1,18})$",
+               "type": "string"
+              },
+              "reference_asset": {
+               "pattern": "^0x[a-fA-F0-9]{40}$",
+               "type": "string"
+              }
+             },
+             "required": [
+              "option_id",
+              "chain_id",
+              "collateral_asset",
+              "reference_asset",
+              "mode",
+              "package_id",
+              "expiry",
+              "market_template",
+              "premium_annualized",
+              "notional_max_assets",
+              "fresh_until",
+              "order"
+             ],
+             "type": "object"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+           },
+           "reason_code": {
+            "enum": [
+             "NO_CAPACITY",
+             "PAIR_UNSUPPORTED",
+             "TENOR_NOT_QUOTED",
+             "PASS"
+            ],
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           },
+           "status": {
+            "enum": [
+             "quoted",
+             "pass"
+            ],
+            "type": "string"
+           },
+           "supersedes": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+           },
+           "underwriter": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           }
+          },
+          "required": [
+           "schema_version",
+           "request_id",
+           "underwriter",
+           "status",
+           "kind"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "kind": {
+            "enum": [
+             "rollover"
+            ],
+            "type": "string"
+           },
+           "options": {
+            "items": {
+             "additionalProperties": false,
+             "properties": {
+              "chain_id": {
+               "exclusiveMinimum": true,
+               "maximum": 9007199254740991,
+               "type": "integer"
+              },
+              "destination": {
+               "anyOf": [
+                {
+                 "additionalProperties": false,
+                 "properties": {
+                  "pool_id": {
+                   "pattern": "^0x[a-fA-F0-9]{64}$",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "pool_id"
+                 ],
+                 "type": "object"
+                },
+                {
+                 "additionalProperties": false,
+                 "properties": {
+                  "jit_market": {
+                   "additionalProperties": false,
+                   "properties": {
+                    "additionalData": {
+                     "pattern": "^0x([a-fA-F0-9]{2})*$",
+                     "type": "string"
+                    },
+                    "collateralAsset": {
+                     "pattern": "^0x[a-fA-F0-9]{40}$",
+                     "type": "string"
+                    },
+                    "constraint": {
+                     "additionalProperties": false,
+                     "properties": {
+                      "rateChangeCapacityMax": {
+                       "pattern": "^[0-9]+$",
+                       "type": "string"
+                      },
+                      "rateChangePerDayMax": {
+                       "pattern": "^[0-9]+$",
+                       "type": "string"
+                      },
+                      "rateMax": {
+                       "pattern": "^[0-9]+$",
+                       "type": "string"
+                      },
+                      "rateMin": {
+                       "pattern": "^[0-9]+$",
+                       "type": "string"
+                      }
+                     },
+                     "required": [
+                      "rateMin",
+                      "rateMax",
+                      "rateChangePerDayMax",
+                      "rateChangeCapacityMax"
+                     ],
+                     "type": "object"
+                    },
+                    "expiryTimestamp": {
+                     "pattern": "^[0-9]+$",
+                     "type": "string"
+                    },
+                    "oracleSalt": {
+                     "pattern": "^0x[a-fA-F0-9]{64}$",
+                     "type": "string"
+                    },
+                    "rateOverride": {
+                     "pattern": "^[0-9]+$",
+                     "type": "string"
+                    },
+                    "recipe": {
+                     "pattern": "^0x[a-fA-F0-9]{40}$",
+                     "type": "string"
+                    },
+                    "referenceAsset": {
+                     "pattern": "^0x[a-fA-F0-9]{40}$",
+                     "type": "string"
+                    },
+                    "swapFeePercentage": {
+                     "pattern": "^[0-9]+$",
+                     "type": "string"
+                    },
+                    "unwindSwapFeePercentage": {
+                     "pattern": "^[0-9]+$",
+                     "type": "string"
+                    }
+                   },
+                   "required": [
+                    "collateralAsset",
+                    "referenceAsset",
+                    "expiryTimestamp",
+                    "recipe",
+                    "rateOverride",
+                    "constraint",
+                    "additionalData",
+                    "oracleSalt",
+                    "swapFeePercentage",
+                    "unwindSwapFeePercentage"
+                   ],
+                   "type": "object"
+                  }
+                 },
+                 "required": [
+                  "jit_market"
+                 ],
+                 "type": "object"
+                }
+               ]
+              },
+              "fresh_until": {
+               "exclusiveMinimum": true,
+               "maximum": 9007199254740991,
+               "type": "integer"
+              },
+              "option_id": {
+               "maxLength": 64,
+               "minLength": 1,
+               "type": "string"
+              },
+              "premium_per_share": {
+               "description": "Unit: raw premium-token base units per 1e18 destination cPT shares (the rollover order's minPremiumPerShare). Premium paid = ceil(dstCstProduced * premium_per_share / 1e18).",
+               "pattern": "^[1-9][0-9]*$",
+               "type": "string"
+              },
+              "premium_token": {
+               "pattern": "^0x[a-fA-F0-9]{40}$",
+               "type": "string"
+              },
+              "shares_max": {
+               "pattern": "^[1-9][0-9]*$",
+               "type": "string"
+              }
+             },
+             "required": [
+              "option_id",
+              "chain_id",
+              "destination",
+              "premium_token",
+              "premium_per_share",
+              "shares_max",
+              "fresh_until"
+             ],
+             "type": "object"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+           },
+           "reason_code": {
+            "enum": [
+             "NO_CAPACITY",
+             "PAIR_UNSUPPORTED",
+             "TENOR_NOT_QUOTED",
+             "PASS"
+            ],
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           },
+           "status": {
+            "enum": [
+             "quoted",
+             "pass"
+            ],
+            "type": "string"
+           },
+           "supersedes": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+           },
+           "underwriter": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           }
+          },
+          "required": [
+           "schema_version",
+           "request_id",
+           "underwriter",
+           "status",
+           "kind"
+          ],
+          "type": "object"
+         }
+        ]
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "answer_id": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "answer_id"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "answer_id": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "answer_id"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "409": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "410": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "RFQ"
+    ]
+   }
+  },
+  "/rfqs/v2/{rfq_id}/counters": {
+   "post": {
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rfq_id",
+      "required": true,
+      "schema": {
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "Partner API key. Proves the write instead of a signature when it covers the address and operation (see docs/rfq-v2-signing.md).",
+      "in": "header",
+      "name": "x-cork-api-key",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "oneOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "fresh_until": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           },
+           "kind": {
+            "enum": [
+             "new_position"
+            ],
+            "type": "string"
+           },
+           "option_ref": {
+            "additionalProperties": false,
+            "properties": {
+             "answer_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+             },
+             "option_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "answer_id",
+             "option_id"
+            ],
+            "type": "object"
+           },
+           "premium_annualized": {
+            "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
+            "pattern": "^(0|0\\.[0-9]{1,18})$",
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "requester": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           }
+          },
+          "required": [
+           "schema_version",
+           "request_id",
+           "requester",
+           "kind",
+           "premium_annualized"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "fresh_until": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "type": "integer"
+           },
+           "kind": {
+            "enum": [
+             "rollover"
+            ],
+            "type": "string"
+           },
+           "option_ref": {
+            "additionalProperties": false,
+            "properties": {
+             "answer_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+             },
+             "option_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "answer_id",
+             "option_id"
+            ],
+            "type": "object"
+           },
+           "premium_per_share": {
+            "description": "Unit: raw premium-token base units per 1e18 destination cPT shares (the rollover order's minPremiumPerShare). Premium paid = ceil(dstCstProduced * premium_per_share / 1e18).",
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+           },
+           "premium_token": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "type": "string"
+           },
+           "requester": {
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "schema_version": {
+            "enum": [
+             "2"
+            ],
+            "type": "string"
+           },
+           "signature": {
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "type": "string"
+           }
+          },
+          "required": [
+           "schema_version",
+           "request_id",
+           "requester",
+           "kind",
+           "premium_per_share",
+           "premium_token"
+          ],
+          "type": "object"
+         }
+        ]
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "counter_id": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "counter_id"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "counter_id": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "counter_id"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "409": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "410": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "details": {
+           "additionalProperties": {},
+           "type": "object"
+          },
+          "error": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "warnings": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "deprecates": {
+              "type": "string"
+             },
+             "effectiveAt": {
+              "type": "string"
+             },
+             "link": {
+              "type": "string"
+             },
+             "message": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "error",
+          "message"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Default Response"
+     }
+    },
+    "tags": [
+     "RFQ"
+    ]
+   }
+  },
   "/rollover/v1/contracts": {
    "get": {
     "description": "Deployed CorkRolloverContract clones with trust config.",
@@ -17929,6 +21370,17 @@
       }
      },
      {
+      "description": "Optional. Only orders whose quoteRef cites this RFQ.",
+      "in": "query",
+      "name": "rfqId",
+      "required": false,
+      "schema": {
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
       "in": "query",
       "name": "fillable",
       "required": false,
@@ -18078,6 +21530,34 @@
               "type": "integer"
              },
              "premiumToken": {},
+             "quoteRef": {
+              "additionalProperties": false,
+              "description": "The rollover RFQ quote this order cited when posted (checked on write); null when none.",
+              "nullable": true,
+              "properties": {
+               "answerId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+               },
+               "optionId": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+               },
+               "rfqId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+               }
+              },
+              "required": [
+               "rfqId",
+               "answerId",
+               "optionId"
+              ],
+              "type": "object"
+             },
              "remainingSize": {
               "type": "string"
              },
@@ -18155,6 +21635,7 @@
              "cumulativeRolled",
              "remainingSize",
              "payload",
+             "quoteRef",
              "openedAt",
              "settledAt",
              "cancelledAt",
@@ -18754,6 +22235,33 @@
           ],
           "type": "object"
          },
+         "quoteRef": {
+          "additionalProperties": false,
+          "description": "Optional. The rollover RFQ quote this order accepts. The server checks that the order matches the quoted option, and stores the reference with the order.",
+          "properties": {
+           "answerId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+           },
+           "optionId": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+           },
+           "rfqId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+           }
+          },
+          "required": [
+           "rfqId",
+           "answerId",
+           "optionId"
+          ],
+          "type": "object"
+         },
          "signature": {
           "maxLength": 65536,
           "pattern": "^0x[a-fA-F0-9]*$",
@@ -19222,6 +22730,34 @@
              "type": "integer"
             },
             "premiumToken": {},
+            "quoteRef": {
+             "additionalProperties": false,
+             "description": "The rollover RFQ quote this order cited when posted (checked on write); null when none.",
+             "nullable": true,
+             "properties": {
+              "answerId": {
+               "maxLength": 128,
+               "minLength": 1,
+               "type": "string"
+              },
+              "optionId": {
+               "maxLength": 64,
+               "minLength": 1,
+               "type": "string"
+              },
+              "rfqId": {
+               "maxLength": 128,
+               "minLength": 1,
+               "type": "string"
+              }
+             },
+             "required": [
+              "rfqId",
+              "answerId",
+              "optionId"
+             ],
+             "type": "object"
+            },
             "remainingSize": {
              "type": "string"
             },
@@ -19299,6 +22835,7 @@
             "cumulativeRolled",
             "remainingSize",
             "payload",
+            "quoteRef",
             "openedAt",
             "settledAt",
             "cancelledAt",

@@ -74,6 +74,7 @@ ch query rfqs --chain-id <id>                                          # open re
 ch query rfq  --chain-id <id> --rfq-id <rfq_…>                         # one RFQ with its answers
 ch query rfqs --chain-id <id> --underwriter <0x…> --with-answers true  # the RFQs you answered
 ch query rfqs --chain-id <id> --watch [--interval <s>]                 # alert when a requester accepts a quote nobody rested
+ch query rfqs --chain-id <id> --rfq-kind rollover                      # rollover RFQs only (--kind selects the flows feed)
 
 ch query account-state --chain-id <id> --pool-id <0x…> --account <0x…>   # balances and funding allowances for one pool
 ch query account-state --chain-id <id> --account <0x…>                   # NO pool id: your positions across every generation
@@ -233,7 +234,9 @@ ch prepare order maker-order --chain-id <id> --account <0x…> --client-request-
   [--expiry-seconds <n>] [--allowed-sender <0x…>] [--oco-group <key>] [--jit-market '{…}'] [--auction '{…}']
 ch prepare order maker-ladder … --rungs '[{"takingAmount":"…"},{"takingAmount":"…","allowedSender":"0x…"}]'   # 2 to 32 rungs in one call
 ch prepare order answer-rfq --chain-id <id> --account <0x…> --client-request-id <id> --rfq-id <rfq_…> \
-  [--answer-id <…> --option-id <…>] [--premium-annualized "0.041"] [--fill-sender <0x…>]            # one call from RFQ to signable order
+  [--answer-id <…> --option-id <…>] [--premium-annualized "0.041"] [--fill-sender <0x…>]            # the order AND the answer option that carries it
+ch prepare order rfq-write --chain-id <id> --account <0x…> --client-request-id <id> --request '{"type":"rfq-open",…}'
+                                                                                                     # the CorkRfqWrite typed data every RFQ write is signed with
 ch prepare order finalize-maker-order --chain-id <id> --account <0x…> --client-request-id <id> \
   --prepared '{…}' --signature <0x…> --listing '{…}'                                                   # verify your signature, get the submit payload
 ch fill --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> \
@@ -308,6 +311,76 @@ ch submit rfq-open       --chain-id <id> --client-request-id <id> --action '{…
 ch submit rfq-answer     --chain-id <id> --client-request-id <id> --action '{…}'   # answer one (underwriter); revisions replace
 ch submit rfq-counter    --chain-id <id> --client-request-id <id> --action '{…}'   # counter-bid (requester)
 ```
+
+Every RFQ write is proven (venue RFQ v2). Run the same request through `ch prepare order rfq-write`
+with the same client request id, sign `data.typedData` with the address it names, and pass the
+signature as `"auth": {"method": "signature", "signature": "0x…"}`. The tool rebuilds the body and
+checks the signer before it relays. With a partner API key, pass `"auth": {"method": "apiKey"}`
+instead: the key is never part of the input (see "RFQ API keys" below). `rfq-open` needs `kind`:
+`new_position` or `rollover`. A quoted `new_position` answer carries each option's signed order:
+`answer-rfq` builds both, and the answer goes before the order rests on the book.
+
+To sign and submit an RFQ write in one command, add `--account <keystore>` (see below):
+
+```sh
+ch submit rfq-open --json '{…without auth…}' --account alice   # prepares, shows what it signs, asks yes/no, then the password
+```
+
+### RFQ API keys
+
+`ch` finds a key the way the AWS CLI finds credentials. The first hit wins:
+
+1. The `CORK_RFQ_API_KEY` environment variable.
+2. The profile's `credential_process`: a command that prints `{"Version": 1, "RfqApiKey": "…"}`.
+3. The key stored in the profile for the venue host you are writing to.
+
+The first two apply to whatever venue is configured. A stored key belongs to one venue host, so a
+staging key is never sent to production.
+
+```sh
+printf %s "$KEY" | ch auth set-key --venue https://breaking.cork.tech   # or run it bare for a hidden prompt
+ch auth set-key --profile desk                                           # a second profile, production venue
+ch auth list                                                             # profiles, hosts, keys masked to …last4
+ch auth status --venue https://breaking.cork.tech                        # which source serves, never the key
+ch auth remove --venue https://breaking.cork.tech
+ch submit rfq-open --profile desk --action '{…, "auth": {"method": "apiKey"}}'
+```
+
+The file is `~/.config/cork-helper-cli/credentials` (override `CORK_CREDENTIALS_FILE`). `ch`
+writes it with mode 600 and refuses to read it when other users can:
+
+```ini
+[default]
+rfq_api_key.breaking.cork.tech = <staging key>
+
+[desk]
+credential_process = op read "op://Cork/rfq api key/credential" --format json
+rfq_api_key.api-phoenix.cork.tech = <production key>
+```
+
+The profile is `--profile`, else `CORK_PROFILE`, else `default`. `ch` never takes a key on the
+command line, never prints one, and the HTTP MCP endpoint never uses one: a shared server's key
+is its operator's, not its callers'.
+
+### Sign with a keystore — `ch wallet`, `ch sign`
+
+The MCP server never signs. The CLI can, for a person at a terminal. Keys live encrypted in
+`~/.config/cork-helper-cli/keystores/` (the standard v3 keystore format; `CORK_KEYSTORE_DIR` moves
+it). No other tool's keystore folder is read.
+
+```sh
+ch wallet new alice                          # new key; you type a password twice
+ch wallet import alice                       # existing key, typed at a hidden prompt
+printf %s "$KEY" | ch wallet import alice --from-stdin
+ch wallet list                               # names and addresses, no password needed
+ch prepare order rfq-write … --json | ch sign --account alice
+ch sign tx.json --account alice              # a COMPLETE transaction: nonce, gas and fees filled in
+```
+
+Before every signature `ch` shows what will be signed and asks yes or no. Only then does it ask for
+the password. The password is read from the terminal only, never from an environment variable, a
+file or a pipe, so a script or an agent cannot sign for you. `ch` never broadcasts: check a signed
+transaction with `ch decode tx` and send it through your own RPC.
 
 A venue listing carries one premium field, `premiumAnnualized`, a fraction string: `"0.041"` is
 4.1%. `ch` recomputes every commitment before relay and refuses a payload whose signature does

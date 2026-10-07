@@ -21,6 +21,14 @@ import { prepareForSelfTakerFill } from "./forself.ts";
 import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
 import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-orders-sugars.ts";
 import { handleDeployRolloverContract, handleRolloverFill } from "./prepare-rollover-fill.ts";
+import { handleRfqWrite } from "./rfq-write.ts";
+import { deriveJitDestination, readRolloverQuote } from "./rfq-rollover.ts";
+import { rolloverQuoteDefaults, rolloverQuoteRefMismatch } from "../rfq-rollover.ts";
+
+type RolloverIntentAction = Extract<PrepareOrdersInput["action"], { type: "rollover-intent" }>;
+/** A rollover-intent's terms once a cited quote has filled the ones the caller left out. */
+type QuoteFilledTerm = "srcPoolId" | "dstPoolId" | "premiumToken" | "orderSize" | "minPremiumPerShare";
+type RolloverIntentTerms = Omit<RolloverIntentAction, QuoteFilledTerm> & { [K in QuoteFilledTerm]-?: NonNullable<RolloverIntentAction[K]> };
 import { authenticateSignedOrder, makerCodeUnknownWarning, verifyMakerSignatureLadder } from "./order-auth.ts";
 
 /** The sugars re-enter this dispatcher and its approval annotator; handed in, never imported back. */
@@ -79,6 +87,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "deploy-rollover-contract") return handleDeployRolloverContract(input, action, ctx);
   if (action.type === "answer-rfq") return handleAnswerRfq(input, action, ctx, SUGAR_DEPS);
   if (action.type === "refresh-order") return handleRefreshOrder(input, action, ctx, SUGAR_DEPS);
+  if (action.type === "rfq-write") return handleRfqWrite(input, action, ctx);
 
   if (action.type === "finalize-maker-order") {
     const lop = LOP_ADDRESSES[chainId];
@@ -502,6 +511,45 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   }
 
   if (action.type === "rollover-intent") {
+    // A cited rollover RFQ quote supplies every term the caller leaves out, and every term is
+    // then held to the venue's quote rules (rolloverQuoteRefMismatch) once the order is built.
+    let quote: { rfq: Record<string, unknown>; option: Record<string, unknown> } | undefined;
+    let act: RolloverIntentTerms;
+    {
+      const filled: Partial<RolloverIntentTerms> = {};
+      if (action.quoteRef) {
+        const read = await readRolloverQuote(ctx, chainId, action.quoteRef);
+        if (!read.ok) return read.envelope;
+        quote = { rfq: read.rfq, option: read.option };
+        if (typeof read.rfq.requester !== "string" || !isAddressEqual(read.rfq.requester as `0x${string}`, input.account)) {
+          return unavailable(chainId, "invalid_order_terms", `only the RFQ's requester can accept its quote: RFQ '${action.quoteRef.rfqId}' was opened by ${String(read.rfq.requester)}, not account ${input.account} (the order's user — the venue would 400: order user is not the requester)`, ctx);
+        }
+        const d = rolloverQuoteDefaults(read.rfq, read.option);
+        if (action.srcPoolId === undefined) filled.srcPoolId = d.srcPoolId;
+        if (action.premiumToken === undefined) filled.premiumToken = d.premiumToken;
+        if (action.minPremiumPerShare === undefined) filled.minPremiumPerShare = d.minPremiumPerShare;
+        if (action.orderSize === undefined) filled.orderSize = d.orderSize;
+        if (d.dstPoolId !== undefined && action.dstPoolId === undefined) filled.dstPoolId = d.dstPoolId;
+        if (d.jitMarket !== undefined && action.jitMarket === undefined && action.jitMarketHash === undefined) {
+          filled.jitMarket = d.jitMarket as unknown as NonNullable<RolloverIntentTerms["jitMarket"]>;
+        }
+        if (d.jitMarket !== undefined && action.dstPoolId === undefined) {
+          // The quote names a market, not a pool id: the pool the market derives to is the one
+          // BaseFiller checks the order against (BaseFiller__JitPoolMismatch otherwise).
+          const derived = await deriveJitDestination(ctx, chainId, (read.option.destination as { jit_market: Record<string, unknown> }).jit_market);
+          if ("reason" in derived) {
+            return unavailable(chainId, "invalid_order_terms", `the quoted destination is a just-in-time market and the pool it derives to could not be computed here (${derived.reason}) — pass dstPoolId yourself (cork_query derive-cork-pool with the quoted jit_market fields reports it)`, ctx);
+          }
+          filled.dstPoolId = derived.poolId;
+        }
+      }
+      const merged = { ...action, ...filled };
+      const missing = (["srcPoolId", "dstPoolId", "premiumToken", "orderSize", "minPremiumPerShare"] as const).filter((k) => merged[k] === undefined);
+      if (missing.length > 0) {
+        throw new ToolInputError("cork_prepare_orders", missing.map((k) => ({ path: ["action", k], message: `${k} is required unless quoteRef names a rollover RFQ quote that supplies it` })));
+      }
+      act = merged as RolloverIntentTerms;
+    }
     const { rollover, warning: rolloverWarn } = await resolveRollover(chainId);
     if (!rollover) {
     // The partner named is the SAME generation's other settler: each factory approves only its
@@ -513,15 +561,15 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // Settler-kind pre-flight: the mode gate is enforced ON-CHAIN (ExactSettler reverts
     // Settler__PartialFillsNotSupported on allowPartialFills:true and PartialSettler reverts
     // Settler__ExactFillsNotSupported on false), so a mismatched order is signable but unfillable.
-    const cls = classifyRolloverSettler(rollover, action.settler);
+    const cls = classifyRolloverSettler(rollover, act.settler);
     if (cls.status === "retired") {
-      return unavailable(chainId, "settler_retired", retiredSettlerTeaching(action.settler, cls, rollover), ctx);
+      return unavailable(chainId, "settler_retired", retiredSettlerTeaching(act.settler, cls, rollover), ctx);
     }
-    if (cls.status === "active" && cls.kind === "EXACT" && action.allowPartialFills) {
-      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the ExactSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:true on-chain — use that generation's PartialSettler ${cls.generation.partialSettler} or set allowPartialFills:false`, ctx);
+    if (cls.status === "active" && cls.kind === "EXACT" && act.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${act.settler} is the ExactSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:true on-chain — use that generation's PartialSettler ${cls.generation.partialSettler} or set allowPartialFills:false`, ctx);
     }
-    if (cls.status === "active" && cls.kind === "PARTIAL" && !action.allowPartialFills) {
-      return unavailable(chainId, "settler_mode_mismatch", `settler ${action.settler} is the PartialSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:false on-chain — use that generation's ExactSettler ${cls.generation.exactSettler} or set allowPartialFills:true`, ctx);
+    if (cls.status === "active" && cls.kind === "PARTIAL" && !act.allowPartialFills) {
+      return unavailable(chainId, "settler_mode_mismatch", `settler ${act.settler} is the PartialSettler of the ${cls.generation.label} generation, which rejects allowPartialFills:false on-chain — use that generation's ExactSettler ${cls.generation.exactSettler} or set allowPartialFills:true`, ctx);
     }
     if (cls.status === "unknown") {
       // A JIT commitment is hashed on the SETTLER generation's wire (each factory admits only its
@@ -532,10 +580,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // (BaseFiller__JitMarketHashMismatch at best). Refused since 2026-09-22 (review A1);
       // a plain order (no commitment) keeps the warn-and-build path — the venue's admission
       // decides, and nothing wire-shaped is signed.
-      if (action.jitMarket !== undefined || (action.jitMarketHash !== undefined && action.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {
-        return unavailable(chainId, "invalid_order_terms", `settler ${action.settler} belongs to no configured rollover generation on chainId ${chainId}, and this order carries a JIT market commitment (${action.jitMarket !== undefined ? "jitMarket" : "a non-zero jitMarketHash"}) — the commitment's JITMarketParams typehash is the SETTLER generation's wire (rc.2 or 0.2), so an unvouched settler cannot be hashed for; bind the order to a configured settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) or drop the commitment`, ctx);
+      if (act.jitMarket !== undefined || (act.jitMarketHash !== undefined && act.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {
+        return unavailable(chainId, "invalid_order_terms", `settler ${act.settler} belongs to no configured rollover generation on chainId ${chainId}, and this order carries a JIT market commitment (${act.jitMarket !== undefined ? "jitMarket" : "a non-zero jitMarketHash"}) — the commitment's JITMarketParams typehash is the SETTLER generation's wire (rc.2 or 0.2), so an unvouched settler cannot be hashed for; bind the order to a configured settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) or drop the commitment`, ctx);
       }
-      warnings.push({ code: "settler_not_recognized", message: `settler ${action.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — the venue only admits factory-approved settlers` });
+      warnings.push({ code: "settler_not_recognized", message: `settler ${act.settler} is not a configured Cork settler for chainId ${chainId} (active: ${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")}) — the venue only admits factory-approved settlers` });
     }
     // The JIT commitment is hashed on the SETTLER generation's wire, never the chain primary's:
     // the order is filled by the BaseFiller of the factory that approved this settler (each
@@ -547,14 +595,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
 
     // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
     // pre-computed hash verbatim; never both (two sources of the same commitment can disagree).
-    if (action.jitMarket && action.jitMarketHash) {
+    if (act.jitMarket && act.jitMarketHash) {
       return unavailable(chainId, "invalid_order_terms", "jitMarket and jitMarketHash are mutually exclusive — pass the instruction to hash locally, or the pre-computed commitment, not both", ctx);
     }
-    let jitMarketHash: `0x${string}` | undefined = action.jitMarketHash;
-    if (action.jitMarket) {
-      const jm = action.jitMarket;
+    let jitMarketHash: `0x${string}` | undefined = act.jitMarketHash;
+    if (act.jitMarket) {
+      const jm = act.jitMarket;
       if (jitWire === undefined || jitWire === "rc.1") {
-        return unavailable(chainId, "invalid_order_terms", `a jitMarket instruction cannot be committed for settler ${action.settler}: ${jitWire === "rc.1" ? "its generation predates jitMarketHash (rc.1)" : "no live rollover generation on this chain speaks a JIT commitment wire"} — bind the order to an active settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")})`, ctx);
+        return unavailable(chainId, "invalid_order_terms", `a jitMarket instruction cannot be committed for settler ${act.settler}: ${jitWire === "rc.1" ? "its generation predates jitMarketHash (rc.1)" : "no live rollover generation on this chain speaks a JIT commitment wire"} — bind the order to an active settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")})`, ctx);
       }
       // The recipe bytes + salt, resolved by the ONE alias rule every JIT input shares
       // (handlers/jit.ts resolveJitBytesInput, since 2026-09-22 — review B2 found three
@@ -582,12 +630,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const { generation: phoenixGeneration } = await getDep(ctx, chainId, { generation: settlerGeneration!.label });
       const phoenixWire = phoenixGeneration?.wire;
       if (phoenixWire === undefined) {
-        return unavailable(chainId, "unknown_deployment", `generation '${settlerGeneration!.label}' (settler ${action.settler}) declares no phoenix block; the pool id width is unknown, so the jitMarket destination pool cannot be derived or committed — refresh cork-defaults.v2.json or bind the order to a settler whose generation carries a pool manager`, ctx);
+        return unavailable(chainId, "unknown_deployment", `generation '${settlerGeneration!.label}' (settler ${act.settler}) declares no phoenix block; the pool id width is unknown, so the jitMarket destination pool cannot be derived or committed — refresh cork-defaults.v2.json or bind the order to a settler whose generation carries a pool manager`, ctx);
       }
       const gate = jitValueGate(chainId, ctx, BigInt(jm.swapFeePercentage), BigInt(jm.unwindSwapFeePercentage), BigInt(jm.expiryTimestamp), nowSecondsOf(ctx), { feeRule: await resolveFeeRule(chainId, "adapter", settlerCtx) });
       if (gate) return gate;
-      if (BigInt(jm.expiryTimestamp) <= BigInt(action.fillDeadline)) {
-        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${action.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
+      if (BigInt(jm.expiryTimestamp) <= BigInt(act.fillDeadline)) {
+        return unavailable(chainId, "invalid_order_terms", `jitMarket.expiryTimestamp (${jm.expiryTimestamp}) must outlast the order's fillDeadline (${act.fillDeadline}) — a pool that expires inside the fill window cannot receive the rollover`, ctx);
       }
       const farFuture = farFutureExpiryWarning(BigInt(jm.expiryTimestamp), nowSecondsOf(ctx));
       if (farFuture) warnings.push(farFuture);
@@ -626,8 +674,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax),
             };
             const derived = deriveJitMarket({ collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp: BigInt(jm.expiryTimestamp), constraint, oracle: res.oracle.address, wire: phoenixWire, swapFeePercentage: BigInt(jm.swapFeePercentage), unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage) });
-            if (derived.poolId.toLowerCase() !== action.dstPoolId.toLowerCase()) {
-              warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${action.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, a ${phoenixWire} Market against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}${phoenixWire === "10-field" ? "; the two fee percentages are part of the 10-field id" : ""}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
+            if (derived.poolId.toLowerCase() !== act.dstPoolId.toLowerCase()) {
+              warnings.push({ code: "jit_pool_mismatch", message: `dstPoolId ${act.dstPoolId} is NOT the pool this jitMarket instruction derives (${derived.poolId}, a ${phoenixWire} Market against oracle ${res.oracle.address}${res.oracle.deployed ? "" : " — predicted; the fill deploys it"}${phoenixWire === "10-field" ? "; the two fee percentages are part of the 10-field id" : ""}) — the fill WILL revert BaseFiller__JitPoolMismatch. Constraint values are part of pool identity: re-derive with cork_query derive-cork-pool and use ITS poolId (and predicted dst cST) before signing` });
             }
           }
         }
@@ -655,27 +703,27 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         );
       } catch (err) {
         // A wire/struct disagreement (a salt on rc.2) is the caller's terms, not a fault.
-        if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${action.settler} belongs to the ${settlerGeneration!.label} generation, rollover wire ${jitWire})`, ctx);
+        if (err instanceof RolloverJitWireError) return unavailable(chainId, "invalid_order_terms", `${err.message} (settler ${act.settler} belongs to the ${settlerGeneration!.label} generation, rollover wire ${jitWire})`, ctx);
         throw err;
       }
     }
 
     if (jitMarketHash !== undefined && jitMarketHash !== ZERO_JIT_MARKET_HASH) {
-      warnings.push({ code: "jit_market_notice", message: `this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash, the ${jitWire ?? "settler generation's"} JITMarketParams layout${jitWire === "0.2" ? " — oracleSalt committed" : jitWire === "rc.2" ? " — no oracleSalt member" : ""}${action.jitMarketHash !== undefined ? "; a pre-computed hash must have been produced for THAT wire or the fill reverts BaseFiller__JitMarketHashMismatch" : ""}) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free` });
+      warnings.push({ code: "jit_market_notice", message: `this order commits to just-in-time DESTINATION-market creation (non-zero jitMarketHash, the ${jitWire ?? "settler generation's"} JITMarketParams layout${jitWire === "0.2" ? " — oracleSalt committed" : jitWire === "rc.2" ? " — no oracleSalt member" : ""}${act.jitMarketHash !== undefined ? "; a pre-computed hash must have been produced for THAT wire or the fill reverts BaseFiller__JitMarketHashMismatch" : ""}) — contract-valid (BaseFiller fillWithJitMarket), but the venue's admission (cork-api ≤0.3.16) requires the destination cST/pool to already be INDEXED and its expiry known, with no jitMarketHash bypass: cork_submit can relay this order only once the dst pool exists on-chain; until then hand the signed order to your filler venue-free` });
     }
 
-    const openDeadline = BigInt(action.openDeadline);
-    const fillDeadline = BigInt(action.fillDeadline);
-    const orderSize = BigInt(action.orderSize);
+    const openDeadline = BigInt(act.openDeadline);
+    const fillDeadline = BigInt(act.fillDeadline);
+    const orderSize = BigInt(act.orderSize);
     // The intent's hooks (2026-10-01): the clone runs them per phase, and a roll without the
     // pre-hook that pulls the holder's src cPT in and the post-hook that returns the dst cPT
     // cannot complete (nothing to burn; CorkRolloverContract__DstCptNotRestored). They are hashed
     // into rolloverIntentHash, so they ride the signed order or not at all.
-    if (action.hooks !== undefined && action.standardHooks !== undefined) {
+    if (act.hooks !== undefined && act.standardHooks !== undefined) {
       return unavailable(chainId, "invalid_order_terms", "hooks and standardHooks are mutually exclusive — pass the two canonical modules through standardHooks, or compose every hook yourself through hooks", ctx);
     }
     let hooks: RolloverIntentArgs["hooks"];
-    if (action.standardHooks !== undefined) {
+    if (act.standardHooks !== undefined) {
       const mods = settlerGeneration?.modules;
       if (settlerGeneration === undefined || mods?.ownerTokenPull === undefined || mods.postRolloverDstCptTransfer === undefined) {
         return unavailable(chainId, "unknown_deployment", `the ${settlerGeneration?.label ?? "settler's"} rollover generation configures no hook modules on chainId ${chainId} (OwnerTokenPullModule / PostRolloverDstCptTransferModule) — pass the hooks explicitly through \`hooks\``, ctx);
@@ -687,19 +735,19 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // (its allowUnderfill flag — independent of the ORDER's allowUnderfill, which the clone
       // checks against the fill context), and the holder's allowance to the clone must outlast
       // the first pull (each pull consumes min(balance, allowance) of allowance).
-      const clampPull = action.allowUnderfill || action.allowPartialFills;
-      hooks = standardRolloverHooks({ modules: { ownerTokenPull: mods.ownerTokenPull, postRolloverDstCptTransfer: mods.postRolloverDstCptTransfer }, srcCptToken: action.standardHooks.srcCptToken, dstCptToken: action.standardHooks.dstCptToken, orderSize, recipient: input.account, allowUnderfill: clampPull });
-      const allowanceTeaching = action.allowPartialFills
+      const clampPull = act.allowUnderfill || act.allowPartialFills;
+      hooks = standardRolloverHooks({ modules: { ownerTokenPull: mods.ownerTokenPull, postRolloverDstCptTransfer: mods.postRolloverDstCptTransfer }, srcCptToken: act.standardHooks.srcCptToken, dstCptToken: act.standardHooks.dstCptToken, orderSize, recipient: input.account, allowUnderfill: clampPull });
+      const allowanceTeaching = act.allowPartialFills
         ? `approve the CLONE for the ORDER SIZE and keep that allowance standing across fills (an unlimited allowance, or re-approve after each partial fill): every fill's pre-hook pulls min(your balance, your allowance, ${orderSize}) and the clone sweeps the unburned surplus back to you, so a one-time allowance of exactly ${orderSize} is spent by the FIRST fill and the next one reverts OwnerTokenPullModule__NothingPullable`
         : `approve the CLONE for that amount before the order is filled (a direct ERC-20 approve from your account)`;
-      warnings.push({ code: "owner_managed_funding", message: `the pre-hook pulls ${orderSize} of src cPT ${action.standardHooks.srcCptToken} from ${input.account} into the clone ${action.rolloverContract} at fill time — ${allowanceTeaching}; the post-hook returns the minted dst cPT ${action.standardHooks.dstCptToken} to you` });
-    } else if (action.hooks !== undefined) {
+      warnings.push({ code: "owner_managed_funding", message: `the pre-hook pulls ${orderSize} of src cPT ${act.standardHooks.srcCptToken} from ${input.account} into the clone ${act.rolloverContract} at fill time — ${allowanceTeaching}; the post-hook returns the minted dst cPT ${act.standardHooks.dstCptToken} to you` });
+    } else if (act.hooks !== undefined) {
       const toCall = (h: { target: `0x${string}`; value: string; callData: `0x${string}`; allowFailure: boolean; isDelegateCall: boolean }): RolloverCall => ({ target: h.target, value: BigInt(h.value), callData: h.callData, allowFailure: h.allowFailure, isDelegateCall: h.isDelegateCall });
       hooks = {
-        ...(action.hooks.preRolloverHooks ? { preRolloverHooks: action.hooks.preRolloverHooks.map(toCall) } : {}),
-        ...(action.hooks.midRolloverHooks ? { midRolloverHooks: action.hooks.midRolloverHooks.map(toCall) } : {}),
-        ...(action.hooks.postRolloverHooks ? { postRolloverHooks: action.hooks.postRolloverHooks.map(toCall) } : {}),
-        ...(action.hooks.premiumHooks ? { premiumHooks: action.hooks.premiumHooks.map(toCall) } : {}),
+        ...(act.hooks.preRolloverHooks ? { preRolloverHooks: act.hooks.preRolloverHooks.map(toCall) } : {}),
+        ...(act.hooks.midRolloverHooks ? { midRolloverHooks: act.hooks.midRolloverHooks.map(toCall) } : {}),
+        ...(act.hooks.postRolloverHooks ? { postRolloverHooks: act.hooks.postRolloverHooks.map(toCall) } : {}),
+        ...(act.hooks.premiumHooks ? { premiumHooks: act.hooks.premiumHooks.map(toCall) } : {}),
       };
     } else {
       warnings.push({ code: "invalid_order_terms", message: "this order carries NO intent hooks: the clone will have no src cPT to burn and nowhere to send the dst cPT, so no filler can complete it — pass standardHooks (srcCptToken + dstCptToken) unless you compose hooks yourself" });
@@ -715,41 +763,59 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       openDeadline,
       fillDeadline,
       orderSize,
-      minPremiumPerShare: BigInt(action.minPremiumPerShare),
-      srcCstToken: action.srcCstToken,
-      dstCstToken: action.dstCstToken,
-      premiumToken: action.premiumToken,
-      srcPoolId: action.srcPoolId,
-      dstPoolId: action.dstPoolId,
-      settler: action.settler,
-      ...(action.exclusiveFiller !== undefined ? { exclusiveFiller: action.exclusiveFiller } : {}),
+      minPremiumPerShare: BigInt(act.minPremiumPerShare),
+      srcCstToken: act.srcCstToken,
+      dstCstToken: act.dstCstToken,
+      premiumToken: act.premiumToken,
+      srcPoolId: act.srcPoolId,
+      dstPoolId: act.dstPoolId,
+      settler: act.settler,
+      ...(act.exclusiveFiller !== undefined ? { exclusiveFiller: act.exclusiveFiller } : {}),
     });
     if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — the venue would reject the signed order with the same complaint`, ctx);
+
+    // The accepted quote, held to the venue's rule with the order's final terms: an explicit term
+    // that breaks it (a lower premium, a bigger size, another destination) is refused here.
+    if (quote !== undefined) {
+      const mismatch = rolloverQuoteRefMismatch(quote.rfq, quote.option, {
+        user: input.account,
+        premiumToken: act.premiumToken,
+        orderSize,
+        minPremiumPerShare: BigInt(act.minPremiumPerShare),
+        srcPoolId: act.srcPoolId,
+        dstPoolId: act.dstPoolId,
+        jitMarketHash: jitMarketHash ?? ZERO_JIT_MARKET_HASH,
+      });
+      if (mismatch) {
+        const wireNote = jitWire !== "0.2" && (quote.option.destination as Record<string, unknown> | undefined)?.jit_market !== undefined ? ` — the venue hashes a quoted market on the 0.2 JITMarketParams layout, and settler ${act.settler} speaks ${jitWire ?? "no JIT wire"}: bind the order to a 0.2 settler` : "";
+        return unavailable(chainId, "invalid_order_terms", `this order does not match the quote it cites: ${mismatch}${wireNote}. The venue would refuse it (400 Invalid quoteRef) — leave the term out to take it from the quote`, ctx);
+      }
+    }
 
     const built = buildRolloverIntent({
       chainId,
       user: input.account,
-      settler: action.settler,
-      rolloverContract: action.rolloverContract,
-      srcCstToken: action.srcCstToken,
-      dstCstToken: action.dstCstToken,
-      premiumToken: action.premiumToken,
-      srcPoolId: action.srcPoolId,
-      dstPoolId: action.dstPoolId,
+      settler: act.settler,
+      rolloverContract: act.rolloverContract,
+      srcCstToken: act.srcCstToken,
+      dstCstToken: act.dstCstToken,
+      premiumToken: act.premiumToken,
+      srcPoolId: act.srcPoolId,
+      dstPoolId: act.dstPoolId,
       orderSize,
-      minPremiumPerShare: BigInt(action.minPremiumPerShare),
+      minPremiumPerShare: BigInt(act.minPremiumPerShare),
       openDeadline,
       fillDeadline,
-      ...(action.minCaReceived !== undefined ? { minCaReceived: BigInt(action.minCaReceived) } : {}),
-      ...(action.minSharesOut !== undefined ? { minSharesOut: BigInt(action.minSharesOut) } : {}),
+      ...(act.minCaReceived !== undefined ? { minCaReceived: BigInt(act.minCaReceived) } : {}),
+      ...(act.minSharesOut !== undefined ? { minSharesOut: BigInt(act.minSharesOut) } : {}),
       ...(jitMarketHash !== undefined ? { jitMarketHash } : {}),
-      allowPartialFills: action.allowPartialFills,
-      allowUnderfill: action.allowUnderfill,
-      ...(action.premiumPaymentMode !== undefined ? { premiumPaymentMode: action.premiumPaymentMode } : {}),
-      ...(action.fillerHint !== undefined ? { fillerHint: action.fillerHint } : {}),
-      ...(action.exclusiveFiller !== undefined ? { exclusiveFiller: action.exclusiveFiller } : {}),
-      ...(action.orderSalt !== undefined ? { orderSalt: BigInt(action.orderSalt) } : {}),
-      ...(action.nonce !== undefined ? { nonce: BigInt(action.nonce) } : {}),
+      allowPartialFills: act.allowPartialFills,
+      allowUnderfill: act.allowUnderfill,
+      ...(act.premiumPaymentMode !== undefined ? { premiumPaymentMode: act.premiumPaymentMode } : {}),
+      ...(act.fillerHint !== undefined ? { fillerHint: act.fillerHint } : {}),
+      ...(act.exclusiveFiller !== undefined ? { exclusiveFiller: act.exclusiveFiller } : {}),
+      ...(act.orderSalt !== undefined ? { orderSalt: BigInt(act.orderSalt) } : {}),
+      ...(act.nonce !== undefined ? { nonce: BigInt(act.nonce) } : {}),
       ...(hooks !== undefined ? { hooks } : {}),
       clientRequestId: input.clientRequestId,
     });
@@ -757,8 +823,21 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       state: "ok",
       data: {
         kind: "rollover-intent",
-        intentHooks: { pre: built.intent.preRolloverHooks.length, mid: built.intent.midRolloverHooks.length, post: built.intent.postRolloverHooks.length, premiumPhase: built.intent.premiumHooks.length, ...(action.standardHooks !== undefined ? { standard: true, modules: settlerGeneration!.modules } : {}) },
-        settler: action.settler,
+        ...(quote !== undefined
+          ? {
+              quoteRef: act.quoteRef,
+              acceptedQuote: {
+                premiumToken: quote.option.premium_token,
+                premiumPerShare: quote.option.premium_per_share,
+                sharesMax: quote.option.shares_max,
+                destination: quote.option.destination,
+                ...(quote.option.jit_market_hash !== undefined ? { jitMarketHash: quote.option.jit_market_hash } : {}),
+                scales: { premiumPerShare: "raw premium-token base units per 1e18 destination shares (the order's minPremiumPerShare)", sharesMax: "cPT shares, 18 decimals", unitsTopic: UNITS_TOPIC_REFERENCE },
+              },
+            }
+          : {}),
+        intentHooks: { pre: built.intent.preRolloverHooks.length, mid: built.intent.midRolloverHooks.length, post: built.intent.postRolloverHooks.length, premiumPhase: built.intent.premiumHooks.length, ...(act.standardHooks !== undefined ? { standard: true, modules: settlerGeneration!.modules } : {}) },
+        settler: act.settler,
         ...(cls.status === "active" ? { settlerKind: cls.kind, settlerGeneration: cls.generation.label } : {}),
         /** The JITMarketParams layout `rolloverParams.jitMarketHash` is (or must be) computed on — the settler generation's rollover wire. */
         ...(jitWire !== undefined ? { jitMarketWire: jitWire } : {}),

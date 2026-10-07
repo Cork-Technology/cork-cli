@@ -268,8 +268,8 @@ describe("module-scoped routing (cork-api 0.3.3): base normalization + canonical
       "https://api-phoenix.cork.tech/rollover/v1/orders?chainId=42161",
       "https://api-phoenix.cork.tech/rollover/v1/fills?chainId=42161",
       "https://api-phoenix.cork.tech/rollover/v1/contracts?chainId=42161",
-      "https://api-phoenix.cork.tech/rfqs/v1?chain_id=42161",
-      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x",
+      "https://api-phoenix.cork.tech/rfqs/v2?chain_id=42161",
+      "https://api-phoenix.cork.tech/rfqs/v2/rfq_x",
       "https://api-phoenix.cork.tech/rollover/v1/orders/0xdigest",
     ]);
   });
@@ -285,10 +285,50 @@ describe("module-scoped routing (cork-api 0.3.3): base normalization + canonical
     expect(urls).toEqual([
       "https://api-phoenix.cork.tech/limit-orders/v1",
       "https://api-phoenix.cork.tech/rollover/v1/orders",
-      "https://api-phoenix.cork.tech/rfqs/v1",
-      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x/answers",
-      "https://api-phoenix.cork.tech/rfqs/v1/rfq_x/counters",
+      "https://api-phoenix.cork.tech/rfqs/v2",
+      "https://api-phoenix.cork.tech/rfqs/v2/rfq_x/answers",
+      "https://api-phoenix.cork.tech/rfqs/v2/rfq_x/counters",
     ]);
+  });
+});
+
+describe("RFQ v2 transport", () => {
+  it("kind rides the feed's query string", async () => {
+    const urls: string[] = [];
+    const deps: VenueDeps = { fetch: async (url: string) => (urls.push(url), new Response(JSON.stringify({ items: [] }), { status: 200 })), breaker: null };
+    await getRfqs(deps, { chainId: 42161, kind: "rollover" });
+    expect(urls).toEqual(["https://api-phoenix.cork.tech/rfqs/v2?chain_id=42161&kind=rollover"]);
+  });
+
+  it("an API key rides ONLY the x-cork-api-key header, on every RFQ write", async () => {
+    const seen: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+    const deps: VenueDeps = {
+      fetch: async (url: string, init?: RequestInit) => {
+        seen.push({ url, headers: Object.fromEntries(new Headers(init?.headers).entries()), body: String(init?.body ?? "") });
+        return new Response(JSON.stringify({ rfq_id: "rfq_1" }), { status: 201 });
+      },
+      breaker: null,
+    };
+    await postRfq(deps, { a: 1 }, { apiKey: "secret-key-123" });
+    await postRfqAnswer(deps, "rfq_x", { a: 1 }, { apiKey: "secret-key-123" });
+    await postRfqCounter(deps, "rfq_x", { a: 1 }, { apiKey: "secret-key-123" });
+    expect(seen.map((s) => s.headers["x-cork-api-key"])).toEqual(["secret-key-123", "secret-key-123", "secret-key-123"]);
+    expect(seen.every((s) => !s.url.includes("secret-key-123") && !s.body.includes("secret-key-123"))).toBe(true);
+    // No key, no header: a signature-proven write carries nothing extra.
+    await postRfq(deps, { a: 1 });
+    expect(seen.at(-1)!.headers["x-cork-api-key"]).toBeUndefined();
+  });
+
+  it("the API key never reaches a result or an error", async () => {
+    const key = "secret-key-456";
+    const ok: VenueDeps = { fetch: async () => new Response(JSON.stringify({ error: "Unauthorized", message: "Invalid x-cork-api-key." }), { status: 401 }), breaker: null };
+    const res = await postRfq(ok, {}, { apiKey: key });
+    expect(res.httpStatus).toBe(401);
+    expect(JSON.stringify(res)).not.toContain(key);
+    const down: VenueDeps = { fetch: async () => { throw new Error("connect ECONNREFUSED"); }, breaker: null };
+    const err = await postRfqAnswer(down, "rfq_x", {}, { apiKey: key }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(`${(err as Error).message} ${(err as Error).stack ?? ""}`).not.toContain(key);
   });
 });
 

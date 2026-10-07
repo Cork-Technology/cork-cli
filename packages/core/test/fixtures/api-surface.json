@@ -1057,6 +1057,22 @@
       "kind": "value"
     },
     {
+      "name": "RFQ_OPERATIONS",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_DOMAIN_NAME",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_DOMAIN_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_TYPES",
+      "kind": "value"
+    },
+    {
       "name": "ROLLOVER_FILL_TOPICS",
       "kind": "value"
     },
@@ -1141,7 +1157,39 @@
       "kind": "type"
     },
     {
+      "name": "RfqAnswerRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqCounterRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqKind",
+      "kind": "type"
+    },
+    {
       "name": "RfqListParams",
+      "kind": "type"
+    },
+    {
+      "name": "RfqOpenRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqOperation",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWriteAuth",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWritePlan",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWriteRequest",
       "kind": "type"
     },
     {
@@ -1718,6 +1766,10 @@
     },
     {
       "name": "canAutoFund",
+      "kind": "value"
+    },
+    {
+      "name": "canonicalJson",
       "kind": "value"
     },
     {
@@ -2569,6 +2621,10 @@
       "kind": "value"
     },
     {
+      "name": "planRfqWrite",
+      "kind": "value"
+    },
+    {
       "name": "poolManagerAbi",
       "kind": "value"
     },
@@ -2826,6 +2882,26 @@
     },
     {
       "name": "retiredSettlerTeaching",
+      "kind": "value"
+    },
+    {
+      "name": "rfqAnswerBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqCounterBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqOpenBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqWriteBodyHash",
+      "kind": "value"
+    },
+    {
+      "name": "rfqWriteTypedData",
       "kind": "value"
     },
     {
@@ -5861,7 +5937,55 @@
       "kind": "type"
     },
     {
+      "name": "RFQ_OPERATIONS",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_DOMAIN_NAME",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_DOMAIN_VERSION",
+      "kind": "value"
+    },
+    {
+      "name": "RFQ_WRITE_TYPES",
+      "kind": "value"
+    },
+    {
+      "name": "RfqAnswerRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqCounterRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqKind",
+      "kind": "type"
+    },
+    {
       "name": "RfqListParams",
+      "kind": "type"
+    },
+    {
+      "name": "RfqOpenRequest",
+      "kind": "type"
+    },
+    {
+      "name": "RfqOperation",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWriteAuth",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWritePlan",
+      "kind": "type"
+    },
+    {
+      "name": "RfqWriteRequest",
       "kind": "type"
     },
     {
@@ -5907,6 +6031,10 @@
     {
       "name": "VenueUnreachable",
       "kind": "value+type"
+    },
+    {
+      "name": "canonicalJson",
+      "kind": "value"
     },
     {
       "name": "getLopFills",
@@ -5957,6 +6085,10 @@
       "kind": "value"
     },
     {
+      "name": "planRfqWrite",
+      "kind": "value"
+    },
+    {
       "name": "postLopOrder",
       "kind": "value"
     },
@@ -5978,6 +6110,26 @@
     },
     {
       "name": "resetVenueBreaker",
+      "kind": "value"
+    },
+    {
+      "name": "rfqAnswerBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqCounterBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqOpenBody",
+      "kind": "value"
+    },
+    {
+      "name": "rfqWriteBodyHash",
+      "kind": "value"
+    },
+    {
+      "name": "rfqWriteTypedData",
       "kind": "value"
     },
     {
