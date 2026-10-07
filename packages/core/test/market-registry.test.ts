@@ -70,7 +70,7 @@ describe("JIT extension bytes (2.1.0 JITMarketParams: recipe + carried constrain
   });
 
   it("carries permits and preserves their fields exactly", () => {
-    const permit = { token: CA, value: 42n, deadline: 1795000000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` } as const;
+    const permit = { token: CA, value: 42n, deadline: 1795000000n, signature: `0x${"ab".repeat(32)}${"cd".repeat(32)}1b` } as const;
     const back = decodeJitExtension("flat", buildJitExtension(ADAPTER, encodeJitExtraData("flat", params, [permit])));
     expect(back.permits).toEqual([permit]);
   });

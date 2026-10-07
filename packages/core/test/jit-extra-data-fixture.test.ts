@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeJitExtraData, diffJitExtraData, encodeJitExtraData, type JITMarketParams, type PermitParams } from "@cork/core";
+import { decodeJitExtraData, diffJitExtraData, encodeJitExtraData, type JITMarketParams, type PermitParams, permitSignatureOfVrs, splitPermitSignature } from "@cork/core";
 
 // The fixture lives in the PUBLIC test tree: a test that reads excluded content at runtime fails
 // the published suite (the port excludes the fork harness). The harness keeps its own copy for
@@ -34,8 +34,14 @@ export const FIXTURE_PARAMS: JITMarketParams = {
   unwindSwapFeePercentage: 1_500_000_000_000_000_000n,
   enableJitMint: true,
 };
+/** The flat wire's permit: a 65-byte ECDSA signature r‖s‖v (v = 28), split into v/r/s on the wire. */
 export const FIXTURE_PERMITS: PermitParams[] = [
-  { token: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", value: 1_000_000_000_000_000_000n, deadline: 1_800_003_600n, v: 28, r: `0x${"11".repeat(32)}`, s: `0x${"22".repeat(32)}` },
+  { token: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", value: 1_000_000_000_000_000_000n, deadline: 1_800_003_600n, signature: `0x${"11".repeat(32)}${"22".repeat(32)}1c` },
+];
+/** The nested wire's permit (adapter 0.5.0): signature BYTES of a non-ECDSA length — the shape a
+ *  contract wallet's ERC-1271 signature takes (85 bytes, like a Safe7579 validator ++ sig). */
+export const FIXTURE_PERMITS_NESTED: PermitParams[] = [
+  { token: "0x16Aa2EbE1E2D6C856c634DaFc256257d2fEc0C69", value: 1_000_000_000_000_000_000n, deadline: 1_800_003_600n, signature: `0x${"33".repeat(20)}${"44".repeat(65)}` },
 ];
 
 /** The nested-wire fixture: the same non-degenerate values plus a distinct non-zero oracleSalt
@@ -50,6 +56,7 @@ const str = (v: bigint | number) => v.toString();
 function fixtureDocument(): Record<string, unknown> {
   const p = FIXTURE_PARAMS;
   const q = FIXTURE_PERMITS[0]!;
+  const vrs = splitPermitSignature(q.signature)!;
   return {
     note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol",
     extraData: encodeJitExtraData("flat", p, FIXTURE_PERMITS),
@@ -59,22 +66,22 @@ function fixtureDocument(): Record<string, unknown> {
       // The flat wire's own member name for the recipe bytes (the document is a wire fixture).
       additionalData: p.extraData, swapFeePercentage: str(p.swapFeePercentage), unwindSwapFeePercentage: str(p.unwindSwapFeePercentage), enableJitMint: p.enableJitMint,
       permitCount: str(FIXTURE_PERMITS.length),
-      permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), v: str(q.v), r: q.r, s: q.s },
+      permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), v: str(vrs.v), r: vrs.r, s: vrs.s },
     },
   };
 }
 function fixtureDocumentNested(): Record<string, unknown> {
   const p = FIXTURE_PARAMS_NESTED;
-  const q = FIXTURE_PERMITS[0]!;
+  const q = FIXTURE_PERMITS_NESTED[0]!;
   return {
-    note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol (JitExtraDataDecoderNested — the market-registry 0.5.0 CorkLimitOrderAdapter layout)",
-    extraData: encodeJitExtraData("nested", p, FIXTURE_PERMITS),
+    note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol (JitExtraDataDecoderNested — the CorkLimitOrderAdapter 0.5.0 layout, bytes permit signature)",
+    extraData: encodeJitExtraData("nested", p, FIXTURE_PERMITS_NESTED),
     expected: {
       collateralAsset: p.collateralAsset, referenceAsset: p.referenceAsset, expiryTimestamp: str(p.expiryTimestamp), recipe: p.recipe, rateOverride: str(p.rateOverride),
       constraint: { rateMin: str(p.constraint.rateMin), rateMax: str(p.constraint.rateMax), rateChangePerDayMax: str(p.constraint.rateChangePerDayMax), rateChangeCapacityMax: str(p.constraint.rateChangeCapacityMax) },
       extraData: p.extraData, oracleSalt: p.oracleSalt, swapFeePercentage: str(p.swapFeePercentage), unwindSwapFeePercentage: str(p.unwindSwapFeePercentage), enableJitMint: p.enableJitMint,
-      permitCount: str(FIXTURE_PERMITS.length),
-      permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), v: str(q.v), r: q.r, s: q.s },
+      permitCount: str(FIXTURE_PERMITS_NESTED.length),
+      permit0: { token: q.token, value: str(q.value), deadline: str(q.deadline), signature: q.signature },
     },
   };
 }
@@ -106,13 +113,14 @@ describe("JIT extraData fixture — one layout, held from the TS and the EVM sid
     expect(committed.expected).toEqual(fresh.expected);
     if (existsSync(HARNESS_COPY_NESTED)) expect(readFileSync(HARNESS_COPY_NESTED, "utf8")).toBe(readFileSync(FIXTURE_NESTED, "utf8"));
     const back = decodeJitExtraData("nested", committed.extraData);
-    expect(diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS }, back)).toEqual([]);
+    expect(diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS_NESTED }, back)).toEqual([]);
+    expect(back.permits[0]!.signature).toBe(FIXTURE_PERMITS_NESTED[0]!.signature);
     expect(back.params.oracleSalt).toBe(FIXTURE_PARAMS_NESTED.oracleSalt);
     // The two wires' bytes differ (nesting + salt): a flat decode of nested bytes must not read
     // as the same params — it either throws or disagrees on a field.
     let flatReading: string[] | "threw";
     try {
-      flatReading = diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS }, decodeJitExtraData("flat", committed.extraData));
+      flatReading = diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS_NESTED }, decodeJitExtraData("flat", committed.extraData));
     } catch {
       flatReading = "threw";
     }
@@ -124,7 +132,16 @@ describe("JIT extraData fixture — one layout, held from the TS and the EVM sid
     const back = decodeJitExtraData("flat", bytes);
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, back)).toEqual([]);
     expect(back.params.enableJitMint).toBe(true);
-    expect(back.permits[0]!.v).toBe(28);
+    expect(splitPermitSignature(back.permits[0]!.signature)!.v).toBe(28);
+  });
+
+  it("the nested wire carries the permit signature as BYTES; the flat wire refuses a non-ECDSA signature", () => {
+    // A v/r/s-shaped nested layout (adapter 0.4.0) is a different byte string: the 0.5.0 row is
+    // (token, value, deadline, bytes) — a dynamic tuple, so its encoding cannot equal a static
+    // (token, value, deadline, uint8, bytes32, bytes32) row.
+    const ecdsaNested = encodeJitExtraData("nested", FIXTURE_PARAMS_NESTED, FIXTURE_PERMITS);
+    expect(decodeJitExtraData("nested", ecdsaNested).permits[0]!.signature).toBe(FIXTURE_PERMITS[0]!.signature);
+    expect(() => encodeJitExtraData("flat", FIXTURE_PARAMS, FIXTURE_PERMITS_NESTED)).toThrow(/65-byte ECDSA/);
   });
 
   it("the flat wire refuses a non-zero oracleSalt — no field carries it, so it can never be dropped silently", () => {
@@ -140,7 +157,7 @@ describe("JIT extraData fixture — one layout, held from the TS and the EVM sid
     const cons = { params: { ...back.params, constraint: { ...back.params.constraint, rateMax: 5n } }, permits: back.permits };
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, cons)).toEqual(["constraint.rateMax"]);
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, { params: back.params, permits: [] })).toEqual(["permits.length"]);
-    expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, { params: back.params, permits: [{ ...back.permits[0]!, v: 27 }] })).toEqual(["permits[0]"]);
+    expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, { params: back.params, permits: [{ ...back.permits[0]!, signature: permitSignatureOfVrs(27, `0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`) }] })).toEqual(["permits[0]"]);
     // Case-insensitive on addresses and hex: a checksummed echo is not a difference.
     const cased = { params: { ...back.params, collateralAsset: back.params.collateralAsset.toLowerCase() as `0x${string}` }, permits: back.permits };
     expect(diffJitExtraData({ params: FIXTURE_PARAMS, permits: FIXTURE_PERMITS }, cased)).toEqual([]);

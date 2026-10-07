@@ -2,7 +2,7 @@
 // it composes (orderbook sort:best, rfqs with answers) are re-entered through the injected `read`
 // (= handleQuery), so this module has no import cycle with the dispatcher.
 import { type ChainId, Envelope, QueryInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { envelope, getRpc, type HandlerContext, unavailable } from "./shared.ts";
+import { envelope, getRpc, type HandlerContext, rfqAnswerUnderwriter, unavailable } from "./shared.ts";
 import type { QueryFilters } from "./filters.ts";
 import { LOP_ADDRESSES } from "../orders.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
@@ -20,13 +20,12 @@ type OfferQuote = { rfqId: string; answerId: string; optionId: string; underwrit
 type IndicativeOption = OfferQuote & { reason: string };
 
 function offerQuoteOf(rfq: Record<string, unknown>, answer: Record<string, unknown>, option: Record<string, unknown>): OfferQuote {
-  const inner = (answer.answer && typeof answer.answer === "object" ? (answer.answer as Record<string, unknown>) : answer) as Record<string, unknown>;
   const s = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : null);
   return {
     rfqId: String(rfq.rfq_id),
     answerId: String(answer.answer_id),
     optionId: String(option.option_id),
-    underwriter: s(answer.underwriter) ?? s(inner.underwriter),
+    underwriter: rfqAnswerUnderwriter(answer) ?? null,
     requester: s(rfq.requester),
     premiumAnnualized: s(option.premium_annualized),
     optionExpiry: s(option.expiry),

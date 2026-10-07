@@ -461,7 +461,7 @@ ch decode order --chain-id 8453 --data '{…the signed order row…}' --json
 ```jsonc
 { "state": "ok", "data": { "jit": {
   "verification": "trusted", "generation": "phoenix/v0.4-rc.1", "wire": "nested",
-  "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
+  "adapter": "0x960Cd94B31121806b1b0Ff02230D189Ad0310616",
   "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0xc1256Ae5…A2Ca",
   "recipe": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3", "rateOverride": "0",
   "constraint": { "rateMin": "1", "rateMax": "1743274222038181712", "rateChangePerDayMax": "871637111019090856", "rateChangeCapacityMax": "2614911333057272568" },
@@ -747,7 +747,7 @@ The primary set on Base and Arbitrum One (`phoenix/v0.4-rc.1`, contracts release
 | Role | Address |
 |---|---|
 | MarketRegistry 0.5.0 | `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5` |
-| CorkLimitOrderAdapter (JIT hook, nested wire) | `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` |
+| CorkLimitOrderAdapter (JIT hook, nested wire) | `0x960Cd94B31121806b1b0Ff02230D189Ad0310616` |
 | CorkMarketCreator (holds `POOL_CREATOR_ROLE`) | `0x1A074F17647504D1c50B436074a74d051D502dEa` |
 | LiquidityPriceRecipe | `0x679Cbd016587c423f342e5Ba31e58356228c964d` |
 | LiquidityNavRecipe | `0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3` |

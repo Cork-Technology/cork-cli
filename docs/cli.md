@@ -270,8 +270,10 @@ ch prepare market create-pool --chain-id <id> --client-request-id <id> \
 ```
 
 All three are permissionless and safe to repeat. `create-pool` builds the pool a just-in-time
-order would create, before the fill. Use it from a Safe or any contract account: the mid-fill
-mint needs a permit only a plain wallet can sign. The registry allows an expiry at most 30 days
+order would create, before the fill. A Safe or any contract account needs it on the flat
+(0.3.x) wire, where the mid-fill mint needs a permit only a plain wallet can sign. On the nested
+wire (the primary, JIT adapter 0.5.0+) a contract account can instead sign that permit through
+ERC-1271 and pass it as `signature`. The registry allows an expiry at most 30 days
 out; `ch` warns before the transaction can revert.
 
 The JIT block (`--jit-market` on orders, the flags above on `create-pool`) names the recipe bytes

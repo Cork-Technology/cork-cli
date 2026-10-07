@@ -333,3 +333,74 @@ describe("deploy-rollover-contract — the per-account clone", () => {
 });
 
 export type { RolloverVenuePost };
+
+describe("rollover-fill — the HOLDER's signature is verified the way the settler verifies it", () => {
+  // The settler runs SignatureChecker.isValidSignatureNow(order.user, orderDigest, signature) and
+  // reverts on a false answer. Bytes for a signature the holder did not give can only revert.
+  const CONTRACT_CODE = "0x6080";
+  const chainWithHolder = (o: { holderCode?: string; isValidSignature?: string | Error }) =>
+    stubRpc(
+      (c: StubCall) => {
+        switch (c.functionName) {
+          case "orderStatus": return 1n;
+          case "rolloverContractOf": return CLONE;
+          case "predictRolloverContractOf": return CLONE;
+          case "balanceOf": return 10n ** 18n;
+          case "allowance": return 0n;
+          case "isValidSignature":
+            if (o.isValidSignature instanceof Error) throw o.isValidSignature;
+            return o.isValidSignature ?? "0x1626ba7e";
+          default: throw new Error(`no stub for ${c.functionName}`);
+        }
+      },
+      { code: o.holderCode !== undefined ? { [holder.address.toLowerCase()]: o.holderCode } : {} },
+    );
+  type Verdict = Data & { holderSignature: string };
+
+  it("the holder's own signature: eoa-verified, bytes built", async () => {
+    const { payload, digest } = await signedOrder();
+    const env = await fill({ orderDigest: digest, signedOrder: payload });
+    expect(env.state).toBe("ok");
+    expect((env.data as Verdict).holderSignature).toBe("eoa-verified");
+  });
+
+  it("a signature the holder did not give over THIS order: refuted, no bytes", async () => {
+    const { payload, digest } = await signedOrder();
+    const other = await signedOrder({ orderSize: 2n * 10n ** 18n }); // the same key, another order
+    for (const signature of [other.payload.signature, `0x${"11".repeat(65)}`]) {
+      const env = await fill({ orderDigest: digest, signedOrder: { ...payload, signature } });
+      expect(env.state, signature.slice(0, 12)).toBe("conflict");
+      expect(codes(env)).toContain("signature_or_reconstruction_mismatch");
+      expect(env.warnings.find((w) => w.code === "signature_or_reconstruction_mismatch")!.message).toMatch(/does not verify for .* over the order digest .*is not a contract account.*no fill bytes are built/u);
+      expect((env.data as Record<string, unknown>)["calldata"]).toBeUndefined();
+    }
+  });
+
+  it("no RPC: a signature that does not recover is not refuted — it rides unverified, and says so", async () => {
+    const { payload, digest } = await signedOrder();
+    const other = await signedOrder({ orderSize: 2n * 10n ** 18n });
+    const env = await fill({ orderDigest: digest, signedOrder: { ...payload, signature: other.payload.signature } }, { resolveRpc: async () => null });
+    expect(env.state).toBe("ok");
+    expect((env.data as Verdict).holderSignature).toBe("unverified");
+    expect(env.warnings.some((w) => w.code === "funding_needs_rpc" && /the holder's signature does not ecrecover/u.test(w.message))).toBe(true);
+    // The holder's real signature needs no chain at all.
+    const good = await fill({ orderDigest: digest, signedOrder: payload }, { resolveRpc: async () => null });
+    expect((good.data as Verdict).holderSignature).toBe("eoa-verified");
+  });
+
+  it("a CONTRACT holder is asked its own isValidSignature: accepted, rejected, and a read that failed", async () => {
+    const { payload, digest } = await signedOrder();
+    const contractSig = { ...payload, signature: `0x${"22".repeat(65)}` as Hex }; // what a Safe would hand over: not an ECDSA signature of the holder key
+    const accepted = await fill({ orderDigest: digest, signedOrder: contractSig }, { resolveRpc: chainWithHolder({ holderCode: CONTRACT_CODE }) });
+    expect(accepted.state, JSON.stringify(accepted.warnings)).toBe("ok");
+    expect((accepted.data as Verdict).holderSignature).toBe("erc1271-verified");
+    const rejected = await fill({ orderDigest: digest, signedOrder: contractSig }, { resolveRpc: chainWithHolder({ holderCode: CONTRACT_CODE, isValidSignature: "0xffffffff" }) });
+    expect(rejected.state).toBe("conflict");
+    expect(rejected.warnings.find((w) => w.code === "signature_or_reconstruction_mismatch")!.message).toMatch(/its isValidSignature did not answer the ERC-1271 magic value/u);
+    // An outage is not a verdict: built, labeled.
+    const outage = await fill({ orderDigest: digest, signedOrder: contractSig }, { resolveRpc: chainWithHolder({ holderCode: CONTRACT_CODE, isValidSignature: Object.assign(new Error("fetch failed"), { name: "HttpRequestError" }) }) });
+    expect(outage.state, JSON.stringify(outage.warnings)).toBe("ok");
+    expect((outage.data as Verdict).holderSignature).toBe("unverified");
+    expect(outage.warnings.some((w) => w.code === "chain_read_failed" && /isValidSignature could not be asked/u.test(w.message))).toBe(true);
+  });
+});

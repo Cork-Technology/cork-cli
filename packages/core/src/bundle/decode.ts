@@ -54,6 +54,13 @@ export interface DecodeTrustTargets {
   marketRegistry?: `0x${string}` | undefined;
   /** The CorkMarketCreator, for direct createNewPool legs. */
   marketCreator?: `0x${string}` | undefined;
+  /** Every configured generation's MarketRegistry and CorkMarketCreator, each with its label
+   *  (2026-10-02): cork_prepare_market builds for ANY active generation, so a genuine registry
+   *  or creator of another generation is trusted and labeled, never accused. Without these
+   *  lists the tool's own deploy-oracle bytes for phoenix/v0.3-rc.1 decoded as a TARGET
+   *  MISMATCH ("do not sign") against the primary's registry. */
+  marketRegistries?: readonly { address: `0x${string}`; label: string }[] | undefined;
+  marketCreators?: readonly { address: `0x${string}`; label: string }[] | undefined;
 }
 
 export type LegVerification = "trusted" | "mismatch" | "unverified";
@@ -164,18 +171,19 @@ function verifyToken(to: `0x${string}`, tokens: readonly `0x${string}`[] | undef
   return { verification: known ? "trusted" : "unverified" };
 }
 
-/** Verdict for the Cork-adapter role across generations: the primary's adapter is trusted
- *  and unlabeled; any other configured generation's adapter is trusted AND labeled with its
- *  generation; a contradiction names the PRIMARY's adapter as the expected target (one
- *  address in the message, the same one the JIT verdict names); no configured adapter at
- *  all is unverified. */
-function verifyAdapter(to: `0x${string}`, trust: DecodeTrustTargets): Pick<LegBase, "verification" | "expectedTarget" | "generation"> {
-  const other = trust.corkAdapters?.find((a) => a.address.toLowerCase() === to.toLowerCase());
-  if (other !== undefined && (trust.corkAdapter === undefined || other.address.toLowerCase() !== trust.corkAdapter.toLowerCase())) {
+/** Verdict for a role that EVERY generation deploys (the Cork adapter, the market registry, the
+ *  market creator): the primary's contract is trusted and unlabeled; any other configured
+ *  generation's contract is trusted AND labeled with its generation; a contradiction names the
+ *  PRIMARY's contract as the expected target (one address in the message); no configured
+ *  contract at all is unverified. */
+function verifyAcrossGenerations(to: `0x${string}`, primary: `0x${string}` | undefined, others: readonly { address: `0x${string}`; label: string }[] | undefined): Pick<LegBase, "verification" | "expectedTarget" | "generation"> {
+  const other = others?.find((a) => a.address.toLowerCase() === to.toLowerCase());
+  if (other !== undefined && (primary === undefined || other.address.toLowerCase() !== primary.toLowerCase())) {
     return { verification: "trusted", generation: other.label };
   }
-  return verifyAgainst(to, trust.corkAdapter);
+  return verifyAgainst(to, primary);
 }
+const verifyAdapter = (to: `0x${string}`, trust: DecodeTrustTargets) => verifyAcrossGenerations(to, trust.corkAdapter, trust.corkAdapters);
 
 /** Verdict for the ForSelf role: a configured generation's REFERENCE adapter is trusted and
  *  labeled with its generation; the caller-vouched adapter (`trust.forSelf`, a prepare's own
@@ -254,7 +262,7 @@ function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets, delegatec
     if (MARKET_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: MARKET_ABI, data: c.data });
       const role = CREATOR_FUNCTIONS.has(functionName) ? "marketCreator" : "marketRegistry";
-      const verdict = verifyAgainst(c.to, role === "marketCreator" ? trust.marketCreator : trust.marketRegistry);
+      const verdict = role === "marketCreator" ? verifyAcrossGenerations(c.to, trust.marketCreator, trust.marketCreators) : verifyAcrossGenerations(c.to, trust.marketRegistry, trust.marketRegistries);
       return { ...base(c), ...flag, ...verdict, kind: "market", role, action: functionName, params: args as readonly unknown[] };
     }
     // The 1inch LOP fill/cancel surface this tool's own taker-fill and cancel produce: labeled

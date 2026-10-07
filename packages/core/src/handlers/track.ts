@@ -55,6 +55,16 @@ type LopChainVerification = {
   cancellable: boolean;
 };
 
+/** Whether an address has code, or `undefined` when the read failed (never a verdict). */
+async function readHasCode(client: { getCode: (a: { address: `0x${string}` }) => Promise<string | undefined> }, address: `0x${string}`): Promise<boolean | undefined> {
+  try {
+    const code = await client.getCode({ address });
+    return code !== undefined && code !== "0x";
+  } catch {
+    return undefined;
+  }
+}
+
 export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const subj = input.subject;
@@ -88,6 +98,13 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
     // Deferred rpcWarn: the client fails over in-call (mutating `resolved`) — disclosure is
     // evaluated at envelope construction, after the simulate call ran.
     const warnings: Array<{ code: string; message: string }> = [];
+    // A prepared artifact carries no chain of its own. Simulated on the wrong chain, a call to a
+    // per-chain contract meets an address WITHOUT code, and such a call succeeds and does
+    // nothing: a clean "would not revert" that proves nothing (measured live 2026-10-02: a Base
+    // registry call that reverts on Base read green on mainnet).
+    if (input.chainId === undefined) {
+      warnings.push({ code: "chainid_defaulted", message: "chainId was not supplied — simulated on chainId 1 (mainnet). A prepared artifact does not carry its chain, and a simulation on another chain than the one it was built for proves nothing; pass the chainId you prepared with" });
+    }
     if (!from) warnings.push({ code: "manual_funding", message: "no `from`/`account` in the artifact — simulated without a sender, so sender-dependent legs (transferFrom funding, role gates) are NOT exercised; pass the account for a faithful dry-run" });
     const valueStr = typeof a.value === "string" && /^[0-9]+$/.test(a.value) ? a.value : undefined;
     try {
@@ -99,13 +116,20 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}),
       };
       const res = await resolved.client.call(call);
+      // A call to an address WITHOUT code cannot revert: it succeeds and does nothing. That is
+      // not a viable artifact — the wrong chain, a contract not deployed yet, or a mistyped
+      // target. Read, not assumed; a code read that fails says nothing either way.
+      const targetHasCode = data === "0x" ? undefined : await readHasCode(resolved.client, to as `0x${string}`);
+      if (targetHasCode === false) {
+        warnings.push({ code: "unknown_target", message: `the target ${to} has NO code on chainId ${chainId}: a call to it succeeds and does nothing, so wouldRevert:false says nothing about these bytes. Check the chainId (an artifact built for another chain meets an empty address here) and the target before signing` });
+      }
       let gas: bigint | undefined;
       try {
         gas = await resolved.client.estimateGas(call);
       } catch { /* estimate is best-effort garnish; the call already proved viability */ }
       return envelope({
         state: "ok",
-        data: { mode: "simulate", wouldRevert: false, to, from: from ?? null, ...(res.data && res.data !== "0x" ? { returnData: res.data } : {}), ...(gas !== undefined ? { gasEstimate: gas } : {}), note: "eth_call dry-run at the current state — a later broadcast can still land differently (state/deadline drift)" },
+        data: { mode: "simulate", wouldRevert: false, ...(targetHasCode !== undefined ? { targetHasCode } : {}), to, from: from ?? null, ...(res.data && res.data !== "0x" ? { returnData: res.data } : {}), ...(gas !== undefined ? { gasEstimate: gas } : {}), note: "eth_call dry-run at the current state — a later broadcast can still land differently (state/deadline drift)" },
         chainId,
         source: "chain",
         warnings: [...rpcWarn(resolved), ...warnings],

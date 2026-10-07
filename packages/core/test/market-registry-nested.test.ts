@@ -1,6 +1,7 @@
 // The NESTED registry wire (market-registry 0.5.0, Distribution phoenix/v0.4-rc.1 — the primary
 // generation on Arbitrum One + Base since 2026-09-22): every codec row pinned against vectors the
-// DEPLOYED contracts computed themselves (42161, 2026-09-22 — adapter.encodeExtraData /
+// DEPLOYED contracts computed themselves (42161, 2026-09-22; the adapter vectors recaptured 2026-10-07
+// from CorkLimitOrderAdapter 0.5.0, bytes permit signature — adapter.encodeExtraData /
 // decodeExtraData, pm.getId, recipe.encodeExtraData), the selectors + word layouts of the calls
 // this build emits at them, and the handler paths that bind the primary (JIT maker, create-pool,
 // deploy-oracle, registry reads, derive) against the eval stub's nested stack. The flat (0.3.x)
@@ -43,7 +44,7 @@ import {
   type HandlerContext,
 } from "@cork/core";
 import { CST, JIT_TASK_CONSTRAINT, JIT_TASK_PAIR, LIQUIDITY_RECIPE, IMPAIRMENT_RECIPE, stubContext } from "../../../evals/stub.ts";
-import { resolveFeeRule } from "../src/handlers/jit.ts";
+import { parsePermitWires, resolveFeeRule } from "../src/handlers/jit.ts";
 
 const WAD = 10n ** 18n;
 const NOW = 1_790_000_000n; // the eval stub's clock
@@ -70,10 +71,12 @@ const SAMPLE: JITMarketParams = {
   unwindSwapFeePercentage: 2n * WAD,
   enableJitMint: true,
 };
-const SAMPLE_PERMIT: PermitParams = { token: USDC, value: 123n, deadline: 1_800_000_000n, v: 27, r: `0x${"22".repeat(32)}`, s: `0x${"33".repeat(32)}` };
-/** adapter.encodeExtraData({ market, enableJitMint: true }, [permit]) — the deployed 0.4.0 adapter's own bytes. */
+const SAMPLE_PERMIT: PermitParams = { token: USDC, value: 123n, deadline: 1_800_000_000n, signature: `0x${"22".repeat(32)}${"33".repeat(32)}1b` };
+/** adapter.encodeExtraData({ market, enableJitMint: true }, [permit]) — the deployed adapter's own bytes. Recaptured
+ *  2026-10-07 from CorkLimitOrderAdapter 0.5.0 (0x960Cd94B31121806b1b0Ff02230D189Ad0310616, 42161, selector
+ *  0xf71309ff): the permit row is (token, value, deadline, bytes signature) since market-registry PR #65. */
 const LIVE_EXTRA_DATA =
-  "0x0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000009c6864105aec23388c89600046213a44c384c831000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000d5e8f76aafa20aa9a8983a35b71ad3a793070ed900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec80000000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000000000000001a011111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec800000000000000000000000000000000000000000000000000000000000000000003aabbcc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000000000000000000000000000000000000000007b000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000000000000000000000000000000000000000001b22222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333" as const;
+  "0x0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000009c6864105aec23388c89600046213a44c384c831000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000d5e8f76aafa20aa9a8983a35b71ad3a793070ed900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec80000000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000000000000001a011111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec800000000000000000000000000000000000000000000000000000000000000000003aabbcc000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000000000000000000000000000000000000000007b000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000041222222222222222222222222222222222222222222222222222222222222222233333333333333333333333333333333333333333333333333333333333333331b00000000000000000000000000000000000000000000000000000000000000" as const;
 /** adapter.encodeExtraData({ market, enableJitMint: false }, []). */
 const LIVE_EXTRA_DATA_NO_PERMIT =
   "0x0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000009c6864105aec23388c89600046213a44c384c831000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000d5e8f76aafa20aa9a8983a35b71ad3a793070ed900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec80000000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000000000000001a011111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec800000000000000000000000000000000000000000000000000000000000000000003aabbcc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" as const;
@@ -309,6 +312,36 @@ function wrapped(patch: (client: Client) => Partial<Client>): HandlerContext {
 }
 const makerJit = (ctx: HandlerContext, id: string, jm: Record<string, unknown> = {}, input: Record<string, unknown> = {}) =>
   runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: id, ...input, action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: CST, takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: "1000000000000000000", takingAmount: "50000000000000000", jitMarket: { ...JIT_TASK_PAIR, expiryTimestamp: EXPIRY, recipe: LIQUIDITY_RECIPE, ...jm } } }, ctx);
+
+describe("a CONTRACT maker on the nested wire (adapter 0.5.0): the ERC-1271 permit path is open", () => {
+  /** The stub with the maker account given code — a smart account (e.g. a Safe). */
+  const contractMaker = (): HandlerContext =>
+    wrapped((client) => ({
+      getCode: async (a: { address?: string } | undefined) =>
+        String(a?.address ?? "").toLowerCase() === DEMO_ACCOUNT.toLowerCase() ? "0x6080604052" : (client["getCode"] as (x: unknown) => Promise<unknown>)(a),
+    }));
+
+  it("no permit yet: contract_maker_pre_rest names BOTH paths (ERC-1271 permit, or create-pool first), and the execution lists create-pool", async () => {
+    const env = await makerJit(contractMaker(), "nested-contract-maker-0001");
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const pre = env.warnings.find((w) => w.code === "contract_maker_pre_rest");
+    expect(pre?.message).toContain("ERC-1271");
+    expect(pre?.message).toContain("create-pool");
+    expect(JSON.stringify((env.data as { execution: unknown }).execution)).toContain("create-pool");
+    const approvals = (env.data as { approvals: Array<{ mechanism: string; wallets: string }> }).approvals;
+    expect(approvals.find((a) => a.mechanism === "erc2612-permit")?.wallets).toBe("eoa+contract");
+  });
+
+  it("with a permit over the predicted cST (ERC-1271 bytes): no create-pool-first push; the bytes carry the signature verbatim", async () => {
+    const signature = `0x${"ab".repeat(85)}` as `0x${string}`;
+    const env = await makerJit(contractMaker(), "nested-contract-maker-0002", { permits: [{ token: CST, value: "1000000000000000000", deadline: "1800000000", signature }] });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(env.warnings.map((w) => w.code)).not.toContain("contract_maker_pre_rest");
+    expect(JSON.stringify((env.data as { execution: unknown }).execution)).not.toContain("create-pool");
+    const back = decodeJitExtension("nested", (env.data as { extension: `0x${string}` }).extension);
+    expect(back.permits[0]!.signature).toBe(signature);
+  });
+});
 
 describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
   it("builds a nested-wire extension at the 0.5.0 adapter: 10-field identity, verified round-trip, wire + generation echoed, salt carried", async () => {
@@ -571,5 +604,41 @@ describe("cork_query registry-* and derive-cork-pool on the nested primary", () 
     const flat = await runTool("cork_query", { resource: "registry-oracle", chainId: 42161, generation: FLAT.label, filters: { collateralAsset: JIT_TASK_PAIR.collateralAsset, referenceAsset: JIT_TASK_PAIR.referenceAsset, oracleSalt: SAMPLE.oracleSalt } }, ctx);
     expect(flat.state).toBe("unavailable");
     expect(flat.warnings[0]?.message).toContain("oracleSalt");
+  });
+});
+
+describe("JIT permit input (adapter 0.5.0): `signature` bytes or the older v/r/s, one form, per-wire rules", () => {
+  const R = `0x${"22".repeat(32)}` as const;
+  const S = `0x${"33".repeat(32)}` as const;
+  const ECDSA = `${R}${"33".repeat(32)}1b` as `0x${string}`;
+  const ERC1271 = `0x${"ab".repeat(85)}` as `0x${string}`;
+  const row = { token: USDC, value: "123", deadline: "1800000000" };
+  /** The teaching text of the ToolInputError a call throws ("" when it does not throw). */
+  const refusal = (f: () => unknown): string => {
+    try {
+      f();
+      return "";
+    } catch (e) {
+      expect(e).toBeInstanceOf(ToolInputError);
+      return JSON.stringify((e as ToolInputError).issues);
+    }
+  };
+
+  it("v/r/s normalizes to the same bytes as `signature` = r‖s‖v, on both wires", () => {
+    expect(parsePermitWires([{ ...row, v: 27, r: R, s: S }], "nested")[0]!.signature).toBe(ECDSA);
+    expect(parsePermitWires([{ ...row, signature: ECDSA }], "nested")[0]!.signature).toBe(ECDSA);
+    const flatParams = { ...SAMPLE, oracleSalt: undefined };
+    expect(encodeJitExtraData("flat", flatParams, parsePermitWires([{ ...row, v: 27, r: R, s: S }], "flat"))).toBe(encodeJitExtraData("flat", flatParams, parsePermitWires([{ ...row, signature: ECDSA }], "flat")));
+  });
+
+  it("the nested wire takes a contract wallet's ERC-1271 bytes; the flat wire refuses them with teaching", () => {
+    expect(parsePermitWires([{ ...row, signature: ERC1271 }], "nested")[0]!.signature).toBe(ERC1271);
+    expect(refusal(() => parsePermitWires([{ ...row, signature: ERC1271 }], "flat"))).toMatch(/65-byte ECDSA/);
+  });
+
+  it("both forms, neither form, or a partial v/r/s triple refuse", () => {
+    expect(refusal(() => parsePermitWires([{ ...row, signature: ECDSA, v: 27, r: R, s: S }], "nested"))).toMatch(/not both/);
+    expect(refusal(() => parsePermitWires([{ ...row }], "nested"))).toMatch(/needs its signature/);
+    expect(refusal(() => parsePermitWires([{ ...row, v: 27, r: R }], "nested"))).toMatch(/needs its signature/);
   });
 });

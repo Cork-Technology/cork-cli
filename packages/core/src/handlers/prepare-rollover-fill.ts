@@ -23,7 +23,7 @@ import { getRolloverOrder } from "../datasources/venue.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, erc20ApproveTx } from "../order-approvals.ts";
 import { activeSettlersTeaching, classifyRolloverSettler, computeOrderDigest, hashJitMarketParams, type JitMarketParamsStruct, retiredSettlerTeaching, type RolloverGeneration, RolloverJitWireError } from "../rollover.ts";
 import { encodeBaseFillerExecute, encodeBaseFillerExecuteWithMarket, encodeDeployRolloverContract, encodeOriginData, fillerAuthTypedData, gaslessOrderOf, hashFillerAuth, parseRolloverPayload, type ParsedRolloverPayload, requiredPremium, rolloverFactoryAbi } from "../rollover-fill.ts";
-import { checkContractMakerSignature, recoverEoaSigner } from "./order-auth.ts";
+import { checkContractMakerSignature, probeMakerCode, recoverEoaSigner } from "./order-auth.ts";
 import { chainStatusName, settlerStatusAbi } from "../rollover-verify.ts";
 import { resolveJitBytesInput } from "./jit.ts";
 import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -257,6 +257,38 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     { role: "taker", stage: "before-fill", holder: account, token: order.premiumToken, tokenRole: "premium token", spender: baseFiller, spenderRole: "Cork BaseFiller", mechanism: "erc20-approve", amount: premiumCap.toString(), kind: "cap", wallets: "eoa+contract", note: "BaseFiller pulls the whole premiumCap, pays the settler exactly ceil(dstCstProduced × minPremiumPerShare / 1e18), and refunds the rest to you in the same transaction", unsignedTx: erc20ApproveTx(order.premiumToken, baseFiller, premiumCap) },
   ];
   const balances: { srcCst?: string; premiumToken?: string } = {};
+  // The HOLDER's signature over the order digest, verified the way the settler verifies it
+  // (SignatureChecker.isValidSignatureNow(order.user, digest, sig)): ecrecover first, the
+  // holder's own isValidSignature when it has code. A refuted signature builds no bytes — the
+  // settler reverts on it, as cork_submit and the LOP taker-fill already refuse. A holder nobody
+  // could ask (no RPC, a failed read) rides unverified and says so; an outage is not a verdict.
+  let holderSignature: "eoa-verified" | "erc1271-verified" | "unverified" = "unverified";
+  {
+    const refuted = (why: string, source: "config" | "chain", extra: Record<string, unknown> = {}) =>
+      envelope({
+        state: "conflict",
+        data: { orderDigest: localDigest, holder: order.user, ...extra },
+        chainId,
+        source,
+        warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings, { code: "signature_or_reconstruction_mismatch", message: `the holder's signature does not verify for ${order.user} over the order digest ${localDigest}: ${why}. The settler checks exactly this (SignatureChecker) and reverts, so no fill bytes are built. Take the signed payload from the venue row or from the holder again` }],
+        ...(resolved ? rpcProvenance(input.format, resolved) : {}),
+        ctx,
+      });
+    const eoa = await recoverEoaSigner(localDigest, signature);
+    const recovered = eoa.signer !== null ? `ecrecover yields ${eoa.signer}` : "the bytes do not recover to any signer";
+    if (eoa.signer !== null && isAddressEqual(eoa.signer, order.user)) holderSignature = "eoa-verified";
+    else if (!resolved) warnings.push({ code: "funding_needs_rpc", message: `the holder's signature does not ecrecover to ${order.user} (${recovered}) and no RPC resolved to ask a contract holder's isValidSignature — it rides unverified: the settler reverts on a signature the holder did not give` });
+    else {
+      const code = await probeMakerCode(resolved.client, order.user);
+      if (code === "no-code") return refuted(`${order.user} is not a contract account, and ${recovered}`, "chain", eoa.signer !== null ? { recoveredSigner: eoa.signer } : {});
+      if (code === "has-code") {
+        const v = await checkContractMakerSignature(resolved.client, { maker: order.user, orderHash: localDigest, signature });
+        if (v.kind === "erc1271") holderSignature = "erc1271-verified";
+        else if (v.kind === "erc1271_rejected") return refuted("the holder is a contract account and its isValidSignature did not answer the ERC-1271 magic value", "chain");
+        else warnings.push({ code: "chain_read_failed", message: `the holder ${order.user} is a contract account and its isValidSignature could not be asked (${v.reason}) — the signature rides unverified` });
+      } else warnings.push({ code: "chain_read_failed", message: `the holder's signature does not ecrecover to ${order.user} (${recovered}) and the holder's code could not be read — whether a contract holder's isValidSignature accepts it is unknown; it rides unverified` });
+    }
+  }
   // The filler authorization, verified the way the settler verifies it (SignatureChecker):
   // ecrecover first (chain-free), the exclusive filler's own isValidSignature when it has code.
   if (reserved && action.fillerAuthSig !== undefined) {
@@ -365,6 +397,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       fillDeadline: order.fillDeadline.toString(),
       exclusiveFiller: isAddressEqual(order.exclusiveFiller, zeroAddress) ? null : order.exclusiveFiller,
       fillerAuth,
+      holderSignature,
       intentHooks: hooks,
       originData,
       chainStatus,

@@ -20,7 +20,7 @@ describe("MIRRORED_VENUE_LOGIC register", () => {
 
   it("the gates this build mirrors are all registered (removing one must be deliberate)", () => {
     const gates = MIRRORED_VENUE_LOGIC.map((m) => m.gate).join("\n");
-    for (const must of ["quote_ref citation", "premium acceptance band", "premiumAnnualized caps", "listing traits", "rollover admission battery", "rfq-counter", "allowedSender decode", "exclude_request_prefix"]) {
+    for (const must of ["quote_ref citation", "premium acceptance band", "premiumAnnualized caps", "listing traits", "listing expiry", "open-order cap", "rollover admission battery", "rfq-counter", "allowedSender decode", "exclude_request_prefix"]) {
       expect(gates, `register lost the '${must}' gate`).toContain(must);
     }
   });

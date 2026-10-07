@@ -11,7 +11,7 @@ import { resolveGenerations, resolveRollover } from "../config-remote.ts";
 import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, type RolloverCall, type RolloverIntentArgs, standardRolloverHooks, RolloverJitWireError, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
-import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder } from "../datasources/venue.ts";
+import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder, VENUE_OPEN_ORDERS_PER_POOL } from "../datasources/venue.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
@@ -247,10 +247,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     let extension = action.extension;
     const warnings: Array<{ code: string; message: string }> = [];
     let jitData: MakerJitReport | LegacyJitReport | undefined;
-    // U8 (design §9): a CONTRACT maker (a Safe) cannot sign the EOA-only ERC-2612 permit a JIT
-    // mint needs, so when its pool does not exist yet the completion path starts with create-pool
-    // and the two allowances. Decided from chain facts (pool existence from the share prediction,
-    // maker code from getCode); silent when either is unknown.
+    // U8 (design §9): on the flat wire a CONTRACT maker (a Safe) cannot sign the ECDSA-only
+    // ERC-2612 permit a JIT mint needs, so when its pool does not exist yet the completion path
+    // starts with create-pool and the two allowances. On the nested wire (adapter 0.5.0+) the
+    // permit carries ERC-1271 bytes, so a contract maker that already carries a permit for the cST
+    // rests as is; create-pool stays the path when it carries none. Decided from chain facts (pool
+    // existence from the share prediction, maker code from getCode); silent when either is unknown.
     let contractMakerPreRest = false;
     if (action.jitMarket) {
       if (action.extension !== undefined && action.extension !== "0x") {
@@ -325,9 +327,16 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               if (!pred.exists && pred.status !== "unavailable") {
                 try {
                   const code = typeof (client as { getCode?: unknown }).getCode === "function" ? await (client as { getCode: (a: { address: `0x${string}` }) => Promise<`0x${string}` | undefined> }).getCode({ address: input.account }) : undefined;
-                  if (code !== undefined && code !== "0x") {
+                  const permitCoversCst = cst !== undefined && cst !== null && (jm.permits ?? []).some((p) => p.token.toLowerCase() === cst.toLowerCase());
+                  if (code !== undefined && code !== "0x" && !(wire === "nested" && permitCoversCst)) {
                     contractMakerPreRest = true;
-                    warnings.push({ code: "contract_maker_pre_rest", message: `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet: the JIT permit path is EOA-only, so create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place the cST → LOP allowance${jm.enableJitMint ? " and the collateral → JIT adapter allowance" : ""} from the account BEFORE the order rests — data.execution.then lists the steps in order` });
+                    const allowances = `the cST → LOP allowance${jm.enableJitMint ? " and the collateral → JIT adapter allowance" : ""}`;
+                    warnings.push({
+                      code: "contract_maker_pre_rest",
+                      message: wire === "nested"
+                        ? `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet. Two paths: (1) sign the ERC-2612 permit over the predicted cST through the wallet's ERC-1271 (this nested-wire adapter takes signature bytes) and re-prepare with it in jitMarket.permits; or (2) create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place ${allowances} from the account BEFORE the order rests — data.execution.then lists path (2) in order`
+                        : `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet: this (flat-wire) JIT adapter takes only an ECDSA permit, so create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place ${allowances} from the account BEFORE the order rests — data.execution.then lists the steps in order`,
+                    });
                   }
                 } catch {
                   // unreadable code → nothing to say (the fill's ERC-1271 check decides later)
@@ -337,7 +346,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
                 warnings.push({ code: "share_prediction_unavailable", message: `could not predict the new pool's cST address — ${pred.reason ?? "no reason recorded"}. VERIFY yourself that one order side is the derived pool's cST, or the fill reverts OrderNotForPool; a REVERT named here is the revert the fill's creation leg would hit` });
               }
               if (cst) {
-                jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint (same clientRequestId): the constraint is part of the pool's identity, and a single oracle tick between the two prepares otherwise re-derives a different pool and cST than the permit was signed over (jit_side_mismatch)" };
+                jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits as `signature` (65 bytes r‖s‖v from an EOA; on the nested wire a contract wallet signs it through ERC-1271) — a fresh token has no prior allowance for the LOP's pull. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint (same clientRequestId): the constraint is part of the pool's identity, and a single oracle tick between the two prepares otherwise re-derives a different pool and cST than the permit was signed over (jit_side_mismatch)" };
                 const cstLc = cst.toLowerCase();
                 if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
                   warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST. If that side came from an EARLIER prepare, the oracle rate has moved since and the constraint re-derived a different pool: pass that prepare's jit.constraint in jitMarket.constraint to pin the identity the permit was signed over` });
@@ -350,7 +359,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the extension is built but the cST side-match is unverified` });
           }
         }
-        const permits = parsePermitWires(jm.permits);
+        const permits = parsePermitWires(jm.permits, wire);
         const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData: recipeBytes, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
         const extraData = codec.encodeExtraData(jitParams, permits);
         if (ladder.verified) {
@@ -448,7 +457,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // order rests, or it sits on the book fillable-looking and every fill attempt reverts.
     const jitApprovalCtx =
       action.jitMarket && jitData && "adapter" in jitData
-        ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, enableJitMint: action.jitMarket.enableJitMint ?? false, ...("predictedCorkSwapToken" in jitData && jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+        ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, enableJitMint: action.jitMarket.enableJitMint ?? false, ...("predictedCorkSwapToken" in jitData && jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}), ...("wire" in jitData && jitData.wire ? { wire: jitData.wire } : {}) }
         : undefined;
     const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
       maker: input.account,
@@ -754,6 +763,14 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     }
     const allHooks = [...(hooks?.preRolloverHooks ?? []), ...(hooks?.midRolloverHooks ?? []), ...(hooks?.postRolloverHooks ?? []), ...(hooks?.premiumHooks ?? [])];
 
+    // The two slippage floors are SIGNED, and a floor left out is signed as ZERO: the src-side
+    // unwind may then return any collateral and the dst mint any number of share pairs. A holder
+    // may mean it on a pool it knows, so nothing refuses — but it is never silent (2026-10-02).
+    const unfloored = [...(act.minCaReceived === undefined ? ["minCaReceived (the collateral the src-side unwind returns)"] : []), ...(act.minSharesOut === undefined ? ["minSharesOut (the dst share pairs minted)"] : [])];
+    if (unfloored.length > 0) {
+      warnings.push({ code: "invalid_order_terms", message: `no slippage floor: ${unfloored.join(" and ")} ${unfloored.length > 1 ? "are" : "is"} not set and will be SIGNED as 0, so a filler may complete this roll at whatever rate the two pools give at fill time — pass the floor${unfloored.length > 1 ? "s" : ""} you would accept (cork_compute unwind-rate prices the collateral leg at today's rate)` });
+    }
+
     // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
     // refuse the same orders). The builder pins intent.deadline = fillDeadline; the hooks it
     // carries are checked by the same shape rule the submit side runs.
@@ -975,6 +992,16 @@ type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-ord
  * accounting, the one notice, and the fail-closed rule (a ladder is one intent: any rung's
  * refusal is the ladder's refusal, no partial artifacts).
  */
+/** The venue rests at most VENUE_OPEN_ORDERS_PER_POOL open orders of one maker on one asset pair,
+ *  and every rung of a ladder is one such order WHATEVER bit it shares (the venue never learns a
+ *  group): a ladder beyond the cap signs rungs the venue refuses — exposure that never rests. */
+function openOrderCapNotice(rungCount: number): { code: string; message: string } {
+  return {
+    code: "invalid_order_terms",
+    message: `${rungCount} rungs on one pool exceed the venue's cap of ${VENUE_OPEN_ORDERS_PER_POOL} open orders per maker per asset pair: the venue refuses every order past the ${VENUE_OPEN_ORDERS_PER_POOL}th it rests for you there (HTTP 400, "maximum limit of ${VENUE_OPEN_ORDERS_PER_POOL} open orders per pool"), and orders already resting on the pair count too — post at most ${VENUE_OPEN_ORDERS_PER_POOL} rungs per pair, or cancel resting orders first; a shared bit does not reduce the count`,
+  };
+}
+
 async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderAction, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
   const ladderId = input.clientRequestId;
@@ -1057,6 +1084,7 @@ async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderA
     }
   }
   const warnings: Array<{ code: string; message: string }> = [...collapsed.values()].map((e) => ({ code: e.code, message: `rung${e.rungs.length > 1 ? "s" : ""} ${e.rungs.join(",")}: ${e.message}` }));
+  if (rungs.length > VENUE_OPEN_ORDERS_PER_POOL) warnings.push(openOrderCapNotice(rungs.length));
   if (groupedIdx.length > 0) {
     const nonce = (rungs[groupedIdx[0]!]!.env.data as { nonce: string }).nonce;
     warnings.push({
@@ -1084,6 +1112,12 @@ async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderA
   });
 }
 
+/** The notice for a fill of an order whose signed expiry has passed. `expiry` 0 = no expiry. */
+export function orderExpiredWarning(expiry: bigint, nowSecs: bigint): { code: string; message: string } | undefined {
+  if (expiry === 0n || expiry >= nowSecs) return undefined;
+  return { code: "would_revert", message: `the order EXPIRED at ${expiry} (now ${nowSecs} by this host's clock): its signed makerTraits carry that expiry, and the LOP reverts OrderExpired() for every fill after it. The maker must sign a fresh order (refresh-order re-rests the same terms). The bytes are built, and a fill of them reverts` };
+}
+
 async function buildTakerFillArtifact(a: {
   ctx: HandlerContext;
   chainId: PrepareOrdersInput["chainId"];
@@ -1104,7 +1138,13 @@ async function buildTakerFillArtifact(a: {
   // raw path, the ForSelf ADAPTER on the wrapper path (the wrapper is the LOP's caller, the
   // account only calls the wrapper). Bytes that can only revert are not built; the message
   // names the reserved suffix so a taker who controls that sender can re-prepare with it.
-  const allowedSender = decodeMakerTraits(signed.order.makerTraits).allowedSender;
+  const signedTraits = decodeMakerTraits(signed.order.makerTraits);
+  const allowedSender = signedTraits.allowedSender;
+  // Expiry, chain-free from the same signed bytes: the LOP reverts OrderExpired() once
+  // block.timestamp passes the signed expiry (MakerTraitsLib.isExpired: expiry != 0 && expiry <
+  // block.timestamp). Named, not refused: this host's clock is not the chain's, and the bytes
+  // are otherwise valid — but a fill that can only revert must not look fillable.
+  const expiredWarning = orderExpiredWarning(signedTraits.expiry, nowSecondsOf(ctx));
   const fillSender = action.forSelf ? action.forSelf.adapter : account;
   if (allowedSender !== null && !isAllowedSender(signed.order.makerTraits, fillSender)) {
     return envelope({
@@ -1352,7 +1392,7 @@ async function buildTakerFillArtifact(a: {
   // liveness pre-flight already resolved — no extra chain-contact policy.
   const takerJitCtx =
     jitData && action.jitMarket
-      ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, ...(jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+      ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, ...(jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}), ...(jitData.wire ? { wire: jitData.wire } : {}) }
       : undefined;
   let approvals = takerApprovalRequirements({
     taker: account,
@@ -1410,7 +1450,7 @@ async function buildTakerFillArtifact(a: {
     },
     chainId,
     source: a.artifactSource,
-    warnings: [...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...a.acquisitionWarnings],
+    warnings: [...(expiredWarning ? [expiredWarning] : []), ...jitWarnings, { code: "unsigned_artifact", message: "unsigned fill calldata only — independently simulate it (cork_track simulate) and ensure the taker-asset allowance before signing or broadcasting" }, ...a.acquisitionWarnings],
     ctx,
   });
 }
