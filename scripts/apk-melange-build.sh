@@ -29,6 +29,32 @@ SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
 test -n "$SOURCE_DATE_EPOCH" || { echo "::error::could not read the commit's timestamp for SOURCE_DATE_EPOCH" >&2; exit 1; }
 export SOURCE_DATE_EPOCH
 echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH (the packaged commit)"
+repo="${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}"
+case "$repo" in Cork-Technology/cork-cli|Cork-Technology/cork-cli-private) ;; *) echo 'apk-melange-build: unrecognized component repository' >&2; exit 1 ;; esac
+if [ "$repo" = Cork-Technology/cork-cli-private ]; then
+  # actions/checkout already authenticated the private fetch outside the build sandbox.
+  # Seed only the pinned tracked tree, never .git (which carries checkout's auth header),
+  # untracked files, signing keys, or a token-bearing URI. No second trust root or sandbox secret.
+  commit="$(git rev-parse HEAD)"
+  [ "$(yq '.vars.repo' "$spec")" = "$repo" ] && [ "$(yq '.pipeline[0].with.repository' "$spec")" = "https://github.com/$repo" ] || { echo 'apk-melange-build: source repository identity mismatch' >&2; exit 1; }
+  [ "$(yq '.pipeline[0].with.expected-commit' "$spec")" = "$commit" ] && [ "$(yq '.vars.commit' "$spec")" = "$commit" ] || { echo 'apk-melange-build: source commit pin mismatch' >&2; exit 1; }
+  [ "$(yq '.pipeline[0].uses' "$spec")" = git-checkout ] || { echo 'apk-melange-build: expected pinned checkout step' >&2; exit 1; }
+  ref="$(yq '.pipeline[0].with.branch // .pipeline[0].with.tag' "$spec")"
+  [ "$ref" != '${{vars.tag}}' ] || ref="$(yq '.vars.tag' "$spec")"
+  [ "$(git rev-parse "$ref^{commit}")" = "$commit" ] || { echo 'apk-melange-build: source ref does not resolve to pinned commit' >&2; exit 1; }
+  work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT HUP INT TERM
+  mkdir "$work/source"
+  git archive --format=tar "$commit" > "$work/source.tar"
+  tar -xf "$work/source.tar" -C "$work/source"
+  yq 'del(.pipeline[0])' "$spec" > "$work/melange.yaml"
+  # The canonical URL and exact source commit, not a local path or credential, name provenance.
+  unset GH_TOKEN GITHUB_TOKEN CORK_GITHUB_TOKEN
+  melange build "$work/melange.yaml" --source-dir "$work/source" \
+    --git-repo-url "https://github.com/$repo" --git-commit "$commit" \
+    --runner bubblewrap --arch "$arch" --signing-key "$key" --generate-provenance --out-dir "$out"
+  ls -l "$out/$arch/"
+  exit 0
+fi
 
 # bubblewrap, root-in-container (the wolfi-dev/os shape, still zero sudo — the runner the job
 # container exists to restore): as in-container root the bwrap probe that refused the

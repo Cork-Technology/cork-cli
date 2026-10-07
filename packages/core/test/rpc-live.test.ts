@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeAbiParameters, keccak256, parseAbi, stringToBytes, zeroAddress } from "viem";
 import { generationsOf, resolveRpc, runTool } from "@cork/core";
+import { DEMO_ACCOUNT } from "@cork/schemas";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -762,16 +763,25 @@ describe.skipIf(!LIVE)("cover readings — live parity vs raw reads (Base, the p
     expect(gap * 1_000_000n).toBeLessThan(rawRate);
   }, 60_000);
 
-  // rfq-open against the LIVE chain: the venue is answered by a local 201 (the venue is not the
-  // subject here — nothing is posted to production), every chain read is real.
+  // Every chain read is real; RFQ authorization and relay stay in this local fetch fixture.
+  // The fixture key is not provisioned at a venue and can never reach production.
   const openLive = async (action: Record<string, unknown>) => {
-    const { DEMO_ACCOUNT } = await import("@cork/schemas");
     const now = Math.floor(Date.now() / 1000);
-    return runTool(
-      "cork_submit",
-      { chainId: 8453, clientRequestId: `live-cover-${now}-${Math.random().toString(36).slice(2, 8)}`, action: { type: "rfq-open", requester: DEMO_ACCOUNT, referenceAsset: BASEUSD, collateralAsset: { exact: USDC }, packageIds: ["balanced-v1"], notionalAssets: "1000000000", validUntil: now + 86_400, signature: "0x", ...action } },
-      { venueFetch: async () => new Response(JSON.stringify({ rfq_id: "rfq_live_local", state: "open" }), { status: 201 }) },
-    );
+    const previousKey = process.env.CORK_RFQ_API_KEY;
+    process.env.CORK_RFQ_API_KEY = "local-live-cover-fixture";
+    try {
+      return await runTool(
+        "cork_submit",
+        { chainId: 8453, clientRequestId: `live-cover-${now}-${Math.random().toString(36).slice(2, 8)}`, action: { type: "rfq-open", kind: "new_position", requester: DEMO_ACCOUNT, referenceAsset: BASEUSD, collateralAsset: { exact: USDC }, packageIds: ["balanced-v1"], notionalAssets: "1000000000", validUntil: now + 86_400, auth: { method: "apiKey" }, ...action } },
+        { venueUrl: "http://127.0.0.1:1", venueFetch: async (url) => {
+          if (new URL(url).origin !== "http://127.0.0.1:1") throw new Error("live cover fixture refuses external venue traffic");
+          return new Response(JSON.stringify({ rfq_id: "rfq_live_local", state: "open" }), { status: 201 });
+        } },
+      );
+    } finally {
+      if (previousKey === undefined) delete process.env.CORK_RFQ_API_KEY;
+      else process.env.CORK_RFQ_API_KEY = previousKey;
+    }
   };
   type LiveCover = { kind: string; notRead?: string[]; resolved?: { source: string; oracle: { address: string; deployed: boolean; rate: string | null }; constraint: Record<string, string> }; fixed?: { rateOverride: string; liveRate?: string; liveRateSource?: string; position?: string; gapPercentage?: string }; referenceLoss?: { state: string; lostAssets: string; coveredAssets: string | null; openShortfall: string } };
   const liveCover = (env: { data: unknown }) => (env.data as { cover: LiveCover }).cover;

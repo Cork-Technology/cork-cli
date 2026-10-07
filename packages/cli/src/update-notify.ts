@@ -12,18 +12,20 @@ import { dirname, join } from "node:path";
 import { compareVersions } from "@cork/core";
 import { envFlag } from "./env.ts";
 
-export const RELEASE_REPO = "Cork-Technology/cork-cli";
+import { BUILD_REPO, latestReleaseTag, channelCacheKey, type ReleaseRepo } from "../../core/src/release-channel.ts";
+export const RELEASE_REPO = BUILD_REPO;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NOTIFY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export interface UpdateCache {
+  scope?: string; // repository-bound; unscoped/other-channel entries are never served
   checkedAt?: string; // last refresh attempt (success OR failure — failures back off too)
   latest?: string; // latest release tag seen
   notifiedAt?: string; // last time a notice was printed
 }
 
 function updateCachePath(env: Record<string, string | undefined> = process.env): string {
-  return env["CORK_UPDATE_CACHE_FILE"] ?? join(homedir(), ".cache", "cork-helper-cli", "update-check.json");
+  return env["CORK_UPDATE_CACHE_FILE"] ?? join(homedir(), ".cache", "cork-helper-cli", RELEASE_REPO.split("/")[1]!, "update-check.json");
 }
 
 /** Pure decision: what to do this run. Everything impure is injected so tests can cover the gates. */
@@ -63,9 +65,10 @@ export function updateDecision(opts: {
   return { notice, refresh, cacheUpdate };
 }
 
-function readUpdateCache(path: string): UpdateCache | null {
+function readUpdateCache(path: string, repo: ReleaseRepo = RELEASE_REPO): UpdateCache | null {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as UpdateCache;
+    const cache = JSON.parse(readFileSync(path, "utf8")) as UpdateCache;
+    return cache.scope === channelCacheKey(repo, "releases/latest") ? cache : null;
   } catch {
     return null;
   }
@@ -84,19 +87,13 @@ function writeUpdateCache(path: string, cache: UpdateCache): void {
 export async function refreshUpdateCache(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
+  repo: ReleaseRepo = RELEASE_REPO,
 ): Promise<void> {
   const path = updateCachePath(env);
-  const prior = readUpdateCache(path) ?? {};
-  const next: UpdateCache = { ...prior, checkedAt: new Date().toISOString() };
+  const prior = readUpdateCache(path, repo) ?? {};
+  const next: UpdateCache = { ...prior, scope: channelCacheKey(repo, "releases/latest"), checkedAt: new Date().toISOString() };
   try {
-    const res = await fetchImpl(`https://api.github.com/repos/${RELEASE_REPO}/releases/latest`, {
-      headers: { accept: "application/vnd.github+json", "user-agent": "cork-cli-update-check" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      const body = (await res.json()) as { tag_name?: string };
-      if (typeof body.tag_name === "string" && body.tag_name !== "") next.latest = body.tag_name;
-    }
+    next.latest = await latestReleaseTag(repo, env, fetchImpl);
   } catch {
     // failure is cached via checkedAt so we back off a full interval rather than hammering
   }

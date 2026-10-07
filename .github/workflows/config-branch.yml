@@ -57,10 +57,10 @@ jobs:
         run: |
           line="${{ inputs.line }}"
           if [ -z "$line" ]; then
-            ref="${{ inputs.ref }}"
+            ref="$GITHUB_REF_NAME"
             case "$ref" in
               v[0-9]*.[0-9]*.*) line=$(printf '%s' "${ref#v}" | sed -E 's/^([0-9]+)\.([0-9]+)\..*/\1.\2/');;
-              *) echo "::error::cannot derive a line from ref '$ref' — pass `line`"; exit 1;;
+              *) echo "::error::cannot derive a line from ref '$ref' — pass line"; exit 1;;
             esac
           fi
           printf '%s' "$line" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::line '$line' is not <major>.<minor>"; exit 1; }
@@ -75,10 +75,9 @@ jobs:
         run: |
           jq -e '.schemaVersion == 2 and (.generations | type == "object")' cork-defaults.v2.json > /dev/null \
             || { echo "::error::cork-defaults.v2.json is not a schema-2 document"; exit 1; }
-          if gh api "repos/${GITHUB_REPOSITORY}/contents/cork-defaults.v2.json?ref=${BRANCH}" > current.meta.json 2>/dev/null; then
-            jq -r .content current.meta.json | base64 -d > current.json
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "blob=$(jq -r .sha current.meta.json)" >> "$GITHUB_OUTPUT"
+          sh scripts/release-preflight.sh config-current "$BRANCH" current.json > current.status
+          cat current.status >> "$GITHUB_OUTPUT"
+          if grep -qx 'exists=true' current.status; then
             if cmp -s current.json cork-defaults.v2.json; then echo "unchanged=true" >> "$GITHUB_OUTPUT"; echo "branch already carries this file"; exit 0; fi
             echo "unchanged=false" >> "$GITHUB_OUTPUT"
             # every (chain, set key) on the branch must survive; every new primary must be a known key
@@ -88,8 +87,7 @@ jobs:
               echo "::error::config/${{ steps.line.outputs.line }} would lose set key(s) a released binary resolves against: $(echo "$lost" | tr '\n' ' ') — a key change is a new minor (policy R5c)"; exit 1
             fi
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"; echo "unchanged=false" >> "$GITHUB_OUTPUT"
-            echo "branch ${BRANCH} does not exist yet — it is created"
+            echo "branch ${BRANCH} is confirmed absent — it is created"
           fi
           bad=$(jq -r '.generations | to_entries[] | .value.primary as $p | select(.value.sets | has($p) | not) | .key' cork-defaults.v2.json)
           [ -z "$bad" ] || { echo "::error::chain(s) $bad name a primary that is not a set key"; exit 1; }
@@ -126,9 +124,12 @@ jobs:
           fi
       - name: Read back
         env:
+          GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.line.outputs.branch }}
         run: |
-          sleep 5
-          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${BRANCH}/cork-defaults.v2.json?t=$(date +%s)"
-          curl -fsSL "$url" > served.json
-          cmp -s served.json cork-defaults.v2.json && echo "raw ${BRANCH} serves the published file" || { echo "::error::raw ${BRANCH} does not yet serve the published file (CDN lag or a failed push)"; exit 1; }
+          sh scripts/release-preflight.sh config-readback "$BRANCH" served.json
+          if cmp -s served.json cork-defaults.v2.json; then
+            echo "authenticated ${BRANCH} serves the published file"
+          else
+            echo "::error::${BRANCH} does not serve the published file"; exit 1
+          fi

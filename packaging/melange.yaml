@@ -29,6 +29,7 @@ vars:
   # The git tag (vX.Y.Z[-rc.N]). package.version is the apk spelling (X.Y.Z_rcN), so it can
   # name neither the git tag nor the release identity compile-binaries.mjs stamps.
   tag: SUBSTITUTED-BY-CI
+  repo: SUBSTITUTED-BY-CI
 
 environment:
   contents:
@@ -48,7 +49,7 @@ environment:
 pipeline:
   - uses: git-checkout
     with:
-      repository: https://github.com/Cork-Technology/cork-cli
+      repository: https://github.com/${{vars.repo}}
       tag: ${{vars.tag}}
       expected-commit: 0000000000000000000000000000000000000000
 
@@ -77,7 +78,7 @@ pipeline:
       # the target name still stamps identity, so `ch version` and self-update know the asset —
       # though an apk-installed /usr/bin/ch is root-owned, so self-update defers to `apk upgrade`.
       bun scripts/compile-binaries.mjs --native --targets "$target" \
-        --version "${{vars.tag}}" --commit "${{vars.commit}}" --outdir out
+        --version "${{vars.tag}}" --commit "${{vars.commit}}" --repo "${{vars.repo}}" --outdir out
       install -Dm755 "out/ch-${target#bun-}" "${{targets.destdir}}/usr/bin/ch"
 
   - name: smoke

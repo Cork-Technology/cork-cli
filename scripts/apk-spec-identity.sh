@@ -25,6 +25,8 @@ set -eu
 
 spec="${1:?spec path}"; tag="${2:?tag}"; apkver="${3:?apk version}"; commit="${4:?commit sha}"
 mise="${5:-$(dirname "$0")/../mise.toml}"
+repo="${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}"
+case "$repo" in Cork-Technology/cork-cli|Cork-Technology/cork-cli-private) ;; *) echo "apk-spec-identity: unrecognized component repository" >&2; exit 2 ;; esac
 case "$tag" in v[0-9]*) ;; *) echo "apk-spec-identity: tag must start with v (got: $tag)" >&2; exit 2 ;; esac
 case "$commit" in ????????????????????????????????????????) ;; *) echo "apk-spec-identity: commit must be a 40-hex sha" >&2; exit 2 ;; esac
 # One parser for mise.toml (scripts/toolchain-pin.sh) — the melange spec's build-time assertion
@@ -37,10 +39,12 @@ BUN="bun~$bun_pin" yq -i '
   (.environment.contents.packages[] | select(test("^bun([=~<>]|$)"))) = strenv(BUN)
 ' "$spec"
 
-TAG="$tag" APKVER="$apkver" COMMIT="$commit" yq -i '
+TAG="$tag" APKVER="$apkver" COMMIT="$commit" REPO="$repo" yq -i '
   .package.version = strenv(APKVER)
   | .vars.commit = strenv(COMMIT)
   | .vars.tag = strenv(TAG)
+  | .vars.repo = strenv(REPO)
+  | .pipeline[0].with.repository = "https://github.com/" + strenv(REPO)
   | .pipeline[0].with.expected-commit = strenv(COMMIT)
 ' "$spec"
 

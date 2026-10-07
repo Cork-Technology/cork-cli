@@ -381,10 +381,10 @@ batch (`implementation_not_approved` above). The venue's published contract has 
 tripwire: `packages/core/test/venue-spec-live.test.ts` (CORK_RPC_LIVE=1, in the public `live-smoke`
 job since 2026-09-04 — it was NOT there when 0.4.1 grew an `underwriter` parameter under the same
 version label, so CI stayed green through a contract change) compares the live openapi against the
-committed capture — re-capture deliberately with UPDATE_VENUE_SPEC=1. Since 2026-10-06 the capture
-is the STAGING venue (`breaking.cork.tech`, cork-api 0.4.5, RFQ v2): production (0.4.4) has no
-`/rfqs/v2`, so this gate and `venue-live.test.ts` are RED against production until the venue ships
-RFQ v2 there — that red is the release blocker; run them with `CORK_VENUE_URL=https://breaking.cork.tech`. A
+committed capture — re-capture deliberately with UPDATE_VENUE_SPEC=1. The 2026-10-07 capture
+is PRODUCTION (`api-phoenix.cork.tech`, cork-api 0.4.5 at `4fb7eb3`), including RFQ v2
+and the full-answer proof fix. Release evidence runs both venue gates with the production
+default and no staging override; staging success cannot clear a production blocker. A
 version bump can also move ROUTE LOGIC no schema shows (the 0.4.1 quote_ref party rule did):
 `MIRRORED_VENUE_LOGIC` (datasources/venue.ts) registers every route-logic mirror, the tripwire's
 teaching enumerates it, and an offline test pins each entry to its mirror symbol.
@@ -755,16 +755,21 @@ out of the support matrix — ESM-only, engines node ≥ 22).
 
 ## Release tags and the toolchain pin
 
-Tags live only on the public remote (`cork-cli`) and are cut only on an explicit ask. Create
-them with `sh scripts/release-tag.sh vX.Y.Z[-rc.N] <public-sha>` — it checks the remote's
-IDENTITY (host/owner/repo, normalised, so ssh and https spellings of the same repo both pass;
-override with `CORK_RELEASE_REPO`), re-fetches public `main` and requires the candidate to BE
-that head, then signs, VERIFIES the signature (`git tag -v` must say Good), and only then
-pushes; an unverified tag is deleted, not pushed. The head check exists because `git push
-<remote> refs/tags/<tag>` also pushes every object the tag reaches: tagging a private-only
-commit would publish it and its history (audit SUPPLY-001). Port and push to public main FIRST. Reason: an untouched FIDO key yields a zero-filled signature with a clean exit, so
-`git tag -s` alone proves nothing (three such tags on 2026-08-21). Tested with real keys in
-`packages/cli/test/release-tag.test.ts`. The Bun version has ONE home, `mise.toml`
+Tags require an explicit ask and the sanctioned script. For a public cut, first port and push
+to public main, then run `sh scripts/release-tag.sh vX.Y.Z[-rc.N] <public-sha>`. For an explicitly
+approved private candidate, set `CORK_RELEASE_REPO` to its normalized repository identity
+with that same script, the exact advertised private-main head, and an explicit private remote
+(for this isolated clone: `origin`); never port or push private objects to
+the public remote. The script checks normalized origin identity, re-fetches the selected
+repository's main, requires the candidate to BE that head, signs, verifies the signature
+(`git tag -v` must say Good), and only then pushes. An unverified tag is deleted, not pushed.
+A tag push reaches every object behind it; the origin/head guards prevent private history
+publication (audit SUPPLY-001). An untouched FIDO key can yield a zero-filled signature with
+a clean exit, so signing alone proves nothing. Private release admission additionally requires
+confirmed Enterprise Cloud artifact-attestation entitlement, a private component GHCR package,
+and owner-established immutable releases, reviewer/tag restrictions and signing/read credentials.
+None of these settings is provisioned by source preparation.
+`packages/cli/test/release-tag.test.ts` exercises the guarded script with real keys. The Bun version has ONE home, `mise.toml`
 (`scripts/toolchain-pin.sh` is its one parser): mise/mise-action for dev, CI, and the release
 binaries; `apk-spec-identity.sh` turns it into the melange `bun~<pin>` constraint and the spec
 re-asserts it at build time through the same parser.
@@ -777,16 +782,20 @@ from apk-repo; asset `image.txt` binds that digest to the tag through the releas
 → `deploy-cvm.yml` (production only, an EXCLUDED channel, no manual trigger). Do not put a
 covered channel after `publish`. `release-toolchain.yml` runs on every push: actionlint over
 every workflow, each `apk add` of the release workflows in the pinned image
-(`scripts/release-toolchain-preflight.sh`; Mondays with `--max-age-days 30`), and — public
-repository only — the REHEARSAL: `melange build` for both architectures and `apko build`,
-with a throwaway key and no push. Release and rehearsal share `scripts/apk-melange-build.sh`,
+(`scripts/release-toolchain-preflight.sh`; Mondays with `--max-age-days 30`), and the REHEARSAL:
+`melange build` for both architectures and `apko build`, on both component repositories,
+with a throwaway key and no push. Private builds consume an authenticated pinned checkout
+exported without Git credentials. Release and rehearsal share `scripts/apk-melange-build.sh`,
 `apk-slice.sh`, `apk-image-spec.sh`; the rehearsal adds `apk-rehearsal-spec.sh` (a branch at a
 pinned commit in place of a tag). Never give the build a second spelling in a workflow. The
 wolfi-base digest is ONE pin across `apk-repo.yml`, `deploy-cvm.yml` and
 `release-toolchain.yml`; move it with `sh scripts/bump-wolfi-pin.sh`. Before a tag, the
-`release-toolchain` run on the candidate commit must be green. Tests:
-`packages/cli/test/release-workflows.test.ts` (the job graph, read with yq),
-`apk-build-scripts.test.ts`, `release-toolchain-preflight.test.ts`; all mutation-probed.
+`release-toolchain` run on the candidate commit must be green. The runtime `scripts/release-graph.ts`
+gate parses the workflows with yq and refuses unsafe publication ordering, lost assurance
+coverage or a private-channel escape; it runs before the cut and in toolchain preflight.
+`packages/cli/test/release-workflows.test.ts` exercises that admission behavior with semantic
+graph mutations. `apk-build-scripts.test.ts` and `release-toolchain-preflight.test.ts` cover
+the build/preflight behavior; actionlint separately checks workflow syntax.
 
 ## Commit messages (release policy G8)
 

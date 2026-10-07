@@ -19003,6 +19003,7 @@
                "type": "object"
               },
               "order_signature": {
+               "description": "Maker's EIP-712 signature over this 1inch order. Required without an answer-authorized API key, in addition to the top-level answer signature. Never returned by reads.",
                "pattern": "^0x[a-fA-F0-9]+$",
                "type": "string"
               },
@@ -19062,6 +19063,7 @@
             "type": "string"
            },
            "signature": {
+            "description": "Underwriter's CorkRfqWrite signature binding operation=answer, target rfq_id, the canonical body hash (proofs removed), and the RFQ chain. Required without an answer-authorized API key; quoted new_position answers also require every option's order_signature. Never returned by reads.",
             "pattern": "^0x[a-fA-F0-9]+$",
             "type": "string"
            },
@@ -19277,6 +19279,7 @@
             "type": "string"
            },
            "signature": {
+            "description": "Underwriter's CorkRfqWrite signature binding operation=answer, target rfq_id, the canonical body hash (proofs removed), and the RFQ chain. Required without an answer-authorized API key; quoted new_position answers also require every option's order_signature. Never returned by reads.",
             "pattern": "^0x[a-fA-F0-9]+$",
             "type": "string"
            },

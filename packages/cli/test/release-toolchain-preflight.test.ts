@@ -206,6 +206,16 @@ describe("release-toolchain preflight — the image's age", () => {
     return { ...run(args, { RELEASE_WORKFLOWS: wf.file, CONTAINER_RUNTIME: rt.bin, PREFLIGHT_NOW_EPOCH: String(epoch(now)) }), rt };
   };
 
+  it("enforces the same calendar age for Docker RFC3339 and Podman's space-separated inspect date", () => {
+    for (const created of ["2026-10-01T15:12:42Z", "2026-10-01 15:12:42 +0000 UTC"]) {
+      const admitted = go(["--max-age-days", "30"], created, "2026-10-07T00:00:00Z");
+      expect(admitted.status, admitted.out).toBe(0);
+      expect(admitted.out).toContain("6 days ago");
+      const expired = go(["--max-age-days", "30"], created, "2026-11-01T00:00:00Z");
+      expect(expired.status, expired.out).toBe(1);
+      expect(expired.out).toContain("31 days old");
+    }
+  });
   it("reports the age in whole days, from the image the runs pulled", () => {
     const r = go([], built, "2026-10-01T18:54:00Z");
     expect(r.status).toBe(0);

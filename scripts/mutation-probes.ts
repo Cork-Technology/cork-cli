@@ -88,8 +88,10 @@ const T = {
   cliWatchRfqs: "packages/cli/test/watch-rfqs.test.ts",
   hypersync: "packages/core/test/hypersync.test.ts",
   release: "packages/cli/test/release.test.ts",
-  toolchainPreflight: "packages/cli/test/release-toolchain-preflight.test.ts",
   releaseWorkflows: "packages/cli/test/release-workflows.test.ts",
+  releasePreflight: "packages/cli/test/release-preflight.test.ts",
+  releaseChannel: "packages/core/test/release-channel.test.ts",
+  toolchainPreflight: "packages/cli/test/release-toolchain-preflight.test.ts",
   apkBuildScripts: "packages/cli/test/apk-build-scripts.test.ts",
   poolgen: "packages/core/test/pool-generation.test.ts",
   migration: "packages/core/test/migration.test.ts",
@@ -7658,219 +7660,73 @@ const CATALOG: Mutant[] = [
     tests: [T.apkBuildScripts],
   },
   {
-    // PUBLISH LAST: the Release must not exist before the image and apk channel it names (v0.6.1-rc.3).
-    id: "release-publish-before-apk",
+    id: "release-boundary-inherited-asset-host-admitted",
+    file: "packages/core/src/release-channel.ts",
+    find: "!Object.hasOwn(ASSET_HOSTS, next.hostname)",
+    replace: "!ASSET_HOSTS[next.hostname]",
+    tests: [T.releaseChannel],
+  },
+  {
+    id: "release-boundary-published-immutable-readback-dropped",
     file: ".github/workflows/release.yml",
-    find: "    needs: [determinism, smoke, config-branch, apk-repo]\n",
-    replace: "    needs: [determinism, smoke, config-branch]\n",
+    find: "          sh scripts/release-preflight.sh release-readback",
+    replace: "          :",
+    tests: [T.releasePreflight],
+  },
+  {
+    id: "release-graph-ancestor-gate-dropped",
+    file: "scripts/release-graph.ts",
+    find: "    throw new Error(`${ancestor} must precede ${descendant}`);",
+    replace: "    return;",
     tests: [T.releaseWorkflows],
   },
   {
-    // The apk and image build does not wait for the Release.
-    id: "release-apk-after-publish",
-    file: ".github/workflows/release.yml",
-    find: "  apk-repo:\n    needs: [determinism, smoke, config-branch]\n",
-    replace: "  apk-repo:\n    needs: [determinism, smoke, config-branch, publish]\n",
+    id: "release-graph-primary-attestation-gate-dropped",
+    file: "scripts/release-graph.ts",
+    find: 'jobs["build-primary"].with?.attest !== true || jobs["build-shadow"].with?.attest !== false',
+    replace: 'false || jobs["build-shadow"].with?.attest !== false',
     tests: [T.releaseWorkflows],
   },
   {
-    // The hosted deployment is an excluded channel: it runs after the Release and cannot hold it back.
-    id: "release-deploy-before-publish",
-    file: ".github/workflows/release.yml",
-    find: "    needs: [publish, apk-repo]\n",
-    replace: "    needs: [apk-repo]\n",
+    id: "release-graph-private-stable-admitted",
+    file: "scripts/release-graph.ts",
+    find: 'if (privateRepo && tag && !/-rc\\.\\d+$/.test(tag))',
+    replace: 'if (false && tag)',
     tests: [T.releaseWorkflows],
   },
   {
-    // Only a production tag deploys to the production machine.
-    id: "release-deploy-for-candidates",
-    file: ".github/workflows/release.yml",
-    find: "    if: ${{ needs.apk-repo.outputs.candidate == 'false' }}\n",
-    replace: "    if: ${{ needs.apk-repo.outputs.candidate != 'x' }}\n",
+    id: "release-graph-image-destination-unbound",
+    file: "scripts/release-graph.ts",
+    find: 'imageRecords.some((step) => step.env?.PUBLISHED_IMAGE !== "${{ needs.apk-repo.outputs.image-name }}")',
+    replace: 'imageRecords.some(() => false)',
     tests: [T.releaseWorkflows],
   },
   {
-    // No Release that names an image nobody pushed: an empty digest from apk-repo stops the publish job.
-    id: "release-image-digest-unchecked",
-    file: ".github/workflows/release.yml",
-    find: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo \"::error::apk-repo handed over no image digest (got: '$IMAGE_DIGEST') \u2014 refusing to publish a Release that names an image nobody pushed\"; exit 1; }",
-    replace: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || true",
+    id: "release-graph-smoke-matrix-incomplete-admitted",
+    file: "scripts/release-graph.ts",
+    find: 'if (smoke.length !== 4 || smoke.some((row) => row.os === undefined || expectedSmoke[row.os] !== row.asset) || new Set(smoke.map((row) => row.os)).size !== 4)',
+    replace: 'if (false)',
     tests: [T.releaseWorkflows],
   },
   {
-    // image.txt is a release asset: the release attestation then binds the image digest to the tag.
-    id: "release-image-asset-dropped",
-    file: ".github/workflows/release.yml",
-    find: "            dist/ch-* dist/cork-*.tgz dist/checksums.txt dist/image.txt\n",
-    replace: "            dist/ch-* dist/cork-*.tgz dist/checksums.txt\n",
+    id: "release-graph-reviewer-gate-dropped",
+    file: "scripts/release-graph.ts",
+    find: 'if (apkJobs["melange-build"].environment !== "release")',
+    replace: 'if (false)',
     tests: [T.releaseWorkflows],
   },
   {
-    // The deploy gets the digest apk-repo pushed in this run, nothing else.
-    id: "release-deploy-digest-from-elsewhere",
-    file: ".github/workflows/release.yml",
-    find: "      image-digest: ${{ needs.apk-repo.outputs.image-digest }}\n",
-    replace: "      image-digest: ${{ github.sha }}\n",
+    id: "release-graph-self-admission-dropped",
+    file: "scripts/release-graph.ts",
+    find: 'if (job?.if || !job?.steps?.some((step) => !step.if && step.run?.trim() === "bun scripts/release-graph.ts"))',
+    replace: 'if (false)',
     tests: [T.releaseWorkflows],
   },
   {
-    // A called workflow's job reads environment secrets only when the caller passes `secrets: inherit` (actions/runner#4453).
-    id: "release-apk-secrets-not-inherited",
-    file: ".github/workflows/release.yml",
-    find: "    uses: ./.github/workflows/apk-repo.yml\n    secrets: inherit\n",
-    replace: "    uses: ./.github/workflows/apk-repo.yml\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The image digest leaves the workflow as an output: the Release and the deploy both need it.
-    id: "apkrepo-digest-output-dropped",
-    file: ".github/workflows/apk-repo.yml",
-    find: "        value: ${{ jobs.publish.outputs.image-digest }}\n",
-    replace: "        value: ${{ jobs.plan.outputs.tag }}\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The release kind the caller gates the deploy on is the plan's.
-    id: "apkrepo-candidate-output-wrong",
-    file: ".github/workflows/apk-repo.yml",
-    find: "        value: ${{ jobs.plan.outputs.candidate }}\n",
-    replace: "        value: ${{ jobs.plan.outputs.apkver }}\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // A candidate composes its image from its local slices: the Pages channel never carries a candidate.
-    id: "apkrepo-candidate-composes-from-pages",
-    file: ".github/workflows/apk-repo.yml",
-    find: "            sh scripts/apk-image-spec.sh local \"$APKVER\" \"$TAG\" \"$rev\" packaging/melange.rsa.pub\n",
-    replace: "            sh scripts/apk-image-spec.sh pages \"$APKVER\" \"$TAG\" \"$rev\"\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The image revision is the TAG's commit: on a backfill from main github.sha is another commit.
-    id: "apkrepo-revision-is-github-sha",
-    file: ".github/workflows/apk-repo.yml",
-    find: "          rev=\"$(git rev-parse \"$TAG^{commit}\")\"\n",
-    replace: "          rev=\"$GITHUB_SHA\"\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The build command has ONE spelling, shared with the rehearsal.
-    id: "apkrepo-inline-melange-build",
-    file: ".github/workflows/apk-repo.yml",
-    find: "          sh scripts/apk-melange-build.sh \"${{ matrix.arch }}\" melange.rsa\n",
-    replace: "          melange build packaging/melange.yaml --arch \"${{ matrix.arch }}\" --signing-key melange.rsa --out-dir packages\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The publish job holds no secret and no environment: only the signing build is gated.
-    id: "apkrepo-publish-gated",
-    file: ".github/workflows/apk-repo.yml",
-    find: "    needs: [plan, melange-build]\n    outputs:\n",
-    replace: "    needs: [plan, melange-build]\n    environment: release\n    outputs:\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // No dispatch: an input would be a way to put an arbitrary digest on the production machine.
-    id: "deploycvm-dispatchable",
-    file: ".github/workflows/deploy-cvm.yml",
-    find: "on:\n  workflow_call:\n",
-    replace: "on:\n  workflow_dispatch:\n  workflow_call:\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The production deploy is behind the release environment's reviewers.
-    id: "deploycvm-ungated",
-    file: ".github/workflows/deploy-cvm.yml",
-    find: "    environment: release # PHALA_CLOUD_API_KEY\n",
-    replace: "",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // A full sha256 digest or nothing: this value names what runs on the production machine.
-    id: "deploycvm-digest-unchecked",
-    file: ".github/workflows/deploy-cvm.yml",
-    find: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo \"::error::no image digest handed over from the publish job (got: '$IMAGE_DIGEST')\" >&2; exit 1; }",
-    replace: "          printf '%s' \"$IMAGE_DIGEST\" | grep -Eqx 'sha256:[0-9a-f]{64}' || true",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The job that holds the deploy credential installs an exact CLI version.
-    id: "deploycvm-phala-unpinned",
-    file: ".github/workflows/deploy-cvm.yml",
-    find: "          npm install -g --ignore-scripts phala@1.1.20\n",
-    replace: "          npm install -g --ignore-scripts phala\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The rehearsal installs exactly what the release job installs: another package set rehearses another build.
-    id: "rehearsal-installs-differ",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "          apk add --no-cache bash bubblewrap diffutils git libgcc libstdc++ melange openssl-4.0 yq\n          git config",
-    replace: "          apk add --no-cache bash bubblewrap git libgcc libstdc++ melange yq\n          git config",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The rehearsal runs the release's build script, not its own copy of the flags.
-    id: "rehearsal-own-build-command",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "          sh scripts/apk-melange-build.sh \"$ARCH\" \"rehearsal-$ARCH.rsa\"\n",
-    replace: "          melange build packaging/melange.yaml --arch \"$ARCH\" --signing-key \"rehearsal-$ARCH.rsa\" --out-dir packages\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The throwaway PRIVATE key never leaves the job.
-    id: "rehearsal-private-key-uploaded",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "            rehearsal-${{ matrix.arch }}.rsa.pub\n",
-    replace: "            rehearsal-${{ matrix.arch }}.rsa\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The private key is removed before the upload step, also when the build failed.
-    id: "rehearsal-key-not-dropped",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "      - name: Drop the throwaway private key\n        if: ${{ always() }}\n",
-    replace: "      - name: Drop the throwaway private key\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The rehearsal builds the image to a file: `apko publish` would push.
-    id: "rehearsal-pushes-image",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "          apko build packaging/cork-cli.apko.yaml cork-cli:rehearsal rehearsal-image.tar --sbom-path sboms/\n",
-    replace: "          apko publish packaging/cork-cli.apko.yaml ghcr.io/cork-technology/cork-cli:rehearsal --sbom-path sboms/\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The whole file holds a read-only token: nothing in it can publish.
-    id: "rehearsal-gets-write-token",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "permissions:\n  contents: read\n",
-    replace: "permissions:\n  contents: read\n  packages: write\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // A pull request's commit is on no branch the build could fetch; and the private repository's commits are not in the public one.
-    id: "rehearsal-runs-on-pull-requests",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "    if: ${{ github.repository == 'Cork-Technology/cork-cli' && github.event_name != 'pull_request' }}\n",
-    replace: "    if: ${{ github.repository == 'Cork-Technology/cork-cli' }}\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // The identity script writes the commit pin FIRST; the rehearsal script then swaps tag for branch.
-    id: "rehearsal-identity-after-flip",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "          sh scripts/apk-spec-identity.sh packaging/melange.yaml \"$REHEARSAL_TAG\" \"$REHEARSAL_APKVER\" \"$COMMIT\"\n          sh scripts/apk-rehearsal-spec.sh packaging/melange.yaml \"$GITHUB_REF_NAME\"\n",
-    replace: "          sh scripts/apk-rehearsal-spec.sh packaging/melange.yaml \"$GITHUB_REF_NAME\"\n          sh scripts/apk-spec-identity.sh packaging/melange.yaml \"$REHEARSAL_TAG\" \"$REHEARSAL_APKVER\" \"$COMMIT\"\n",
-    tests: [T.releaseWorkflows],
-  },
-  {
-    // Each slice is signed with its own throwaway key; the image trusts both.
-    id: "rehearsal-one-key-for-image",
-    file: ".github/workflows/release-toolchain.yml",
-    find: "            incoming/x86_64/rehearsal-x86_64.rsa.pub incoming/aarch64/rehearsal-aarch64.rsa.pub\n",
-    replace: "            incoming/x86_64/rehearsal-x86_64.rsa.pub\n",
+    id: "release-graph-json-schema-unchecked",
+    file: "scripts/release-graph.ts",
+    find: 'const admitted = ReleaseWorkflowsSchema.parse(workflows);',
+    replace: 'const admitted = workflows as ReleaseWorkflows;',
     tests: [T.releaseWorkflows],
   },
   {

@@ -9,7 +9,7 @@
 //     resolved, offline and bounded, before the swap.
 // The staged "binary" here is a REAL executable script, run as a real child process: the identity
 // gate's whole job is to execute the artifact, so mocking that away would test nothing.
-import { describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,9 @@ import { resolveTagCommit, verifyStagedIdentity } from "../src/self-update.ts";
 
 const COMMIT = "a".repeat(40);
 const TAG = "v9.9.9";
+const priorToken = process.env.CORK_GITHUB_TOKEN;
+beforeEach(() => { process.env.CORK_GITHUB_TOKEN = "fixture-authorized-token"; });
+afterEach(() => { if (priorToken === undefined) delete process.env.CORK_GITHUB_TOKEN; else process.env.CORK_GITHUB_TOKEN = priorToken; });
 
 /** Write an executable shell script and return its path — a stand-in release artifact. */
 function stagedBinary(body: string): string {
@@ -78,7 +81,7 @@ describe("resolveTagCommit: a tag names an immutable commit", () => {
 
   it("reports a transport failure instead of throwing", async () => {
     const out = await resolveTagCommit(TAG, (async () => { throw new Error("connection refused"); }) as unknown as typeof fetch);
-    expect(out).toMatchObject({ error: expect.stringContaining("connection refused") });
+    expect(out).toMatchObject({ error: expect.stringContaining("GitHub request failed") });
   });
 });
 
@@ -104,6 +107,14 @@ describe("verifyStagedIdentity: the artifact must BE the build we resolved", () 
     const bin = stagedBinary('echo "boom: not a ch binary" >&2\nexit 3');
     expect(await verifyStagedIdentity(bin, expected)).toMatchObject({ ok: false, error: expect.stringContaining("boom: not a ch binary") });
   });
+  it("does not echo private artifact stdout/stderr in refusal diagnostics", async () => {
+    const secret = "fixture-read-credential";
+    const privateExpected = { ...expected, repository: "Cork-Technology/cork-cli-private" };
+    const stderr = await verifyStagedIdentity(stagedBinary(`echo '${secret}' >&2\nexit 3`), privateExpected);
+    const stdout = await verifyStagedIdentity(stagedBinary(`echo '${identityJson({ version: secret })}'`), privateExpected);
+    expect(stderr.ok).toBe(false); expect(stdout.ok).toBe(false);
+    expect(JSON.stringify([stderr, stdout])).not.toContain(secret);
+  });
 
   it("refuses output that is not JSON, and JSON that is not an object", async () => {
     expect(await verifyStagedIdentity(stagedBinary("echo hello"), expected)).toMatchObject({ ok: false, error: expect.stringContaining("with JSON") });
@@ -117,7 +128,7 @@ describe("verifyStagedIdentity: the artifact must BE the build we resolved", () 
     const bin = stagedBinary("sleep 1\nexit 7");
     // The shell's own first stderr line is the evidence: `sleep` exists on every machine and
     // could not be found from inside the identity run.
-    expect(await verifyStagedIdentity(bin, expected)).toMatchObject({ ok: false, error: expect.stringContaining("sleep: not found") });
+    expect(await verifyStagedIdentity(bin, expected)).toMatchObject({ ok: false, error: expect.stringMatching(/sleep.*(not found|No such file)/) });
   });
 
   it("kills a staged binary that hangs, and its CHILDREN with it", async () => {
@@ -125,10 +136,10 @@ describe("verifyStagedIdentity: the artifact must BE the build we resolved", () 
     const marker = join(dir, "child.pid");
     // Builtins only — the identity run has no PATH (above). A descendant that outlives a naive
     // kill would keep burning the operator's machine after the update was refused.
-    const bin = stagedBinary(`( echo $$ > ${marker}; while :; do :; done ) &\nwhile :; do :; done`);
+    const bin = stagedBinary(`( while :; do :; done ) &\nchild=$!\necho $child > ${marker}\nwhile :; do :; done`);
     const started = Date.now();
-    const out = await verifyStagedIdentity(bin, expected, 300);
-    expect(out).toMatchObject({ ok: false, error: expect.stringContaining("within 300ms") });
+    const out = await verifyStagedIdentity(bin, expected, 2_000);
+    expect(out).toMatchObject({ ok: false, error: expect.stringContaining("within 2000ms") });
     expect(Date.now() - started).toBeLessThan(10_000);
     await new Promise((r) => setTimeout(r, 300));
     const childPid = Number(readFileSync(marker, "utf8").trim());

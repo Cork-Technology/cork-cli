@@ -11,6 +11,10 @@ name: build-binaries
 
 on:
   workflow_call:
+    secrets:
+      CORK_GITHUB_TOKEN:
+        description: "Owner-provisioned read-only repo/org/package token for private preflight; never used to publish"
+        required: false
     inputs:
       version:
         description: "release version to stamp (vX.Y.Z[-rc.N])"
@@ -36,6 +40,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      packages: read
       id-token: write
       attestations: write
     steps:
@@ -43,6 +48,12 @@ jobs:
 
       # Toolchain from mise.toml — the ONE place the Bun version is pinned.
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+      - name: Admit the authenticated release channel before building
+        if: ${{ inputs.attest }}
+        env:
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: sh scripts/release-preflight.sh release
 
       # Every platform's HyperSync binding must be on disk: the cross-compile embeds one per
       # target (scripts/compile-binaries.mjs refuses a target whose binding is missing).
@@ -53,8 +64,8 @@ jobs:
         env:
           CORK_CONFIG_NO_FETCH: "1"
         run: |
-          bun run typecheck
-          bun run test:unit
+          bun run --bun typecheck
+          bun run --bun test:unit
 
       # SDK tarballs ride the same reproducibility contract as the binaries: `bun pm pack` emits
       # byte-identical tarballs across independent rebuilds (verified empirically — mtimes are
@@ -63,15 +74,15 @@ jobs:
       # package build stages into the root dist/ and would clobber compiled binaries placed there.
       - name: Build, gate, and pack the SDK tarballs (@cork/schemas, @cork/core, @cork/mcp)
         run: |
-          bun run verify:publish
+          bun run --bun verify:publish
           mkdir -p sdk-tarballs
           for p in schemas core mcp; do
             (cd "packages/$p" && bun pm pack --quiet --destination "$GITHUB_WORKSPACE/sdk-tarballs")
           done
-          node scripts/build-packages.mjs --clean-only
+          bun scripts/build-packages.mjs --clean-only
 
       - name: Compile release binaries (all targets, cross-compiled)
-        run: bun scripts/compile-binaries.mjs --version "${{ inputs.version }}" --commit "${{ github.sha }}" --outdir dist
+        run: bun scripts/compile-binaries.mjs --version "${{ inputs.version }}" --commit "${{ github.sha }}" --repo "$GITHUB_REPOSITORY" --outdir dist
 
       - name: Add the SDK tarballs to the release set
         run: |

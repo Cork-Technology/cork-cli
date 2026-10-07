@@ -39,6 +39,7 @@ permissions:
 
 jobs:
   deploy-cvm:
+    if: ${{ github.repository == 'Cork-Technology/cork-cli' }}
     environment: release # PHALA_CLOUD_API_KEY
     runs-on: ubuntu-latest
     # The same digest-pinned toolchain image as apk-repo.yml's jobs: one pin for the whole
@@ -52,9 +53,14 @@ jobs:
       # substitution and its check; libgcc + libstdc++ for the runner's mounted node.
       - name: Install the deploy toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash coreutils git grep libgcc libstdc++ nodejs npm sed
+        run: apk add --no-cache bash coreutils curl git grep jq libgcc libstdc++ nodejs npm sed
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — the tag: for packaging/phala-compose.yml
+      - name: Recheck the public-only deployment identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: sh scripts/release-preflight.sh deploy
 
       - name: Substitute the attested digest into the compose
         env:

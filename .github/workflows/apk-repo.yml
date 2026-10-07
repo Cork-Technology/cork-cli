@@ -73,6 +73,13 @@ on:
   release:
     types: [published]
   workflow_call:
+    secrets:
+      CORK_GITHUB_TOKEN:
+        description: "Owner-provisioned read-only repo/org/package token for private preflight; never used to publish"
+        required: false
+      MELANGE_SIGNING_KEY:
+        description: "Existing release-environment package signing key; environment reviewer gate still applies"
+        required: false
     inputs:
       tag:
         description: "release tag to package (vX.Y.Z or vX.Y.Z-rc.N — candidates build the OCI image only)"
@@ -85,6 +92,9 @@ on:
       image-digest:
         description: "sha256 digest of the pushed ghcr image index"
         value: ${{ jobs.publish.outputs.image-digest }}
+      image-name:
+        description: "Exact component GHCR destination whose digest was pushed and attested"
+        value: ${{ jobs.publish.outputs.image-name }}
       candidate:
         description: "'true' for a vX.Y.Z-rc.N tag, 'false' for a production tag"
         value: ${{ jobs.plan.outputs.candidate }}
@@ -103,15 +113,31 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
     outputs:
       tag: ${{ steps.p.outputs.tag }}
       candidate: ${{ steps.p.outputs.candidate }}
       apkver: ${{ steps.p.outputs.apkver }}
+      image: ${{ steps.p.outputs.image }}
+      private: ${{ steps.p.outputs.private }}
+      commit: ${{ steps.p.outputs.commit }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
       - id: p
         env:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
         run: |
+          export RELEASE_TAG="$TAG"
+          RELEASE_COMMIT="$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then RELEASE_COMMIT="$(git rev-parse HEAD)"; fi
+          export RELEASE_COMMIT
+          [ "$(git rev-parse HEAD)" = "$RELEASE_COMMIT" ] || { echo '::error::checkout differs from the selected artifact source'; exit 1; }
+          sh scripts/release-preflight.sh image >> "$GITHUB_OUTPUT"
           test -n "$TAG" || { echo "::error::no tag resolved from the trigger"; exit 1; }
           v="${TAG#v}"
           case "$v" in
@@ -213,6 +239,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           VERSION: ${{ needs.plan.outputs.apkver }}
+          EXPECTED_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
           # One script owns the spec's release identity (tag, apk version, commit, and the Bun build
           # package pinned from mise.toml) and is unit-
@@ -221,6 +248,7 @@ jobs:
           # (`COMMIT="$(...)" yq ...`) swallows a git failure even under `sh -e`, and on run
           # 32225918023 that silently ERASED the expected-commit pin while the run stayed green.
           COMMIT="$(git rev-parse HEAD)"
+          [ "$COMMIT" = "$EXPECTED_COMMIT" ] || { echo '::error::tag checkout moved after planning'; exit 1; }
           test -n "$COMMIT" || { echo "::error::could not resolve HEAD — refusing to build without the expected-commit pin"; exit 1; }
           sh scripts/apk-spec-identity.sh packaging/melange.yaml "$TAG" "$VERSION" "$COMMIT"
 
@@ -352,6 +380,7 @@ jobs:
     needs: [plan, melange-build]
     outputs:
       image-digest: ${{ steps.image.outputs.digest }}
+      image-name: ${{ steps.image.outputs.name }}
     runs-on: ubuntu-latest
     # Same digest-pinned toolchain image as melange-build, NO --privileged: apko is daemonless
     # (it assembles the OCI image from apks and pushes over HTTPS). Tools come from Wolfi's
@@ -373,7 +402,7 @@ jobs:
       # here.
       - name: Install the publish toolchain (Wolfi signed apk repo)
         shell: sh
-        run: apk add --no-cache bash apko coreutils curl git grep libgcc libstdc++ sed yq
+        run: apk add --no-cache bash apko coreutils curl git grep jq libgcc libstdc++ sed yq
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — main: for packaging/{melange.rsa.pub,cork-cli.apko.yaml}
 
@@ -481,12 +510,11 @@ jobs:
           APKVER: ${{ needs.plan.outputs.apkver }}
           TAG: ${{ needs.plan.outputs.tag }}
           CANDIDATE: ${{ needs.plan.outputs.candidate }}
+          SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
-          # The revision is the tag's commit, not github.sha — on a backfill dispatched from
-          # main they differ, and the image must name the source it was built from.
-          git fetch -q --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
-          rev="$(git rev-parse "$TAG^{commit}")"
-          test -n "$rev" || { echo "::error::could not resolve the commit of $TAG"; exit 1; }
+          # The authenticated plan already peeled and bound the tag to the build commit.
+          # Never re-resolve a mutable tag when stamping provenance.
+          rev="$SOURCE_COMMIT"
           # Where the apk comes from, the exact version pin, and the two release annotations —
           # ONE script, shared with the rehearsal. A candidate composes from its slices as a
           # local repository (the Pages channel never carries a candidate); production composes
@@ -502,20 +530,30 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           CANDIDATE: ${{ needs.plan.outputs.candidate }}
-          GH_OWNER: ${{ github.repository_owner }}
+          EXPECTED_IMAGE: ${{ needs.plan.outputs.image }}
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GHCR_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
           # Three guards proven necessary on the v0.3.0-rc.1 backfill: pipefail so an apko failure
           # cannot hide behind tee, the sboms/ dir apko expects but never creates, and a loud stop
           # on an empty captured digest.
           set -o pipefail
           mkdir -p sboms
-          owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
-          # :latest tracks production only (G9/R7). While the component is pre-1.0 (v0.x.y) it is
-          # partner-preview, so it never moves :latest; only a bare v1.0.0+ tag does. Candidates never do.
-          tags="ghcr.io/$owner/cork-cli:$TAG"
-          case "$TAG" in v0.*|*-*) : ;; *) tags="$tags ghcr.io/$owner/cork-cli:latest" ;; esac
+          sh scripts/release-preflight.sh image > channel.txt
+          image="$(grep '^image=' channel.txt | cut -d= -f2-)"
+          [ "$image" = "$EXPECTED_IMAGE" ] || { echo '::error::image identity moved after planning'; exit 1; }
+          # Private preflight admits rc only. No private run can reach Pages or :latest.
+          tags="$image:$TAG"
+          case "$TAG" in v0.*|*-*) : ;; *) tags="$tags $image:latest" ;; esac
           echo "publishing: $tags"
-          apko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+          DOCKER_CONFIG="$(mktemp -d)"
+          export DOCKER_CONFIG
+          chmod 700 "$DOCKER_CONFIG"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          echo "CORK_REGISTRY_AUTH_DIR=$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          printf '%s' "$GHCR_TOKEN" | apko login ghcr.io -u "${{ github.actor }}" --password-stdin
           # shellcheck disable=SC2086 # $tags is a deliberate word list
           apko publish packaging/cork-cli.apko.yaml $tags --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation
@@ -524,12 +562,17 @@ jobs:
           digest="$(grep -o 'sha256:[0-9a-f]\{64\}' digest.txt | tail -1)"
           test -n "$digest" || { echo "::error::no image digest captured from apko output — refusing to hand the attest step an empty subject"; exit 1; }
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=ghcr.io/$owner/cork-cli" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$image" >> "$GITHUB_ENV"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+          echo "name=$image" >> "$GITHUB_OUTPUT"
       - name: Attest the image digest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
+      - name: Remove ephemeral registry authentication
+        if: ${{ always() }}
+        shell: sh
+        run: '[ -z "${CORK_REGISTRY_AUTH_DIR:-}" ] || rm -rf "$CORK_REGISTRY_AUTH_DIR"' 

@@ -27,13 +27,28 @@ jobs:
   version-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+      - name: Install the pinned graph validator dependencies
+        run: bun install --frozen-lockfile
+      - name: Admit the complete publication-last release graph
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bun scripts/release-graph.ts
+      - name: Admit the authenticated component release
+        env:
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: sh scripts/release-preflight.sh release
       - name: Tag must equal the in-source package version
         run: |
           want="${GITHUB_REF_NAME#v}"
           for p in packages/*/package.json; do
-            have=$(node -p "require('./$p').version")
+            have=$(bun -p "(await import('./$p')).default.version")
             if [ "$have" != "$want" ]; then
               echo "::error::$p says $have but the tag is $GITHUB_REF_NAME — bump the manifest or fix the tag (policy R1)"; exit 1
             fi
@@ -43,8 +58,11 @@ jobs:
   build-primary:
     needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
+    secrets:
+      CORK_GITHUB_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN }}
     permissions:
       contents: read
+      packages: read
       id-token: write
       attestations: write
     with:
@@ -56,8 +74,11 @@ jobs:
   build-shadow:
     needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
+    secrets:
+      CORK_GITHUB_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN }}
     permissions:
       contents: read
+      packages: read
       id-token: write
       attestations: write
     with:
@@ -120,6 +141,7 @@ jobs:
           v="$("./dist/${{ matrix.asset }}" version)"
           printf '%s\n' "$v"
           printf '%s\n' "$v" | grep -F "${{ github.ref_name }}"
+          "./dist/${{ matrix.asset }}" version --json | grep -F "\"repository\": \"$GITHUB_REPOSITORY\""
           "./dist/${{ matrix.asset }}" capabilities >/dev/null
           "./dist/${{ matrix.asset }}" query protocol-config --chainid 42161 >/dev/null
       - name: MCP stdio handshake
@@ -160,7 +182,7 @@ jobs:
     permissions:
       contents: write
     with:
-      ref: ${{ github.ref_name }}
+      ref: ${{ github.sha }}
 
   # apk repository + OCI image, built for EVERY release and BEFORE the GitHub Release exists.
   # PUBLISH LAST (2026-10-02): the Release body names the image, and for a stable the apk
@@ -209,6 +231,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -218,26 +241,40 @@ jobs:
       - name: Record the image this release names, as a release asset
         env:
           IMAGE_DIGEST: ${{ needs.apk-repo.outputs.image-digest }}
-          GH_OWNER: ${{ github.repository_owner }}
+          PUBLISHED_IMAGE: ${{ needs.apk-repo.outputs.image-name }}
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           # The release attestation covers the tag and the release ASSETS; the image has its own
           # build provenance but is no asset. This one-line file makes the same signed, immutable
           # record bind the image digest to the tag. A full sha256 digest or no release: an empty
           # value means apk-repo did not push what the body is about to claim.
           printf '%s' "$IMAGE_DIGEST" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "::error::apk-repo handed over no image digest (got: '$IMAGE_DIGEST') — refusing to publish a Release that names an image nobody pushed"; exit 1; }
-          owner="$(echo "$GH_OWNER" | tr '[:upper:]' '[:lower:]')"
-          printf 'ghcr.io/%s/cork-cli:%s@%s\n' "$owner" "$GITHUB_REF_NAME" "$IMAGE_DIGEST" > dist/image.txt
+          sh scripts/release-preflight.sh publish > channel.txt
+          image="$(grep '^image=' channel.txt | cut -d= -f2-)"
+          [ "$image" = "$PUBLISHED_IMAGE" ] || { echo '::error::apk-repo image destination disagrees with the admitted component'; exit 1; }
+          printf '%s:%s@%s\n' "$image" "$GITHUB_REF_NAME" "$IMAGE_DIGEST" > dist/image.txt
           cat dist/image.txt
       - name: Create the (immutable) release from the attested primary bytes
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_RELEASE_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PUBLISHED_IMAGE: ${{ needs.apk-repo.outputs.image-name }}
         run: |
+          sh scripts/release-preflight.sh publish > channel.txt
+          IMAGE_NAME="$(grep '^image=' channel.txt | cut -d= -f2-)"
+          [ "$IMAGE_NAME" = "$PUBLISHED_IMAGE" ] || { echo '::error::apk-repo image destination disagrees with the admitted component'; exit 1; }
           # G9: while the component is pre-1.0 (v0.x.y) it is partner-preview — unaudited — so a bare
           # tag stays pre-release and never takes GitHub's Latest badge. Only a bare v1.0.0+ tag (the
           # first audited/production line) drops the flag. An -rc is always pre-release. Version is the
           # sole signal; no external flag.
           case "${{ github.ref_name }}" in v0.*|*-*) PRE="--prerelease";; *) PRE="";; esac
+          LATEST=""
+          case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) LATEST="--latest=false" ;; esac
           # G18: a release names the channels its claims cover. A candidate publishes the ghcr image
+          VERIFY_PREFIX=""
+          case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) VERIFY_PREFIX="GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" " ;; esac
           # only; a stable also publishes the apk repository. :latest moves only from a bare v1.0.0+
           # tag (apk-repo.yml, G9/R7) — the v0.5.0 body claimed it and was wrong (2026-09-04). The
           # two bodies must therefore not claim the same set, and neither may claim :latest below 1.0.
@@ -246,19 +283,67 @@ jobs:
 
           - the \`ch-*\` binaries,
           - the \`cork-*.tgz\` SDK packages,
-          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\`.
+          - the ghcr image \`$IMAGE_NAME:${{ github.ref_name }}\`.
 
           Every binary and tarball is attested and listed in \`checksums.txt\`. \`image.txt\` names the image by digest; the image was pushed and attested before this release was published. A candidate does not publish the apk repository or the \`:latest\` image — those are production only." ;;
             *)      CHANNELS="This release covers four:
 
           - the \`ch-*\` binaries,
           - the \`cork-*.tgz\` SDK packages,
-          - the ghcr image \`ghcr.io/cork-technology/cork-cli:${{ github.ref_name }}\` (\`:latest\` is not moved: a v0.x partner-preview never takes it — only an audited v1.0.0+ stable will),
+          - the ghcr image \`$IMAGE_NAME:${{ github.ref_name }}\` (\`:latest\` is not moved: a v0.x partner-preview never takes it — only an audited v1.0.0+ stable will),
           - the apk repository channel, signed with the key committed as \`packaging/melange.rsa.pub\`.
 
           Every binary and tarball is attested and listed in \`checksums.txt\`. \`image.txt\` names the image by digest; the image and the apk channel were published before this release was. Each apk carries its own signature and SLSA provenance. One channel is excluded: the hosted MCP deployment is not covered by these checksums — verify it by its own image digest." ;;
           esac
-          gh release create "${{ github.ref_name }}" $PRE \
+          case "$GITHUB_REPOSITORY" in
+            Cork-Technology/cork-cli-private)
+              SDK_INSTALL="These assets are private. Set an explicit least-privilege CORK_GITHUB_TOKEN that can read this repository, then download, verify, and install local tarballs (never put a credential in a package URL):
+
+          \`\`\`sh
+          GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" gh release download $GITHUB_REF_NAME --repo $GITHUB_REPOSITORY --pattern 'cork-*.tgz'
+          for asset in cork-*.tgz; do GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" gh attestation verify \"\$asset\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/build-binaries.yml\" --source-ref refs/tags/$GITHUB_REF_NAME --source-digest $GITHUB_SHA; done
+          \`\`\`
+
+          Merge these local-file entries into your existing \`package.json\` (the overrides prevent transitive Cork dependencies from falling through to the unpublished npm versions):
+
+          \`\`\`json
+          {
+            \"dependencies\": {
+              \"@cork/schemas\": \"file:./cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/core\": \"file:./cork-core-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/mcp\": \"file:./cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
+            },
+            \"overrides\": {
+              \"@cork/schemas\": \"file:./cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/core\": \"file:./cork-core-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/mcp\": \"file:./cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
+            }
+          }
+          \`\`\`
+
+          \`\`\`sh
+          bun install --ignore-scripts
+          \`\`\`
+
+          Set \`CORK_GITHUB_TOKEN\` for authenticated private config and release reads; install \`gh\` for private self-update provenance verification, which uses the same explicit token. Log your container client into GHCR with read:packages access before pulling \`$IMAGE_NAME:$GITHUB_REF_NAME\`. This candidate has no Pages channel, latest alias, or hosted deployment." ;;
+            *) SDK_INSTALL="The \`cork-*.tgz\` assets are the npm packages, attested and pinned by your lockfile's sha512. Verify the downloaded archives against this repository, builder, tag and source commit before installation. Merge dependencies AND overrides into your \`package.json\` so transitive Cork dependencies do not fall through to unpublished npm versions:
+
+          \`\`\`json
+          {
+            \"dependencies\": {
+              \"@cork/schemas\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/core\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-core-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/mcp\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
+            },
+            \"overrides\": {
+              \"@cork/schemas\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/core\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-core-${GITHUB_REF_NAME#v}.tgz\",
+              \"@cork/mcp\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
+            }
+          }
+          \`\`\`" ;;
+          esac
+          GH_TOKEN="$GH_RELEASE_TOKEN" gh release create "${{ github.ref_name }}" $PRE $LATEST --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "${{ github.ref_name }}" \
             --notes "A frozen record of one version. Living docs: https://docs.cork.tech · other versions: the Releases page.
@@ -282,14 +367,7 @@ jobs:
           import { runTool } from '@cork/core'
           \`\`\`
 
-          The \`cork-*.tgz\` assets are the npm packages, attested and pinned by your lockfile's sha512. Add them to your \`package.json\`:
-
-          \`\`\`json
-          \"dependencies\": {
-            \"@cork/schemas\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
-            \"@cork/core\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-core-${GITHUB_REF_NAME#v}.tgz\"
-          }
-          \`\`\`
+          $SDK_INSTALL
 
           Guide: [docs/sdk.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/sdk.md).
 
@@ -300,13 +378,13 @@ jobs:
           ### Verify
 
           \`\`\`
-          gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml
+          ${VERIFY_PREFIX}gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml --source-ref refs/tags/${{ github.ref_name }} --source-digest ${{ github.sha }}
           \`\`\`
 
           Reproduce it with the same commit and the Bun pinned by mise.toml:
 
           \`\`\`
-          bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }}
+          bun scripts/compile-binaries.mjs --version ${{ github.ref_name }} --commit ${{ github.sha }} --repo ${{ github.repository }}
           \`\`\`
 
           The checksums must match \`checksums.txt\`. Match your host libc to the asset — glibc on glibc, musl on musl. For a same-OS target Bun embeds the host libc, so a musl host that rebuilds \`ch-linux-x64\` gets a correct but different binary.
@@ -317,6 +395,8 @@ jobs:
 
           Cork runs no on-chain deployment of this tool. This is a partner-preview release — unaudited and lightly reviewed; pin the Distribution you integrate against for its stream. A \`-rc\` tag is a release candidate; we flag it pre-release." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt dist/image.txt
+          # A failed readback cannot roll back an immutable publication. Reconcile it before retrying.
+          sh scripts/release-preflight.sh release-readback
 
   # The hosted MCP deployment — an EXCLUDED channel (the Release body says so), so it runs after
   # the Release and cannot hold it back: a Phala failure marks the run red and undoes nothing;
@@ -324,7 +404,7 @@ jobs:
   # declared on the called job) asks exactly "run this attested digest on the production CVM".
   deploy-cvm:
     needs: [publish, apk-repo]
-    if: ${{ needs.apk-repo.outputs.candidate == 'false' }}
+    if: ${{ github.repository == 'Cork-Technology/cork-cli' && needs.apk-repo.outputs.candidate == 'false' }}
     uses: ./.github/workflows/deploy-cvm.yml
     secrets: inherit
     permissions:
