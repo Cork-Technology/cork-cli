@@ -103,8 +103,9 @@ export const REPOINTS: ReadonlyArray<Repoint> = [
   },
   ...["schemas", "core", "mcp"].map((name) => ({
     file: `packages/${name}/package.json`,
-    from: '    "url": "https://github.com/Cork-Technology/cork-cli-private"',
-    to: '    "url": "https://github.com/Cork-Technology/cork-cli"',
+    from: '    "url": "git+https://github.com/Cork-Technology/cork-cli-private.git",',
+    to: '    "url": "git+https://github.com/Cork-Technology/cork-cli.git",',
+    history: [{ from: '    "url": "https://github.com/Cork-Technology/cork-cli-private",', to: '    "url": "https://github.com/Cork-Technology/cork-cli",' }],
   })),
   {
     file: "scripts/apk-spec-identity.sh",
@@ -133,8 +134,9 @@ export const REPOINTS: ReadonlyArray<Repoint> = [
   {
     file: "scripts/release-graph.ts",
     absentInHistory: true,
-    from: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli-private", process.env.RELEASE_TAG);',
-    to: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli", process.env.RELEASE_TAG);',
+    from: '    validateReleaseGraph(admitted, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli-private", process.env.RELEASE_TAG);',
+    to: '    validateReleaseGraph(admitted, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli", process.env.RELEASE_TAG);',
+    history: [{ from: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli-private", process.env.RELEASE_TAG);', to: '    validateReleaseGraph(workflows, process.env.GITHUB_REPOSITORY ?? "Cork-Technology/cork-cli", process.env.RELEASE_TAG);' }],
   },
 ];
 
@@ -187,7 +189,8 @@ export function transformTree(repo: string, privateCommit: string, indexFile: st
     const replaced = content.replace(applicable.from, applicable.to);
     repointed.set(r.file, replaced);
     const blob = git(repo, ["hash-object", "-w", "--stdin"], { input: replaced }).trim();
-    git(repo, ["update-index", "--cacheinfo", `100644,${blob},${r.file}`], { env });
+    const mode = git(repo, ["ls-files", "--stage", "--", r.file], { env }).split(" ")[0]!;
+    git(repo, ["update-index", "--cacheinfo", `${mode},${blob},${r.file}`], { env });
   }
 
   const tree = git(repo, ["write-tree"], { env }).trim();

@@ -165,6 +165,13 @@ describe("port-to-public: the transform is a pure function of the private tree",
     git(["branch", "-f", "public", head]);
   });
 
+  it("preserves executable modes when repointing release scripts", () => {
+    git(["update-index", "--chmod=+x", "scripts/apk-spec-identity.sh"]);
+    git(["commit", "--no-gpg-sign", "-q", "-m", "make release script executable"]);
+    const { head } = portCommits(repo, ["HEAD"], "public", false);
+    expect(git(["ls-tree", head, "scripts/apk-spec-identity.sh"]).split(" ")[0]).toBe("100755");
+  });
+
   it("the exclusion predicate covers every private-only tree", () => {
     for (const p of EXCLUDED_PREFIXES) expect(isExcluded(`${p}anything.txt`)).toBe(true);
     expect(isExcluded(".DS_Store")).toBe(true);

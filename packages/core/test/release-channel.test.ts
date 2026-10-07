@@ -73,7 +73,8 @@ describe("config override and cache boundaries", () => {
   it("explicit cache-file override cannot import another channel, ref or a legacy unscoped cache", () => {
     const file = cacheFile(); vi.stubEnv("CORK_CONFIG_CACHE_FILE", file); vi.stubEnv("CORK_DEFAULTS_URL", "https://config.example/main.json");
     const entry = { fetchedAt: Date.now(), defaults: BUNDLED_DEFAULTS };
-    for (const resource of [{ scope: channelCacheKey(PUBLIC_REPO, "https://config.example/main.json"), entry }, { scope: channelCacheKey(BUILD_REPO, "https://config.example/other.json"), entry }, entry]) {
+    const otherRepo = BUILD_REPO === PRIVATE_REPO ? PUBLIC_REPO : PRIVATE_REPO;
+    for (const resource of [{ scope: channelCacheKey(otherRepo, "https://config.example/main.json"), entry }, { scope: channelCacheKey(BUILD_REPO, "https://config.example/other.json"), entry }, entry]) {
       writeFileSync(file, JSON.stringify(resource)); expect(realConfigDeps().loadCache()).toBeNull();
     }
     realConfigDeps().saveCache(entry); expect(realConfigDeps().loadCache()).toEqual(entry);

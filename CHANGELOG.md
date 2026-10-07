@@ -11,6 +11,8 @@ A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes requ
 
 Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.5 at `4fb7eb3` on 2026-10-07, including the full-answer proof fix. The committed OpenAPI capture is refreshed from production. The API still serves v1 alongside v2; **this CLI/MCP/SDK RFQ surface serves v2 only**, with no v1 compatibility shim. See [the migration guide](docs/cli.md#12-migrate-from-06-to-07) before upgrading.
 
+Public-port preparation also preserves executable release-script modes and handles the actual SDK Git repository URLs and current release-graph validator, including historical spellings. Cache-isolation tests cover either build channel. The public candidate remains unpublished and subject to independent review and release approval.
+
 ### Breaking
 
 - **RFQ v1 is removed from the CLI, MCP and SDK.** Every RFQ read and write from this client goes to `/rfqs/v2`. A version 2 read does not show RFQs that were opened on version 1; the venue still serves its v1 API separately. Bodies carry `schema_version: "2"`, and every address is lowercased, because the venue hashes the lowercased body.
