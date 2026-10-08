@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { ROLL_FILL_DIGEST, RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
+import { ROLL_FILL_DIGEST, ROLL_FILL_HOLDER_ADDRESS, RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
 import corkDefaults from "../cork-defaults.v2.json";
 
 // The mainnet adapter, read from the SAME schema-2 config the stub resolves (the pinned-literal
@@ -276,7 +276,12 @@ export const TASKS: EvalTask[] = [
       tool: "cork_prepare_orders",
       params: { chainId: 42161, account: A, action: { type: "rollover-fill", orderDigest: ROLL_FILL_DIGEST } },
       state: "ok",
-      answer: /(cPT holder|holder of the cPT|order'?s (signer|holder|maker)|signer of the order)[\s\S]{0,120}(premium)|premium[\s\S]{0,160}(cPT holder|signer|order'?s holder)/i,
+      // Grades the CLAIM, not the wording: the answer discusses the premium, names its recipient —
+      // the order's holder, by its address or by any role phrase correct answers use — and never
+      // gives the premium to the filler. Five correct Sonnet answers on 2026-10-08 each named the
+      // holder differently ("order's maker/holder", "holder/user of the resting order", "holder
+      // who signed", "maker who posted"); every one named the holder's address.
+      answer: new RegExp(String.raw`^(?![\s\S]*\b(you|the filler|the (source )?cST holder|the cover holder)\s+(will\s+)?(receive|receives|get|gets|collect|collects|earn|earns|keep|keeps)\b[^.\n]{0,40}\bpremium)(?![\s\S]*\bpremium\b[^.\n]{0,20}\b(is |are |will be |gets? )?(paid|sent|goes|go|flows|credited|transferred) to (you|the filler|your (account|wallet|safe))\b)(?=[\s\S]*\bpremium\b)(?=[\s\S]*(cPT holder|holder of the cPT|order'?s\W{0,3}(signer|holder|maker|owner)|(signer|holder|maker|owner|user)(\/(signer|holder|maker|owner|user))?\W{0,3}\s+of the (resting |signed |rollover )*order|(account|party|address|wallet|holder|user|owner|maker) (that|which|who) (signed|posted|placed|created|made)|${ROLL_FILL_HOLDER_ADDRESS.slice(2, 12)}))`, "i"),
       forbid: ["cork_submit"],
       maxCalls: 3,
     },

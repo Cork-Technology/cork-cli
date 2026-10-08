@@ -512,6 +512,8 @@ export const SIGNED_ROLLOVER_DIGEST = SIGNED_ROLLOVER_BUILT.orderDigest;
 // one world, so the fill pre-flight admits the clone exactly as the settler would.
 const ROLL_FILL_HOLDER = privateKeyToAccount(`0x${"0a".repeat(32)}`);
 const ROLL_FILL_GENERATION = ROLLOVERS_42161.find((g) => g.primary)!;
+/** The cPT holder who signed the resting roll order: the premium's recipient. */
+export const ROLL_FILL_HOLDER_ADDRESS = ROLL_FILL_HOLDER.address;
 export const ROLL_FILL_CLONE = "0x000000000000000000000000000000000000c10e" as const;
 const ROLL_FILL_BUILT = buildRolloverIntent({
   chainId: 42161,

@@ -15,7 +15,7 @@ import { runTool } from "@cork/core";
 import { TASKS } from "./tasks.ts";
 import { PLAYS } from "./self-drive-plays.ts";
 import { DEMO_POOL_ID, DEMO_ACCOUNT } from "@cork/schemas";
-import { SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, CST, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
+import { ROLL_FILL_HOLDER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, CST, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, MIGRATION_NEW_PM, MIGRATION_OLD_POOL, MIGRATION_OLD_PM, stubContext, WATCH_WATERMARK, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
 import {
   ARCHIVED_DIGEST,
   FIRM_ANSWER_ID,
@@ -648,4 +648,37 @@ describe("eval task fixtures — coverage gaps closed 2026-09-23 (generation ali
     expect(env.warnings[0]?.code).toBe("foreign_extension_target");
     expect(env.data).not.toHaveProperty("calldata");
   });
+});
+
+// The answer grader of rollover-fill-as-cover-holder judges the CLAIM — who receives the premium —
+// in any wording a correct answer uses, and refuses every answer that gives the premium to the
+// filler. Its first version, a proximity window, failed two correct Sonnet answers on 2026-10-08
+// ("the order's maker/holder — the account that signed …" a paragraph before "premium"; "the
+// **holder/user** of the resting rollover order"). Both are pinned below, beside the true refund
+// sentence a too-broad guard would have refused (BaseFiller refunds unspent premium to the caller).
+describe("task answer grader: rollover-fill-as-cover-holder", () => {
+  const answer = TASKS.find((t) => t.id === "rollover-fill-as-cover-holder")!.expect.answer as RegExp;
+  const right = [
+    "The cPT holder receives the premium.",
+    "**Premium recipient:** the premium goes to the **holder/user** of the resting rollover order — 0xC171 (the account whose rollover clone posted it). As the filler, **you pay** it.",
+    "The premium you pay flows to the **order's maker/holder** — i.e. the account that signed and posted this rollover order.",
+    "You pay the premium. It goes to the account that signed the order.",
+    "The cPT holder receives the premium; any unspent premium is refunded to you, and the surplus premium is sent back to you.",
+    "Calldata pulls your src cST, pays the premium, delivers minted dst cST to your account. The premium goes to the holder of the order.",
+    "You (the filler, bringing the source cST) **pay** the premium — BaseFiller pulls `premiumToken` from you. It is paid to the **holder who signed the resting rollover order**.",
+    "- **Holder (maker who posted the resting rollover order)**: 0xC171… — the account whose clone the fill interacts with, and the **premium recipient**.",
+    `The premium goes to ${ROLL_FILL_HOLDER_ADDRESS}.`, // the recipient named by its address alone
+  ];
+  const wrong = [
+    "You receive the premium for filling the order; the order's holder signed it.",
+    "The premium is paid to you. The cPT holder signed the order.",
+    "The premium goes to you, and the cPT holder signed the order.",
+    "Your premium flows to your wallet after the fill. The order's holder signed it.",
+    "The cST holder collects the premium.",
+    "You pay the premium and BaseFiller pulls it.", // no recipient named
+    "The cPT holder signed the order.", // the premium is not discussed
+    `You receive the premium; the order came from ${ROLL_FILL_HOLDER_ADDRESS}.`, // the address does not excuse the filler-receives claim
+  ];
+  it.each(right)("passes a correct answer: %s", (a) => expect(answer.test(a)).toBe(true));
+  it.each(wrong)("fails a wrong answer: %s", (a) => expect(answer.test(a)).toBe(false));
 });

@@ -1988,6 +1988,58 @@ const CATALOG: Mutant[] = [
     replace: "decode: (logs) => decodeMarketRows(logs, ms.emitters),",
     tests: [T.hypersync],
   },
+  // ── the answer grader of the eval task rollover-fill-as-cover-holder: each mutant drops or
+  // widens one part of the claim it judges; the pinned right/wrong answers must kill every one.
+  {
+    // The "filler receives the premium" guard is dropped: "You receive the premium" would pass.
+    id: "eval-answer-rollfill-filler-receives-guard-dropped",
+    file: "evals/tasks.ts",
+    find: "(?![\\s\\S]*\\b(you|the filler|the (source )?cST holder|the cover holder)\\s+(will\\s+)?(receive|receives|get|gets|collect|collects|earn|earns|keep|keeps)\\b[^.\\n]{0,40}\\bpremium)",
+    replace: "",
+    tests: [T.taskFixtures],
+  },
+  {
+    // The "premium is paid to you" guard is dropped.
+    id: "eval-answer-rollfill-paid-to-you-guard-dropped",
+    file: "evals/tasks.ts",
+    find: "(?![\\s\\S]*\\bpremium\\b[^.\\n]{0,20}\\b(is |are |will be |gets? )?(paid|sent|goes|go|flows|credited|transferred) to (you|the filler|your (account|wallet|safe))\\b)",
+    replace: "",
+    tests: [T.taskFixtures],
+  },
+  {
+    // The guard learns the refund verbs: a TRUE sentence (unspent premium is refunded to the
+    // caller) would fail a correct answer.
+    id: "eval-answer-rollfill-refund-read-as-receipt",
+    file: "evals/tasks.ts",
+    find: "(paid|sent|goes|go|flows|credited|transferred) to (you|the filler",
+    replace: "(paid|sent|goes|go|flows|credited|transferred|refunded) (back )?to (you|the filler",
+    tests: [T.taskFixtures],
+  },
+  {
+    // The "holder/user of the order" wording is no longer accepted: the second correct Sonnet
+    // answer would fail.
+    id: "eval-answer-rollfill-of-the-order-wording-dropped",
+    file: "evals/tasks.ts",
+    find: "|(signer|holder|maker|owner|user)(\\/(signer|holder|maker|owner|user))?\\W{0,3}\\s+of the (resting |signed |rollover )*order",
+    replace: "",
+    tests: [T.taskFixtures],
+  },
+  {
+    // The holder's address no longer counts as naming the recipient.
+    id: "eval-answer-rollfill-holder-address-dropped",
+    file: "evals/tasks.ts",
+    find: "|${ROLL_FILL_HOLDER_ADDRESS.slice(2, 12)}))`",
+    replace: "))`",
+    tests: [T.taskFixtures],
+  },
+  {
+    // The answer no longer has to discuss the premium at all.
+    id: "eval-answer-rollfill-premium-not-required",
+    file: "evals/tasks.ts",
+    find: "(?=[\\s\\S]*\\bpremium\\b)(?=[\\s\\S]*(cPT holder",
+    replace: "(?=[\\s\\S]*(cPT holder",
+    tests: [T.taskFixtures],
+  },
   // ── rollover roles in prose: the cPT holder signs and asks, the cST
   // holder fills. Each mutant puts back one statement the 0.7.0-rc.2 docs shipped, or drops a
   // guard the detector needs; the docs-freshness suite must kill every one.
