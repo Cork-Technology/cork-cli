@@ -71,7 +71,9 @@ describe("runTool rollover-intent with hooks", () => {
     expect(d.typedData.message.rolloverIntentHash).toBe(d.rolloverIntentHash);
     expect(codes(env)).toContain("owner_managed_funding");
     expect(env.warnings.find((w) => w.code === "owner_managed_funding")!.message).toMatch(/approve the CLONE/u);
-    expect(codes(env)).not.toContain("invalid_order_terms");
+    // The only invalid_order_terms left is the floors notice (no floors are passed here); the
+    // no-hooks notice is gone.
+    expect(env.warnings.some((w) => /NO intent hooks/u.test(w.message))).toBe(false);
   });
 
   it("explicit hooks pass through the same shape rule the venue applies; no hooks at all is warned, never silently signed", async () => {
@@ -102,6 +104,27 @@ describe("runTool rollover-intent with hooks", () => {
     expect(exact.warnings.find((w) => w.code === "owner_managed_funding")!.message).not.toMatch(/standing across fills/u);
     const underfill = await prepare({ allowUnderfill: true, standardHooks: { srcCptToken: SRC_CPT, dstCptToken: DST_CPT } });
     expect(decodeFunctionData({ abi: ownerTokenPullModuleAbi, data: ((underfill.data as Data).venuePost.intent.preRolloverHooks[0] as { callData: `0x${string}` }).callData }).args).toEqual([SRC_CPT, 10n ** 18n, true]);
+  });
+
+  it("a slippage floor left out is named as signed-zero; a stated floor is silent", async () => {
+    const floorNotice = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.filter((w) => w.code === "invalid_order_terms" && /^no slippage floor/u.test(w.message)).map((w) => w.message);
+    const hooks = { standardHooks: { srcCptToken: SRC_CPT, dstCptToken: DST_CPT } };
+    const none = await prepare(hooks);
+    expect(none.state).toBe("ok");
+    expect(floorNotice(none)).toHaveLength(1);
+    expect(floorNotice(none)[0]).toMatch(/^no slippage floor: minCaReceived \(.*\) and minSharesOut \(.*\) are not set and will be SIGNED as 0/u);
+    // What the notice names is what the venue post carries.
+    expect((none.data as { venuePost: { order: { rolloverParams: Record<string, string> } } }).venuePost.order.rolloverParams).toMatchObject({ minCaReceived: "0", minSharesOut: "0" });
+    const caOnly = await prepare({ minCaReceived: "1", ...hooks });
+    expect(floorNotice(caOnly)).toHaveLength(1);
+    expect(floorNotice(caOnly)[0]).toMatch(/^no slippage floor: minSharesOut \(.*\) is not set/u);
+    expect(floorNotice(caOnly)[0]).not.toMatch(/minCaReceived/u);
+    const sharesOnly = await prepare({ minSharesOut: "1", ...hooks });
+    expect(floorNotice(sharesOnly)[0]).toMatch(/^no slippage floor: minCaReceived \(.*\) is not set/u);
+    expect(floorNotice(sharesOnly)[0]).not.toMatch(/minSharesOut/u);
+    const both = await prepare({ minCaReceived: "1", minSharesOut: "1", ...hooks });
+    expect(both.state).toBe("ok");
+    expect(floorNotice(both)).toHaveLength(0);
   });
 
   it("a generation without configured modules refuses standardHooks and points at explicit hooks", async () => {

@@ -333,7 +333,7 @@ describe("readRfqCover — what the request itself contradicts (pure, chain-free
     expect(none.cover.fixed).toEqual({ rateOverride: null });
     const max = read(["fixed_rate"], FIX, fixBlock({ rate_override: UINT256_MAX.toString() }));
     expect(codes(max.warnings)).toEqual(["invalid_order_terms"]);
-    expect(max.warnings[0]!.message).toMatch(/is uint256's maximum: the fixed recipe's window is rate \.\. rate \+ 1, which overflows.*the venue admits the value; the chain does not/u);
+    expect(max.warnings[0]!.message).toMatch(/is uint256's maximum: the fixed recipe's window is rate \.\. rate \+ 1, which overflows.*the recipe helper does not.*the recipe helper resolves 1 \.\. MAX − 1.*create-pool with the EXPLICIT constraint/u);
     expect(max.cover.fixed).toEqual({ rateOverride: UINT256_MAX.toString() });
     expect(read(["fixed_rate"], FIX, fixBlock({ rate_override: (UINT256_MAX - 1n).toString() })).warnings).toEqual([]);
   });

@@ -114,6 +114,34 @@ describe("release-toolchain preflight — the real workflow files", () => {
     expect(workflow.match(/^ *# Pinned \d{4}-\d{2}-\d{2}: the image built \S+\.$/gm)?.length).toBe(1);
   });
 
+  it("the release-toolchain workflow runs the script on push, on pull requests, and weekly with the age limit", () => {
+    const wf = readFileSync(join(root, ".github/workflows/release-toolchain.yml"), "utf8");
+    const triggers = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\npermissions:"));
+    // Pushes to main AND to a release branch run it: release candidates are tagged from their
+    // public release/vX.Y.Z branch, so that branch needs the same evidence main gets.
+    expect(triggers).toMatch(/^ {2}push:\n {4}branches: \[main, "release\/v\*"\]$/m);
+    expect(triggers).toMatch(/^ {2}pull_request:$/m);
+    expect(triggers).toMatch(/^ {2}schedule:\n {4}- cron: "\d+ \d+ \* \* [0-6]"/m);
+    expect(triggers).toMatch(/^ {2}workflow_dispatch:$/m);
+    // The preflight job alone (the rehearsal jobs below it have their own tests).
+    const job = wf.slice(wf.indexOf("\n  preflight:\n"), wf.indexOf("\n  # The apk build of the release, rehearsed"));
+    expect(job.length).toBeGreaterThan(100);
+    // The exact commands, to the end of the line: `--list` would print and check nothing.
+    const steps = [...job.matchAll(/^ {8}if: (.+)\n {8}run: (.+)$/gm)].map((m) => [m[1], m[2]]);
+    expect(steps).toEqual([
+      ["github.event_name == 'push' || github.event_name == 'pull_request'", "sh scripts/release-toolchain-preflight.sh"],
+      ["github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "sh scripts/release-toolchain-preflight.sh --max-age-days 30"],
+    ]);
+    // The job runs on the bare runner and starts its own containers: no job container here.
+    expect(job).not.toMatch(/^\s+container:/m);
+    // As YAML keys, in the whole file (the header comment may use the words): no secret, no environment.
+    expect(wf).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(wf).not.toMatch(/^\s+environment:/m);
+    // actionlint reads every workflow as GitHub does, from an image pinned by version AND digest.
+    expect(job).toMatch(/^ {8}run: docker run --rm -v "\$PWD:\/repo" -w \/repo rhysd\/actionlint:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} -shellcheck= -pyflakes=$/m);
+    expect(wf).toMatch(/^permissions:\n {2}contents: read$/m);
+  });
+
 });
 
 describe("release-toolchain preflight — the run", () => {

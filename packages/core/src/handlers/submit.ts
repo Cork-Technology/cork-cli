@@ -14,8 +14,10 @@ import { parseQuotedOrder } from "../rfq-quotes.ts";
 import { answerOptionOrderViolation, checkQuotedOptions, proveRfqWrite, readRfqTarget, resolveRfqAuth, rfqKindFieldsViolation, signatureRefused } from "./rfq-write.ts";
 import { checkRolloverWrite, readRolloverQuote } from "./rfq-rollover.ts";
 import { rolloverQuoteRefMismatch } from "../rfq-rollover.ts";
-import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, rfqAnswerUnderwriter, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { venueNoticeWarnings } from "./query.ts";
+import { answerOptionsCoverWarnings } from "./cover-mode.ts";
+import { resolveCitation } from "./rfq-citation.ts";
 
 /**
  * The venue's PremiumFractionSchema, replicated operation-for-operation (cork-api
@@ -101,31 +103,14 @@ export function resolveListingPremium(premium: number | undefined, premiumAnnual
   return { ok: true, premiumPct: Number.parseFloat(premiumAnnualized) * 100 };
 }
 
-/** The shape of one embedded answer row on the venue's RFQ single-get (answers[]): the
- *  underwriter that posted it rides beside the payload, so a citation resolves to BOTH the
- *  option and the party who authored it. */
-interface CitedAnswer {
-  answer_id?: unknown;
-  underwriter?: unknown;
-  answer?: { options?: Array<Record<string, unknown>> };
+/** The listing's `expiry` as the venue takes it: the field is ABSENT for an order whose signed
+ *  makerTraits carry no expiry. The venue's schema is `positive().optional()`, so 0 is a 400
+ *  ("Too small"), and its route refuses a present field beside no-expiry traits ("Expiry
+ *  mismatch"). Our own listing says 0 = no expiry; the two meet here. */
+export function lopListingExpiry(expiry: number): { expiry?: number } {
+  return expiry === 0 ? {} : { expiry };
 }
 
-/**
- * Resolve a quote citation inside a fetched RFQ record: the cited ANSWER (which names the
- * underwriter who posted it) and the cited OPTION within it. The venue validates citations
- * against its DATABASE (post-order / post-counter read rfq_answers by id), but the single-get
- * embed we pre-flight against is READ-BOUNDED (READ_LIMIT rows, flagged `truncated`) — so a
- * missing ANSWER proves absence only when the embed is complete. `unresolved` = the answer may
- * exist beyond the truncation horizon; the caller relays and lets the venue's full-store check
- * rule. A missing OPTION inside a resolved answer is definitive: an embedded answer row carries
- * its whole payload.
- */
-function resolveCitation(rfq: Record<string, unknown>, answerId: string, optionId: string): { answer: CitedAnswer | undefined; option: Record<string, unknown> | undefined; unresolved: boolean } {
-  const answers = (rfq.answers ?? []) as CitedAnswer[];
-  const answer = answers.find((a) => String(a.answer_id) === answerId);
-  const option = answer?.answer?.options?.find((o) => String(o.option_id) === optionId);
-  return { answer, option, unresolved: answer === undefined && rfq.truncated === true };
-}
 
 export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
@@ -518,7 +503,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // when both are present and neither is the maker; otherwise the venue's full store
         // decides (a relay must never out-reject its venue).
         const requester = (rfq.request as Record<string, unknown> | undefined)?.requester;
-        const underwriter = cited.answer?.underwriter;
+        const underwriter = rfqAnswerUnderwriter(cited.answer);
         const parties = [requester, underwriter].filter((p): p is string => typeof p === "string");
         const makerIsParty = parties.some((p) => p.toLowerCase() === action.order.maker.toLowerCase());
         const partiesKnown = typeof requester === "string" && typeof underwriter === "string";
@@ -549,7 +534,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           if (typeof optCollateral === "string" && ![action.order.makerAsset.toLowerCase(), action.order.takerAsset.toLowerCase()].includes(optCollateral.toLowerCase())) {
             return unavailable(chainId, "invalid_order_terms", `quote_ref option's collateral asset ${optCollateral} is not a leg of this order (${action.order.makerAsset} / ${action.order.takerAsset}) — the cited option must describe THIS order (venue 400)`, ctx);
           }
-          const quotedOrderProblem = quotedOrderCitationViolation({ chainId, option, underwriter: cited.answer?.underwriter, maker: action.order.maker, orderHash });
+          const quotedOrderProblem = quotedOrderCitationViolation({ chainId, option, underwriter: rfqAnswerUnderwriter(cited.answer), maker: action.order.maker, orderHash });
           if (quotedOrderProblem) return unavailable(chainId, "invalid_order_terms", quotedOrderProblem, ctx);
           // Deliberately STRICTER than the venue on one point: a cited premium that does not
           // parse to a positive number makes the venue skip its band silently — here that is a
@@ -622,7 +607,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         // The removed percent `premium` is never relayed — resolveListingPremium refuses any
         // payload carrying it before this point (the venue 400s on presence since 0.3.15).
         premium_annualized: action.premiumAnnualized!,
-        expiry: action.expiry,
+        ...lopListingExpiry(action.expiry),
         nonce: action.nonce,
         allowsPartialFills: action.allowsPartialFills,
         chainId,
@@ -827,6 +812,9 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     // Each quoted order held to its option and proven by the underwriter before relay [K3].
     const quotedCheck = action.status === "quoted" && target.kind !== "rollover" ? await checkQuotedOptions(ctx, chainId, target.rfq, action.underwriter, action.options ?? []) : { ok: true as const, quoted: [], warnings: [] };
     if (!quotedCheck.ok) return quotedCheck.envelope;
+    // Each option's LABEL against the cover its template's recipe gives, and against the covers
+    // the request asks for — from identities, never the label (cork-cli#6). Relayed either way.
+    const coverWarnings = action.status === "quoted" && target.kind !== "rollover" ? await answerOptionsCoverWarnings(chainId, target.rfq, action.options ?? []) : [];
     const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
     // This top-level signature covers the option terms the order signatures do not. The venue
     // verifies it on quoted answers from cork-api PR #113 onward; older 0.4.5 builds did not.
@@ -834,7 +822,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     const proof = await proveRfqWrite(ctx, plan, auth.auth);
     if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
     const res = await postRfqAnswer(deps, action.rfqId, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
-    return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure, quotedOrders: quotedCheck.quoted, ...(rolloverCheck.options !== undefined ? { rolloverOptions: rolloverCheck.options } : {}) }), [...proof.warnings, ...quotedCheck.warnings, ...rolloverCheck.warnings]);
+    return mapPost(res, (body, replay) => ({ kind: "rfq-answer", accepted: true, replay, answerId: body.answer_id ?? null, rfqId: action.rfqId, rfqKind: plan.body.kind, bodyHash: plan.bodyHash, signer: plan.signer, signerType: proof.how, auth: proof.disclosure, quotedOrders: quotedCheck.quoted, ...(rolloverCheck.options !== undefined ? { rolloverOptions: rolloverCheck.options } : {}) }), [...proof.warnings, ...quotedCheck.warnings, ...coverWarnings, ...rolloverCheck.warnings]);
   } catch (err) {
     return venueFailed(chainId, err, ctx);
   }

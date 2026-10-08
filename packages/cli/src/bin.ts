@@ -45,6 +45,10 @@ if (argv[0] === "mcp") {
         "                   Set it ONLY behind an ingress you control (also CORK_MCP_TRUST_FORWARDED_FOR=1);\n" +
         "                   without it every caller behind a proxy shares one per-client slot set.\n" +
         "Bearer auth: set CORK_MCP_TOKEN (unset = open, which is the public deployment's shape).\n" +
+        "/readyz: the public body is a SUMMARY (one degraded flag per subsystem). The full snapshot\n" +
+        "(RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) answers a request\n" +
+        "presenting the MCP bearer or CORK_MCP_DIAGNOSTICS_TOKEN as a bearer — the latter unlocks it\n" +
+        "without gating /mcp.\n" +
         "Admission (always on): 1 MiB body, JSON depth 32, batch 50, 8 in-flight per client, 64 per\n" +
         "server, 30 s deadline. Per-client accounting keys on the socket peer unless --trust-forwarded-for\n" +
         "is set (then on the LAST X-Forwarded-For hop); the ingress still owns rate and connection limits.\n",
@@ -97,13 +101,23 @@ if (argv[0] === "mcp") {
     // declared in package.json so the package graph stays honest.
     const { startHttpServer } = await import("../../mcp/src/http.ts");
     const token = process.env.CORK_MCP_TOKEN;
+    // A second, read-only bearer: it unlocks the full /readyz view and nothing else, so an OPEN
+    // deployment's operator can read hosts/breakers/in-flight counts remotely while /mcp stays
+    // open. Never logged, like the MCP token.
+    const diagnosticsToken = process.env["CORK_MCP_DIAGNOSTICS_TOKEN"];
     const trustForwardedFor = argv.includes("--trust-forwarded-for") || process.env["CORK_MCP_TRUST_FORWARDED_FOR"] === "1";
-    const server = startHttpServer(port, { ctx, ...(host !== undefined ? { host } : {}), ...(trustForwardedFor ? { trustForwardedFor } : {}), ...(token !== undefined && token !== "" ? { token } : {}) });
+    const server = startHttpServer(port, {
+      ctx,
+      ...(host !== undefined ? { host } : {}),
+      ...(trustForwardedFor ? { trustForwardedFor } : {}),
+      ...(token !== undefined && token !== "" ? { token } : {}),
+      ...(diagnosticsToken !== undefined && diagnosticsToken !== "" ? { diagnosticsToken } : {}),
+    });
     // Register BEFORE announcing readiness: an orchestrator may stop the container the moment
     // it sees the ready line, and a signal that lands before the handler exists takes the
     // default action (found by the spawn test under load).
     exitOnSignal(() => server.stop());
-    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}\n`);
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}; /readyz full view ${token || diagnosticsToken ? `by bearer (${[token ? "CORK_MCP_TOKEN" : "", diagnosticsToken ? "CORK_MCP_DIAGNOSTICS_TOKEN" : ""].filter(Boolean).join(", ")})` : "summary only (set CORK_MCP_DIAGNOSTICS_TOKEN)"}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

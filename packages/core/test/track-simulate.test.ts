@@ -82,3 +82,56 @@ describe("cork_track simulate (frozen-bytes dry-run)", () => {
     expect(env.warnings[0]?.code).toBe("requires_rpc");
   });
 });
+
+describe("cork_track simulate: a clean answer must mean something", () => {
+  // Measured live 2026-10-02: a Base registry call that REVERTS on Base read wouldRevert:false
+  // when chainId was omitted — it ran on mainnet, where the target has no code, and a call to an
+  // address without code succeeds and does nothing.
+  const withCode = (code: string | Error | undefined, callOk: `0x${string}` = "0x"): HandlerContext => ({
+    nowSeconds: 1_790_000_000n,
+    resolveRpc: async () =>
+      stubResolved({
+        call: async () => ({ data: callOk }),
+        estimateGas: async () => 21_000n,
+        getCode: async () => {
+          if (code instanceof Error) throw code;
+          return code;
+        },
+      }),
+  });
+  const run = (input: Record<string, unknown>, c: HandlerContext) => runTool("cork_track", { mode: "simulate", subject: { kind: "artifact", artifact: { to: TO, data: "0xdeadbeef", from: ACCT } }, format: "concise", ...input }, c);
+
+  it("an omitted chainId is said: the artifact carries no chain, and mainnet is a guess", async () => {
+    const env = await run({}, withCode("0x6080"));
+    expect(env.state).toBe("ok");
+    expect(env.provenance.chainId).toBe(1);
+    expect(env.warnings.find((w) => w.code === "chainid_defaulted")!.message).toMatch(/simulated on chainId 1 \(mainnet\).*pass the chainId you prepared with/u);
+    expect((await run({ chainId: 8453 }, withCode("0x6080"))).warnings.some((w) => w.code === "chainid_defaulted")).toBe(false);
+    // Also on the revert branch.
+    const reverting: HandlerContext = { nowSeconds: 1_790_000_000n, resolveRpc: async () => stubResolved({ call: async () => { throw new Error("execution reverted: X"); }, estimateGas: async () => 1n }) };
+    expect((await run({}, reverting)).warnings.map((w) => w.code)).toEqual(expect.arrayContaining(["chainid_defaulted", "would_revert"]));
+  });
+
+  it("a target WITHOUT code: wouldRevert:false is labeled as saying nothing", async () => {
+    for (const empty of ["0x", undefined]) {
+      const env = await run({ chainId: 8453 }, withCode(empty));
+      expect(env.state).toBe("ok");
+      expect(env.data).toMatchObject({ wouldRevert: false, targetHasCode: false });
+      expect(env.warnings.find((w) => w.code === "unknown_target")!.message).toMatch(new RegExp(`the target ${TO} has NO code on chainId 8453.*wouldRevert:false says nothing`, "u"));
+    }
+    // A target with code is the expected state and stays quiet.
+    const live = await run({ chainId: 8453 }, withCode("0x6080"));
+    expect(live.data).toMatchObject({ wouldRevert: false, targetHasCode: true });
+    expect(live.warnings.some((w) => w.code === "unknown_target")).toBe(false);
+  });
+
+  it("a code read that FAILS is not a verdict, and a plain value transfer (empty data) is not judged", async () => {
+    const outage = await run({ chainId: 8453 }, withCode(new Error("fetch failed")));
+    expect(outage.state).toBe("ok");
+    expect((outage.data as Record<string, unknown>)["targetHasCode"]).toBeUndefined();
+    expect(outage.warnings.some((w) => w.code === "unknown_target")).toBe(false);
+    const transfer = await runTool("cork_track", { mode: "simulate", chainId: 8453, subject: { kind: "artifact", artifact: { to: TO, data: "0x", from: ACCT } }, format: "concise" }, withCode("0x"));
+    expect((transfer.data as Record<string, unknown>)["targetHasCode"]).toBeUndefined();
+    expect(transfer.warnings.some((w) => w.code === "unknown_target")).toBe(false);
+  });
+});

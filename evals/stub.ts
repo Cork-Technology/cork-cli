@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, splitPermitSignature, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
@@ -259,7 +259,8 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       }
       const d = decodeJitExtraData("flat", bytes);
       const { extraData, oracleSalt: _noSalt, ...rest } = d.params;
-      return [{ ...rest, additionalData: extraData }, d.permits];
+      // The flat adapter returns its own v/r/s permit rows.
+      return [{ ...rest, additionalData: extraData }, d.permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, ...splitPermitSignature(p.signature)! }))];
     }
     case "LIMIT_ORDER_PROTOCOL":
       return BUNDLED_DEFAULTS.lopAddresses[String(chainId)] ?? BUNDLED_DEFAULTS.lopAddresses["1"]!;

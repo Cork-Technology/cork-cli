@@ -98,6 +98,18 @@ export function coverKindOfConstraint(c: { rateMin: bigint; rateChangePerDayMax:
 const PERCENT_SCALE = 100n * 10n ** 18n;
 const UINT256_MAX = 2n ** 256n - 1n;
 
+/** The fixed recipe's RESOLVABLE domain is 1 .. uint256 max − 1: its window is rate .. rate + 1,
+ *  and `resolve` computes rate + 1, which overflows at the top of uint256 (Panic 0x11). That is
+ *  a limit of the HELPER, not of pool creation: CorkMarketCreator.createNewPool accepts the
+ *  explicit constraint [MAX − 1, MAX] with rateOverride MAX (simulated on a Base fork at the
+ *  phoenix/v0.4-rc.1 creator, 2026-10-07 — cork-cli#5; [MAX, MAX] reverts InvalidParams). The
+ *  note every resolving path appends, so a refusal at MAX names what is refused and what is
+ *  not. Undefined for any other rate. */
+export function fixedRateBoundaryNote(rate: bigint): string | undefined {
+  if (rate !== UINT256_MAX) return undefined;
+  return "This is the recipe HELPER's limit, not the chain's: FixedRateRecipe.resolve computes rate + 1 and overflows at uint256's maximum (Panic 0x11), so the recipe helper resolves 1 .. MAX − 1 and every path that resolves the constraint from the recipe — derive-cork-pool, answer-rfq, a JIT order or create-pool without an explicit constraint — refuses here, deterministically. The pool itself can be created: cork_prepare_market create-pool with the EXPLICIT constraint { rateMin: MAX − 1, rateMax: MAX, rateChangePerDayMax: 0, rateChangeCapacityMax: 0 } and rateOverride MAX passes the creator's checks (simulated on a Base fork, 2026-10-07), and a plain maker-order then quotes on the created pool";
+}
+
 /** The impairment recipe's band on the PERCENTAGE scale (1e18 = 1%): apySpreadPercentage ×
  *  durationSeconds / 365 days — the arithmetic both recipe generations state in their own
  *  description. The band is how far the pool's rate may END UP below the anchor: the WORST-case
@@ -298,7 +310,7 @@ function fixedReading(recipe: `0x${string}`, rateOverride: bigint | undefined): 
   const overflow = rateOverride === UINT256_MAX;
   return {
     fixed: { rateOverride: rateOverride.toString() },
-    warnings: overflow ? [{ code: "invalid_order_terms", message: `rate_override ${rateOverride} is uint256's maximum: the fixed recipe's window is rate .. rate + 1, which overflows, so recipe.resolve reverts and no pool can be created at this rate (the venue admits the value; the chain does not)` }] : [],
+    warnings: overflow ? [{ code: "invalid_order_terms", message: `rate_override ${rateOverride} is uint256's maximum: the fixed recipe's window is rate .. rate + 1, which overflows — recipe.resolve reverts, so no RESOLVING path builds this quote (the venue admits the value; the recipe helper does not). ${fixedRateBoundaryNote(rateOverride)}` }] : [],
   };
 }
 

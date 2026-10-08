@@ -135,6 +135,11 @@ const JitSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — 
 const JitUnwindSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — creation only. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 // The creator twins: same unit story, same bound, but a direct tx creates the pool — "this fill"
 // would be the wrong actor. Kept beside the JIT pair so the four stay in one frame.
+// The answer-rfq twins carry NO default: an absent fee there means "the template's", and a
+// default would arrive looking like the caller's explicit "0" and override the template (the
+// fees are part of the pool id on a 10-field generation).
+const AnswerSwapFeeWire = UintStr.optional().describe(`PERCENTAGE, 1e18 = 1% — consumed only if this fill creates the pool. Omitted: the template's swap_fee_wad, else 0. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
+const AnswerUnwindSwapFeeWire = UintStr.optional().describe(`PERCENTAGE, 1e18 = 1% — creation only. Omitted: the template's unwind_swap_fee_wad, else 0. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 const CreatorSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — consumed only if this call creates the pool. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 const CreatorUnwindSwapFeeWire = UintStr.default("0").describe(`PERCENTAGE, 1e18 = 1% — creation only. ${FEE_BOUND}`).meta({ "x-units": X_UNITS.pct18 });
 
@@ -166,9 +171,10 @@ const Erc2612PermitWire = z.strictObject({
   token: Address,
   value: TokenAmount.describe("amount the permit approves — the (predicted) cST, always 18 decimals; sign the permit over the predicted cST address the prepare result reports"),
   deadline: UnixSeconds,
-  v: z.number().int().min(0).max(255),
-  r: Bytes32,
-  s: Bytes32,
+  signature: Hex.optional().describe("the permit signature as bytes — the canonical form. An EOA signs 65 bytes (r‖s‖v). On the nested wire (the phoenix/v0.4-rc.1 primary, adapter 0.5.0+) a contract wallet (ERC-1271, e.g. a Safe) can sign too: pass its signature bytes. The flat (0.3.x) wire takes a 65-byte ECDSA signature only. Pass this OR v/r/s, not both"),
+  v: z.number().int().min(0).max(255).optional().describe("ECDSA v — the older split form, accepted for backward compatibility; pass all three of v/r/s, or `signature` instead"),
+  r: Bytes32.optional().describe("ECDSA r — the older split form (see v)"),
+  s: Bytes32.optional().describe("ECDSA s — the older split form (see v)"),
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -585,7 +591,7 @@ const MakerJitMarketWire = z
           .array(Erc2612PermitWire)
           .max(8)
           .optional()
-          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (spender is always the LOP; an EOA or, on the nested wire, a contract wallet through ERC-1271 can sign) — needed to let the LOP pull a just-created cST; the result reports the predicted cST address to sign the permit over"),
         legacy: z.boolean().optional().describe("build against the DEPRECATED pre-2.1.0 adapter/registry generation (mode-string extraData, constraint derived at FILL time) — requires CORK_ENABLE_DEPRECATED=1 and `mode`. Kept because that adapter still holds the controller roles until governance grants the 2.1.0 ones"),
       })
       .optional()
@@ -682,7 +688,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
           .array(Erc2612PermitWire)
           .max(8)
           .optional()
-          .describe("pre-signed ERC-2612 permits the adapter executes after the mint — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
+          .describe("pre-signed ERC-2612 permits the adapter executes after the mint (an EOA or, on the nested wire, a contract wallet through ERC-1271 can sign) — owner is the TAKER (the party served by this hook), spender is always the LOP; needed so the LOP can pull the just-minted cST from the taker. The result reports the predicted cST address to sign the permit over"),
       })
       .optional()
       .describe(
@@ -699,8 +705,16 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .describe("emit the unsigned fill as a call to a Cork ForSelf ADAPTER (fillOrderForSelf) instead of raw LOP calldata — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The wrapper structurally forces the bought asset to the CALLER, disables taker interactions and Permit2 sourcing, pulls the taker asset from the caller up to the slippage cap and sweeps back the unspent remainder, and binds the fill to `poolId`. Approve the ORDER's taker asset to the ADAPTER (not the LOP). Mutually exclusive with receiver, interaction, and jitMarket — lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path"),
     maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue orderbook pages searched for the resting order; an exhausted bound fails closed as pagination_incomplete. Ignored when `signedOrder` is supplied (no venue search happens)"),
   }).describe("unsigned fill calldata for a resting order: fetches the signed order from the venue book by `orderHash` (or takes it inline via `signedOrder`, venue-free), locally re-hashes and verifies it, then emits canonical 1inch v6 fillOrder(Args) calldata (uint256 tuple selector) with the extension/receiver/interaction args layout when needed — or, with `forSelf`, an unsigned call to an integrator-deployed Cork ForSelf adapter's fillOrderForSelf for parameter-blind session-key wallets — never signs or broadcasts"),
-  A("cancel", { orderHash: Bytes32, makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order — the traits decide what the cancel retires: on the bit invalidator (every Cork-built order) the (maker, nonce) bit, so a shared-nonce ocoGroup ladder is retired by cancelling ANY one rung") })
-    .describe("on-chain cancel calldata for a resting LOP order you made; the result names what the cancel retires (`retires`: the invalidator mode, the nonce, and the scope)"),
+  A("cancel", {
+    orderHash: Bytes32,
+    makerTraits: UintStr.describe("the order's makerTraits value, verbatim from the resting order — the traits decide what the cancel retires: on the bit invalidator (every Cork-built order) the (maker, nonce) bit, so a shared-nonce ocoGroup ladder is retired by cancelling ANY one rung"),
+    scope: z
+      .enum(["order", "slot"])
+      .default("order")
+      .describe("what the transaction retires. `order` (default) = LOP.cancelOrder: this order's bit (and so every order sharing its nonce — an ocoGroup ladder), chain-free, no venue contact. `slot` = LOP.bitsInvalidateForOrder: the order's bit PLUS the bit of every other resting order of yours in the same 256-bit slot word (nonce >> 8), read from the venue book by `maker` = account, in ONE transaction; the result lists every order the sweep retires (`retires.orders`) with its relation (shared-bit | same-slot). Only for a bit-invalidator order (every Cork-built order; a remaining-invalidator order refuses — the LOP reverts OrderIsNotSuitableForMassInvalidation). Honest sizing: Cork derives nonces from keccak seeds, so two INDEPENDENT orders share a slot in about one pair in 2^32 — the sweep retires more than `order` only when nonces were pinned to one slot (SDK `nonce`) or a foreign tool chose them; the result says when it found no sibling"),
+    maxPages: z.number().int().min(1).max(50).default(10).describe("scope `slot` only: hard bound on venue orderbook pages read for your resting orders; an exhausted bound fails closed as pagination_incomplete (a mask built from a partial book would under-sweep and the retires list would lie)"),
+  })
+    .describe("on-chain cancel calldata for a resting LOP order you made; the result names what the cancel retires (`retires`: the invalidator mode, the nonce, the scope — and under scope `slot` every resting order the mask retires, from the book)"),
   A("rollover-intent", {
     settler: Address.describe("CorkSettler to bind to: ExactSettler (all-or-nothing) or PartialSettler (partial fills) — mode gate must match allowPartialFills"),
     rolloverContract: Address,
@@ -807,7 +821,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
     fillSender: Address.optional().describe("reserve for THIS LOP caller: the requester's own address when you know it calls the LOP itself, or its ForSelf ADAPTER when it fills through one (the adapter is the LOP's msg.sender there). Overrides the RFQ's declared fill_sender"),
     expirySeconds: z.number().int().min(1).max(315576000).optional().describe("order expiry, RELATIVE seconds; default = the venue's re-rest rule max(90 s, min(10 min, half the RFQ's remaining validity)) — a resting answer is re-rested each window until lifted or the RFQ lapses (refresh-order)"),
     ocoGroup: z.string().min(1).max(128).optional().describe("one-cancels-the-other group key; default 'rfq:<rfqId>' so every rung answering this RFQ shares one bit — a revision at a better price retires the earlier rung on the first fill, and only one answer can ever fill. Pass ONE key across several RFQs to answer them all with one capacity: the first fill wins, the rest die"),
-    jitMarket: MakerJitMarketWire.unwrap().omit({ collateralAsset: true, referenceAsset: true, expiryTimestamp: true, mode: true, legacy: true }).partial().optional().describe("the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; extraData is likewise DERIVED from that template's oracle_params when omitted (cork-inline-liquidity/1 → the anchor word, cork-inline-impairment/1 → its three words, so an RFQ carrying a complete block needs NO jitMarket at all) and passes through as an override when given, as do constraint/fees/oracleSalt/enableJitMint/permits. For a FIXED recipe (a fixed_rate request, venue 0.4.4) the template's oracle_params.rate_override becomes the order's rateOverride and no bytes ride; a rateOverride passed here wins, and one that differs from the RFQ's is built as a counter-proposal — another rate is another pool"),
+    jitMarket: MakerJitMarketWire.unwrap().omit({ collateralAsset: true, referenceAsset: true, expiryTimestamp: true, mode: true, legacy: true }).partial().extend({ swapFeePercentage: AnswerSwapFeeWire, unwindSwapFeePercentage: AnswerUnwindSwapFeeWire }).optional().describe("the JIT market block minus the three legs the RFQ supplies (collateral, reference, expiry): `recipe` is required unless the cited option's or the RFQ's market_template names inline.oracle_recipe; extraData is likewise DERIVED from that template's oracle_params when omitted (cork-inline-liquidity/1 → the anchor word, cork-inline-impairment/1 → its three words, so an RFQ carrying a complete block needs NO jitMarket at all) and passes through as an override when given, as do constraint/fees/oracleSalt/enableJitMint/permits. For a FIXED recipe (a fixed_rate request, venue 0.4.4) the template's oracle_params.rate_override becomes the order's rateOverride and no bytes ride — the RFQ's template on an uncited answer, the CITED option's own template on a cited one (a cited option that names no rate refuses: pass the rate here, or `useRequestedRate`); a rateOverride passed here wins, and one that differs from the RFQ's is built as a counter-proposal — another rate is another pool"),
+    useRequestedRate: z.boolean().default(false).describe("FIXED recipe only: build at the frozen rate the RFQ itself asks for (its market_template.inline.oracle_params.rate_override) — the same as passing that rate as jitMarket.rateOverride, without retyping it. The way to cite an option that names no rate of its own; when the cited option names ANOTHER rate the difference is warned (the order then backs another pool than the quote it cites). Mutually exclusive with jitMarket.rateOverride; refused when the RFQ names no rate, or when the recipe reads an oracle. An uncited answer builds at the RFQ's rate already"),
     usePermit2: z.boolean().default(false).describe("source the cST through Permit2 at fill time (see maker-order.usePermit2)"),
     allowsPartialFills: z.boolean().default(false).describe("cover answers are all-or-nothing by default (the requester asked for one notional); true allows a smaller fill — which still spends the bit"),
   }).describe("answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"),
@@ -871,7 +886,7 @@ export const PrepareMarketInput = z.object({
       swapFeePercentage: CreatorSwapFeeWire,
       unwindSwapFeePercentage: CreatorUnwindSwapFeeWire,
     })
-      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE smart-account path around EOA-only ERC-2612 JIT permits: batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
+      .describe("unsigned CorkMarketCreator.createNewPool(params) tx: create the pool a JIT order derives, AHEAD of the fill — the same derivation and the same checks a fill runs (recipe membership → oracle deploy → constraint verify → fee/expiry bounds), permissionless and IDEMPOTENT (an existing pool is a lookup returning poolId + share addresses). The params follow the target generation's registry wire (the 0.5.0 creator's 10-field MarketParams with extraData + oracleSalt on the phoenix/v0.4-rc.1 primary; the periphery creator's 9-field struct on phoenix/v0.3-rc.1). THE permit-free path (needed by a smart account on the flat 0.3.x wire, whose JIT permits are ECDSA-only; on the nested wire a smart account can instead sign the JIT permit through ERC-1271): batch createNewPool → cst.approve(the LOP) → the fill with no permits and enableJitMint false"),
   ]),
   format: Format,
 });

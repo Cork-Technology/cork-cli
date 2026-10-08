@@ -7,7 +7,7 @@
 #   - The image MUST stay pinned by @sha256 digest. A floating tag would make the measurement
 #     meaningless (the hash would no longer identify the code). ${DIGEST} is substituted by CI
 #     with the exact digest apko-publish pushed and attested (gh attestation).
-#   - Secrets (ENVIO tokens, CORK_MCP_TOKEN, a private CORK_RPC_URL) are set as ENCRYPTED CVM
+#   - Secrets (ENVIO tokens, CORK_MCP_TOKEN, CORK_MCP_DIAGNOSTICS_TOKEN, a private CORK_RPC_URL) are set as ENCRYPTED CVM
 #     secrets in the Phala dashboard and referenced here — values NEVER enter this file or git.
 #     Empty/unset values are harmless: the server treats them as absent.
 services:
@@ -25,6 +25,9 @@ services:
     environment:
       # Bearer gate for /mcp; unset = open (Phala's ingress fronts the CVM).
       - CORK_MCP_TOKEN=${CORK_MCP_TOKEN}
+      # Read-only bearer for the full /readyz view (hosts, breakers, in-flight counts); unset =
+      # the public summary is all /readyz serves. Does not gate /mcp.
+      - CORK_MCP_DIAGNOSTICS_TOKEN=${CORK_MCP_DIAGNOSTICS_TOKEN}
       # Server-side RPC override; unset = built-in defaults + chainlist fallback.
       - CORK_RPC_URL=${CORK_RPC_URL}
       # HyperSync/HyperRPC access for event-derived reads (full-decentralized mode).

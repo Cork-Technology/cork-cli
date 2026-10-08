@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { ladderRungClientRequestId, LADDER_ID_MAX, ocoGroupNonce, runTool } from "@cork/core";
+import { VENUE_OPEN_ORDERS_PER_POOL } from "../src/datasources/venue.ts";
 import { stubRpc } from "./helpers.ts";
 
 const NOW = 1_800_000_000n;
@@ -110,6 +111,24 @@ describe("maker-ladder: nonce policy", () => {
     expect(d1.rungs[0]!.nonce).toBe(ocoGroupNonce("rfq_shared").toString());
     expect(d2.rungs[0]!.nonce).toBe(d1.rungs[0]!.nonce);
     expect(d1.ladder.ocoGroup).toBe("rfq_shared");
+  });
+});
+
+describe("maker-ladder: the venue's open-order cap", () => {
+  const rungsOf = (n: number) => Array.from({ length: n }, (_, i) => ({ takingAmount: (1_000_000 + i).toString() }));
+  const capNotice = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.filter((w) => w.code === "invalid_order_terms" && /open orders per maker per asset pair/u.test(w.message));
+  it("one rung past the cap is told the venue refuses it, whatever bit the rungs share, and that resting orders count too", async () => {
+    const six = await ladder("ladder-venue-cap-0001", { noncePolicy: "shared", rungs: rungsOf(VENUE_OPEN_ORDERS_PER_POOL + 1) });
+    expect(six.state).toBe("ok");
+    expect(capNotice(six)).toHaveLength(1);
+    expect(capNotice(six)[0]!.message).toMatch(/^6 rungs on one pool exceed the venue's cap of 5 open orders/u);
+    expect(capNotice(six)[0]!.message).toMatch(/orders already resting on the pair count too/u);
+    expect(capNotice(six)[0]!.message).toMatch(/a shared bit does not reduce the count/u);
+  });
+  it("a ladder at the cap gets no such notice", async () => {
+    const five = await ladder("ladder-venue-cap-0002", { noncePolicy: "distinct", rungs: rungsOf(VENUE_OPEN_ORDERS_PER_POOL) });
+    expect(five.state).toBe("ok");
+    expect(capNotice(five)).toHaveLength(0);
   });
 });
 

@@ -605,3 +605,15 @@ export async function diagnoseOracleDeployFailure(
  *  the name the handlers grew up with. (Until 2026-08-06 this was a duplicated implementation —
  *  exactly the drift its own comment warned against.) */
 export { isTransportError as isTransportFailure } from "../chain/rpc.ts";
+
+/** The underwriter of one RFQ answer row. The venue serves it at ROW level in the `current`
+ *  view and INSIDE the stored answer payload in the `full` view (cork-api get-rfq.ts) — a reader
+ *  of one shape alone finds nothing in the other, and a check built on it silently never runs.
+ *  Every reader goes through here. */
+export function rfqAnswerUnderwriter(row: unknown): string | undefined {
+  if (row === null || typeof row !== "object") return undefined;
+  const r = row as { underwriter?: unknown; answer?: unknown };
+  if (typeof r.underwriter === "string") return r.underwriter;
+  const inner = r.answer !== null && typeof r.answer === "object" ? (r.answer as { underwriter?: unknown }).underwriter : undefined;
+  return typeof inner === "string" ? inner : undefined;
+}

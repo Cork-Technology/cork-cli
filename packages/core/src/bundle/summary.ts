@@ -7,7 +7,7 @@
 import { type DecodedLeg, hasCallback } from "./decode.ts";
 import type { EnvelopeScheme } from "./envelopes.ts";
 import { U256_MAX } from "../math/fixed.ts";
-import { lopInvalidatorPlan } from "../orders.ts";
+import { decodeMakerTraits, lopInvalidatorPlan, maskBits } from "../orders.ts";
 
 const MAX_UINT = U256_MAX;
 
@@ -97,8 +97,20 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
       const target = /^0x0{40}$/i.test(leg.to) ? "the 1inch LOP" : `the 1inch LOP ${short(leg.to)}`;
       if (c.fn === "cancelOrder") {
         const plan = lopInvalidatorPlan(c.makerTraits);
-        const how = plan.mode === "bit" ? `sets its bit in your bit invalidator (nonce ${plan.nonceOrEpoch})` : "marks it fully filled in your remaining invalidator";
+        const how = plan.mode === "bit" ? `sets its bit in your bit invalidator (nonce ${plan.nonceOrEpoch}${epochNote(c.makerTraits)})` : "marks it fully filled in your remaining invalidator";
         return `cancel 1inch limit order ${short(c.orderHash)} on ${target} — ${how}; nothing moves, the order just can never fill`;
+      }
+      if (c.fn === "cancelOrders") {
+        return `cancel ${c.orders.length} 1inch limit orders on ${target} in one transaction (${c.orders.map((o) => short(o.orderHash)).join(", ")}) — each sets its bit or remaining mark in your invalidators; nothing moves, the orders just can never fill`;
+      }
+      if (c.fn === "bitsInvalidateForOrder") {
+        const plan = lopInvalidatorPlan(c.makerTraits);
+        if (plan.mode !== "bit") return `SWEEP your 1inch bit invalidator on ${target} with a REMAINING-invalidator order's traits — the LOP reverts OrderIsNotSuitableForMassInvalidation; these bytes cannot execute`;
+        const extra = maskBits(c.additionalMask);
+        const slotWord = `slot ${plan.slot} of your bit invalidator`;
+        return extra.length > 0
+          ? `SWEEP ${slotWord} on ${target}: spends bit ${maskBits(plan.mask)[0]} (nonce ${plan.nonceOrEpoch}${epochNote(c.makerTraits)}) AND bits ${extra.join(",")} in one transaction — every order of yours whose nonce lands on those bits can never fill; nothing moves`
+          : `SWEEP ${slotWord} on ${target} with an empty additional mask: spends only bit ${maskBits(plan.mask)[0]} (nonce ${plan.nonceOrEpoch}${epochNote(c.makerTraits)}) — the same effect as cancelOrder; nothing moves`;
       }
       const t = c.takerTraits;
       const od = c.order;
@@ -189,6 +201,14 @@ function caveats(leg: DecodedLeg): string {
  * Returns lines rather than a blob so callers can indent, wrap, or paginate — the CLI renders
  * them as prose, MCP passes them through as data.
  */
+/** Flag 250 (NEED_CHECK_EPOCH_MANAGER): the order also dies when the maker advances the epoch of
+ *  its series (SeriesEpochManager.increaseEpoch) — named beside the nonce so a reader sees both
+ *  ways this order can be retired. */
+function epochNote(makerTraits: bigint): string {
+  const t = decodeMakerTraits(makerTraits);
+  return t.needCheckEpochManager ? `; checks the epoch of series ${t.series} — an epoch bump retires it too` : "";
+}
+
 export function summarizeBundle(legs: DecodedLeg[], options: SummaryOptions = {}): string[] {
   const out: string[] = [];
   const walk = (list: DecodedLeg[], prefix: string) => {

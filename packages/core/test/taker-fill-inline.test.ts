@@ -11,6 +11,7 @@ import { keccak256, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
+import { orderExpiredWarning } from "../src/handlers/prepare-orders.ts";
 import { stubRpc, TOKEN_CODE } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
@@ -247,5 +248,33 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     // ...and the wrong signer still refuses offline.
     const bad = await fill(orderHash, { order: wire(order), signature: await stranger.sign({ hash: orderHash }) }, { resolveRpc: async () => null });
     expect(bad.state).toBe("conflict");
+  });
+});
+
+describe("taker-fill: an order whose signed expiry has passed", () => {
+  const expiring = (expiry: bigint, salt: bigint) => signedInline({ makerTraits: expiry << 80n, salt });
+  const expiredNotice = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.find((w) => w.code === "would_revert" && /EXPIRED/u.test(w.message));
+
+  it("is named from the signed bytes, with no chain: the LOP reverts OrderExpired() for every fill of it", async () => {
+    // An inline order handed over venue-free: nothing else would say that its 90..600 s
+    // answer-rfq expiry already passed (the ranked book hides such rows, this path has no book).
+    const past = await expiring(NOW - 1n, 50n);
+    const env = await fill(past.orderHash, { order: wire(past.order), signature: past.signature }, { resolveRpc: async () => null });
+    expect(env.state).toBe("ok");
+    expect(expiredNotice(env)!.message).toMatch(new RegExp(`^the order EXPIRED at ${NOW - 1n} \\(now ${NOW} by this host's clock\\).*OrderExpired\\(\\).*refresh-order`, "u"));
+    // The same notice with a chain in hand.
+    expect(expiredNotice(await fill(past.orderHash, { order: wire(past.order), signature: past.signature }))).toBeDefined();
+  });
+
+  it("follows the LOP's own comparison: expired only AFTER the expiry second; no expiry never expires", async () => {
+    for (const [expiry, salt] of [[NOW, 51n], [NOW + 600n, 52n], [0n, 53n]] as const) {
+      const o = await expiring(expiry, salt);
+      const env = await fill(o.orderHash, { order: wire(o.order), signature: o.signature });
+      expect(env.state, String(expiry)).toBe("ok");
+      expect(expiredNotice(env), String(expiry)).toBeUndefined();
+    }
+    expect(orderExpiredWarning(0n, NOW)).toBeUndefined();
+    expect(orderExpiredWarning(NOW, NOW)).toBeUndefined();
+    expect(orderExpiredWarning(NOW - 1n, NOW)?.code).toBe("would_revert");
   });
 });

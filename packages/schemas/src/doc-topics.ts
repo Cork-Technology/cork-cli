@@ -157,8 +157,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "artifact life",
     envelope: "ok",
     contract:
-      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), or a defaulted/ignored input the caller should know about",
-    codes: ["unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
+      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), a slot sweep's reach (cancel_sweep_notice: which resting orders one bitsInvalidateForOrder retires, and that the venue keeps listing them until a chain read drops them), or a defaulted/ignored input the caller should know about",
+    codes: ["cancel_sweep_notice", "unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
   },
 ] as const;
 
@@ -242,9 +242,10 @@ sign. Nothing is broadcast: send a signed transaction through your own RPC as in
   allowance → the LOP with a live expiration) must exist BEFORE the order rests — a resting
   order without them looks fillable but reverts; the TAKER grants the taker asset → the LOP
   before broadcasting the fill. JIT orders differ: the cST side is covered by an ERC-2612
-  permit embedded in the extension (EOA makers/takers only — the LOP executes NO permit for a
-  CONTRACT maker, which needs a standing allowance instead), and a JIT MINT additionally pulls
-  collateral into the Cork JIT adapter under its own allowance. Approval txs work identically
+  permit embedded in the extension (pass it as \`signature\` bytes; on the flat 0.3.x wire EOA
+  makers/takers only, ECDSA; on the nested wire, JIT adapter 0.5.0+, a CONTRACT wallet can sign
+  it too, checked with ERC-1271 — or create the pool first and place a standing allowance), and
+  a JIT MINT additionally pulls collateral into the Cork JIT adapter under its own allowance. Approval txs work identically
   from EOAs and contract wallets (a contract wallet executes the same payload through its own
   flow). \`cork_query\` resource:"account-state" shows current allowances for pool tokens;
   \`cork_prepare_phoenix\` authority-onboard builds an approve tx for any token/spender/amount.
@@ -505,15 +506,16 @@ The venue has no push and no \`updated_after\`, so monitoring is client-side pol
 - \`wait\` long-polls: re-read the book every 2 s until \`changes.changed\` or the seconds run out (max 25, under the HTTP ingress deadline); \`waited\` says how it ended. The CLI's \`ch query orderbook --watch [--interval s] [--iterations n]\` loops this, printing the first read and then only the ticks that changed.
 - A watermark is per fill sender: reach and exclusion differ per sender, so a token taken for another account is refused.
 Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key under the \`oco-group:\` namespace, a prefix no clientRequestId may carry — so a group seed and an id seed are never the same string; what remains is the 40-bit truncation any two seeds share, birthday-rare, disclosed on every maker-order); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
-Because the rungs share one bit, cancelling ANY rung (\`cancel\`) retires the whole group; \`bitsInvalidateForOrder(makerTraits, mask)\` additionally spends other bits of the same 256-bit slot word in one transaction — a sweep across orders whose nonces share a slot, not built here.
+Because the rungs share one bit, cancelling ANY rung (\`cancel\`, scope \`order\`) retires the whole group. \`cancel\` with scope \`slot\` builds \`bitsInvalidateForOrder(makerTraits, mask)\` instead: one transaction that spends the rung's bit AND the bit of every other resting order of yours in the same 256-bit slot word (nonce >> 8), read from the venue book by maker; the result lists every order the sweep retires (\`retires.orders\`, relation \`shared-bit\` for a group sibling, \`same-slot\` for a different nonce in the word). Honest sizing: nonces here derive from keccak seeds, so two independent orders share a slot in about one pair in 2^32 — the sweep retires more than a plain cancel only when nonces were pinned to one slot (SDK \`nonce\`) or chosen by another tool, and the result says when it found no sibling. The venue does not index cancels: a swept row stays OPEN on the book until a chain read drops it.
 
 ## Series and epoch: mass cancel
 
 A maker with many independent orders can stamp them with a \`series\` and require the maker's
 current **epoch** (flag 250, \`needCheckEpochManager\`): bumping the epoch (\`increaseEpoch\`) retires
 every order of that series at once. Orders retired this way are **dead-by-epoch** — like
-dead-by-sibling, invisible to the venue until it re-syncs. This surface decodes \`series\`; it does
-not yet prepare the bump.
+dead-by-sibling, invisible to the venue until it re-syncs. This surface decodes \`series\` and
+labels the flag on every order and cancel it decodes (the summary of a cancel names the series an
+epoch bump would also retire); it does not yet prepare the bump.
 
 ## Price shape: fixed or decaying
 
@@ -808,7 +810,9 @@ Know these before you ask:
 
 - The rate is part of pool identity. Each rate has its own FixedRateOracle, so another rate is
   another pool. An answer option carries its own template and may propose another rate;
-  \`answer-rfq\` then says so as a counter-proposal.
+  \`answer-rfq\` then says so as a counter-proposal. A cited option brings its own rate: one
+  that names no rate is refused, until the underwriter passes \`jitMarket.rateOverride\` or
+  asks for your rate by name with \`useRequestedRate\`.
 - The fixed recipe takes no recipe bytes. The rate rides in the order as \`rateOverride\`; the
   fill deploys the oracle if it does not exist yet.
 - A fixed rate does not track the reference's yield after creation. A reference that earns 5%
@@ -816,7 +820,26 @@ Know these before you ask:
 - A \`rate_override\` on a liquidity or an impairment recipe is not carried: a fill with a
   non-zero rate on such a recipe reverts \`UnexpectedRateOverride\`. The venue does not check
   this; rfq-open warns.
-- The venue admits uint256's maximum as a rate; the recipe overflows on it. rfq-open warns.
+- The venue admits uint256's maximum as a rate; the recipe HELPER overflows on it (resolve computes
+  rate + 1: Panic 0x11), so the helper resolves 1 .. MAX − 1 and every resolving path — rfq-open's
+  reading, derive-cork-pool, answer-rfq — refuses \`recipe_refused\` and says so. The pool itself is
+  creatable: create-pool with the explicit constraint [MAX − 1, MAX] and rateOverride MAX passes the
+  creator (fork-simulated 2026-10-07); [MAX, MAX] reverts InvalidParams.
+
+## Which cover a quote delivers, and which cover a fill buys
+
+A label is not a cover. answer-rfq reads the recipe the order's JIT block names and reports
+\`answer.cover\` (kind, mode, the request's modes, \`agrees\`); a mode the request did not ask for
+is \`cover_mode_mismatch\` (info — the option still builds). cork_submit rfq-answer reads each
+option's template recipe against the option's \`mode\` label and against the request's modes: a
+\`fixed_rate\` label on a NAV template, or a mode the request did not name, is
+\`cover_mode_mismatch\` (info — relayed as asked). A fill of a cited order through the venue book
+(taker-fill by orderHash) reads the order's JIT block — the recipe it names, else the limits it
+carries — against the cited RFQ's modes and the cited option's label, and reports
+\`data.cover\`; a cover the request did not ask for is \`cover_mode_mismatch\` (info — the bytes
+build; the requester accepts or refuses the counter-proposal). An order without a JIT block
+fills on an existing pool, whose cover is not in its bytes: \`data.cover.delivered.kind\` is null
+and the note says to read the pool.
 
 ## One request, one cover
 
@@ -1062,9 +1085,10 @@ export function executionRefreshOrder(requote = false): ExecutionBlock {
   ]);
 }
 
-/** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet: the
- *  EOA-only ERC-2612 permit path is closed, so the pool is created and the allowances placed
- *  BEFORE the order rests (cork-periphery CorkMarketCreator, batched by the smart account). */
+/** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet, with
+ *  no permit it can use (flat wire: ECDSA-only permits; nested wire: none carried yet): the pool
+ *  is created and the allowances placed BEFORE the order rests (the CorkMarketCreator, batched by
+ *  the smart account). */
 export function executionMakerOrderContractMaker(): ExecutionBlock {
   return executionTypedData([
     "cork_prepare_market create-pool with this order's jitMarket legs (collateral, reference, expiry, recipe, constraint) — the pool the order derives, created ahead of the fill; simulate, then execute from the maker account",

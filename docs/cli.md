@@ -248,7 +248,7 @@ ch prepare order finalize-maker-order --chain-id <id> --account <0x…> --client
 ch fill --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> \
   [--fill-making-amount <amt>] [--for-self '{"adapter":"0x…","poolId":"0x…"}']                        # unsigned fill calldata
 ch prepare order refresh-order --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…>   # re-rest on the same nonce
-ch prepare order cancel --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> --maker-traits <n>
+ch prepare order cancel --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> --maker-traits <n> [--scope order|slot] [--max-pages <n>]
 ch prepare order rollover-intent --chain-id <id> --account <0x…> --client-request-id <id> --settler <0x…> …   # signable ERC-7683 order
 ```
 
@@ -270,8 +270,10 @@ ch prepare market create-pool --chain-id <id> --client-request-id <id> \
 ```
 
 All three are permissionless and safe to repeat. `create-pool` builds the pool a just-in-time
-order would create, before the fill. Use it from a Safe or any contract account: the mid-fill
-mint needs a permit only a plain wallet can sign. The registry allows an expiry at most 30 days
+order would create, before the fill. A Safe or any contract account needs it on the flat
+(0.3.x) wire, where the mid-fill mint needs a permit only a plain wallet can sign. On the nested
+wire (the primary, JIT adapter 0.5.0+) a contract account can instead sign that permit through
+ERC-1271 and pass it as `signature`. The registry allows an expiry at most 30 days
 out; `ch` warns before the transaction can revert.
 
 The JIT block (`--jit-market` on orders, the flags above on `create-pool`) names the recipe bytes
@@ -447,6 +449,13 @@ ch self-update [--tag <vX.Y.Z>] [--dry-run] [--allow-downgrade]         # verifi
 
 Set `CORK_MCP_TOKEN` for bearer auth on the HTTP server. Pass `--trust-forwarded-for` only behind
 an ingress you control; without it every caller behind a proxy shares one client slot.
+`/readyz` answers a summary (one `degraded` flag per subsystem) to a bare request and the full
+snapshot (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) to a
+request that presents the MCP bearer or `CORK_MCP_DIAGNOSTICS_TOKEN` as a bearer; the second
+unlocks the view without gating `/mcp`. Every response carries `X-Content-Type-Options:
+nosniff`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a deny-all
+`Content-Security-Policy`, `X-Frame-Options: DENY` and `Cross-Origin-Resource-Policy:
+same-origin`; HSTS belongs to your TLS terminator.
 `ENVIO_HYPERSYNC_TOKEN` enables `--mode full-decentralized` over the HyperSync archive.
 `CORK_CONFIG_FILE` points at a local `config.json` that overrides `cork-defaults.v2.json`: a whole
 deployment set per key, the primary, or an `only` list of the sets you want to see. `ch query
@@ -454,6 +463,53 @@ protocol-config` shows both layers under `data.config`, and every result an over
 warns `config_override_active`. `CORK_CONFIG_NO_OVERRIDE=1` turns the layer off. A released build
 fetches `cork-defaults.v2.json` from its line's config branch (`config/0.7` for this candidate),
 so a redeployed address reaches you within an hour without an upgrade.
+
+### Point one install at staging
+
+Staging and production share chain ids, so the switch is two settings, not a flag: the venue URL
+and the contract set. Both read from the environment, so one shell profile per environment is
+the whole mechanism; the default is production.
+
+```sh
+# production: nothing to set.
+
+# staging: the staging venue plus a config.json that names the staging deployment.
+export CORK_VENUE_URL=https://breaking.cork.tech
+export CORK_CONFIG_FILE=~/.config/cork-helper-cli/staging.json
+```
+
+`staging.json` adds the staging deployment as a whole set and makes it the primary for that
+chain; every other set stays readable. Fill the addresses from the staging Distribution record.
+The file must carry `schemaVersion: 2` and complete sets: a set is refused whole when a required
+field is missing, and an unknown field name is dropped silently, so copy the field names exactly
+(a test parses this very block through the override schema):
+
+```json
+{
+  "schemaVersion": 2,
+  "generations": {
+    "8453": {
+      "primary": "phoenix/staging",
+      "sets": {
+        "phoenix/staging": {
+          "status": "active",
+          "phoenix": { "wire": "10-field", "poolManager": "0x…", "constraintAdapter": "0x…", "corkAdapter": "0x…", "whitelistManager": "0x…", "controller": "0x…" },
+          "marketRegistry": { "wire": "nested", "registry": "0x…", "adapter": "0x…", "marketCreator": "0x…", "recipes": { "liquidity": "0x…", "nav": "0x…", "fixed": "0x…", "impairment": "0x…" } }
+        }
+      }
+    }
+  }
+}
+```
+
+`ch query protocol-config --chain-id base` shows which layer is live under `data.config`, and
+every result the override shaped warns `config_override_active`, so a staging answer can never be
+mistaken for a production one. Add `"only": ["phoenix/staging"]` to hide the production sets
+from that install. `CORK_CONFIG_NO_OVERRIDE=1` returns to production without editing anything.
+The code-hash allowlist (`approvedImplementations`) is never overridable: a staging adapter whose
+code is not in the build's allowlist warns `implementation_not_approved` on ABI-typed prepares and
+refuses the JIT hook paths unless `CORK_ALLOW_UNAPPROVED_CODE=1` is set — expected for a staging
+deployment ahead of the release that ships its hash.
 
 The build's repository identity also selects its release/update channel; it is shown by
 `ch version --json`. A private build uses only that repository, never the public channel.
