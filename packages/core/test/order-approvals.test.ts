@@ -319,7 +319,7 @@ describe("handler wiring: data.approvals across the order lifecycle", () => {
     );
     expect(env.state).toBe("ok");
     const data = env.data as { approvals: ApprovalRequirement[]; signedArtifactDigest: string };
-    // The signed traits carry the Permit2 bit → both layers ride, re-derived from bytes [K3].
+    // The signed traits carry the Permit2 bit → both layers ride, re-derived from bytes.
     expect(data.approvals.map((e) => e.mechanism)).toEqual(["erc20-approve", "permit2-approve"]);
     expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(true);
     // Advisory only: the digest must pin signed content alone. Recompute the same finalize

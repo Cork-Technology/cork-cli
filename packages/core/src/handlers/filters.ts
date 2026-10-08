@@ -120,7 +120,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
 };
 
 /** The keys a resource's VARIANT consumes when the resource has several read shapes under one
- *  name (audit DB-006). `rfqs` with `rfqId` is a single-record read: the list-only keys (state,
+ *  name. `rfqs` with `rfqId` is a single-record read: the list-only keys (state,
  *  requester, underwriter, prefix, withAnswers — the record embeds its answers regardless) are
  *  accepted by the union above and then never applied. `rollover-orders` reads a different
  *  venue feed per `kind`, each with its own filter set. A key outside the variant's set is
@@ -220,7 +220,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
   if (raw?.mode !== undefined) out.mode = String(raw.mode);
   // derive-cork-pool: expiry as a unix-seconds decimal string (part of the derived market
   // identity) — routed through the shared UnixSeconds primitive so the ms-detector and
-  // plausibility bound ride this field too (T6a), instead of a bare digit regex that accepted
+  // plausibility bound ride this field too, instead of a bare digit regex that accepted
   // year-58-billion values.
   if (raw?.expiry !== undefined) {
     const r = UnixSeconds.safeParse(String(raw.expiry));

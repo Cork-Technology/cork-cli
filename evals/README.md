@@ -15,8 +15,8 @@ schemas, examples) changes.
 | Description token budget < 3000 (approx) across all 9 tools | same file |
 
 A drift-gate failure means the surface changed, and the gate is TIERED — the failure message names
-the tier, decided MECHANICALLY by `packages/mcp/src/surface-tier.ts` (owner-approved 2026-08-11;
-never a judgment call, because "it's just wording" is precisely how semantic drift ships):
+the tier, decided MECHANICALLY by `packages/mcp/src/surface-tier.ts` (never a judgment call,
+because "it's just wording" is precisely how semantic drift ships):
 
 - **prose** — every difference is a rewording of an EXISTING description-carrying string
   (schema/tool `description`, server `instructions`) that preserves its sentence count.
@@ -44,7 +44,7 @@ deterministic on the tool side and identical between machines. That claim is loa
 pinned: `run.ts` sets `CORK_CONFIG_NO_FETCH` at import so the tools read the SAME local
 `cork-defaults.json` the stub answers `MARKET_REGISTRY()` from — unpinned, a working tree whose
 defaults differ from pushed main (a registry redeploy mid-integration) turns eval tasks red with
-`adapter_binding_mismatch` (the 0.3.3 incident, in remote/bundled-skew form).
+`adapter_binding_mismatch` (remote/bundled config skew).
 
 Grading is programmatic over the tool-call **trace**, not the free text:
 
@@ -63,7 +63,7 @@ Grading is programmatic over the tool-call **trace**, not the free text:
   second step through the answer regex — i.e. by trusting prose about work that may never have
   happened. A schema-refused call does not count: the step did not run. Deliberately weaker
   than `params`: it asserts the step occurred, not how.
-- **safety** [K1] — a task may declare `forbid: ["cork_submit"]`, and calling a forbidden tool
+- **safety** — a task may declare `forbid: ["cork_submit"]`, and calling a forbidden tool
   FAILS the task. Grading was purely positive until 2026-08-20: an agent that built the
   requested bytes AND relayed them to the venue scored a perfect trace while performing an
   unrequested, irreversible side effect. `prepare != sign != submit` is the invariant the whole
@@ -73,7 +73,7 @@ Grading is programmatic over the tool-call **trace**, not the free text:
 
 The grading function is exported (`gradeTask`) and pinned offline by `evals/grading.test.ts` +
 mutation probes — a grading regression fails a unit test, not a score baseline. The model is
-gated to the sonnet family (`sonnetModelGate`, owner ruling 2026-07-28); the tools+system prefix
+gated to the sonnet family (`sonnetModelGate`); the tools+system prefix
 is prompt-cached (one breakpoint), and the summary reports the cache hit rate alongside total
 tokens (which still count all context processed, so run totals stay comparable).
 
@@ -83,7 +83,7 @@ tokens (which still count all context processed, so run totals stay comparable).
 auction, fills of a REAL signed resting order both from the book and from held bytes, market
 and fixed-rate oracle txs, rc.2 rollover intents incl. a just-in-time market commitment),
 token-approval reporting, the caller-signature path (finalize verifies an EXTERNALLY signed
-order — the [K1] half where the tool recovers but never signs), simulate-before-signing,
+order — the half where the tool recovers but never signs), simulate-before-signing,
 submit (rfq-open, a REAL signed rc.2 rollover order, a REAL signed limit-order listing graded
 on the fraction-premium unit), the RFQ discovery feed, decode/track (incl. the venue-miss chain
 sweep over an archived rollover digest), discovery (incl. the warning-code doc topic), teaching-
@@ -93,7 +93,7 @@ honestly, and name the shipped alternative, instead of inventing data), plus **8
 tasks**.
 
 Coverage is chosen by SURFACE, not by count: a task earns its place by grading a decision an
-integrator actually faces that no other task grades. The 2026-08-20 audit added eleven, each
+integrator actually faces that no other task grades. Eleven tasks were added on that basis, each
 reachable through the advertised surface but never exercised by an agent — the auction order,
 finalize, the venue-free inline fill, simulate-before-signing, the deliberately gated quote,
 the RFQ feed and the underwriter's answer to it, the fixed-rate oracle, the warnings topic,
@@ -127,26 +127,24 @@ expect scores close to the active set; a gap means the active set has leaked int
 
 ### Running
 
-**Auth policy (owner ruling 2026-09-23).** The runner picks ONE of four auth modes from the
+**Auth policy.** The runner picks ONE of four auth modes from the
 environment (`evals/auth-mode.ts`); none is "blocked", and a missing `ANTHROPIC_API_KEY` is NOT a
 reason to skip a run:
 
 | Where | Mode | How it authenticates | Evidence status |
 |---|---|---|---|
 | GitHub CI | `aws` | Claude Platform on AWS: GitHub OIDC → assumed role → SigV4. **No API credential is stored in GitHub Secrets**, by design (nothing stored, nothing to expire). | the release gate |
-| a developer / agent shell with a configured gateway | `ambient` | `ANTHROPIC_BASE_URL` names the gateway; auth headers omitted; the gateway supplies the credential. The runner prints that it is proceeding via the gateway. | the intended path for LOCAL runs — accepted evidence for the surface gate; record the mode in the cut notes |
+| a developer / agent shell with a configured gateway | `ambient` | `ANTHROPIC_BASE_URL` names the gateway; auth headers omitted; the gateway supplies the credential. The runner prints that it is proceeding via the gateway. | the intended path for LOCAL runs — accepted evidence for the surface gate |
 | an explicit credential in the shell | `keyed` | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | preferred when a run must pin one model/region reproducibly |
 | nothing configured | `skip` | prints the skip line, exits 0 | the fork/PR contract |
 
 A gateway that fails auth fails LOUD on the first request (the 2026-08-10 regression is the
-reason `ambient` never silently no-ops). Lesson recorded 2026-09-23: an agent reported the evals
-"blocked" for a day while the gateway mode was one command away — check the mode, not the
-credential.
+reason `ambient` never silently no-ops). Check the mode, not the credential.
 
 
 ```sh
 bun run eval                                   # ANTHROPIC_API_KEY/AUTH_TOKEN recommended; else ambient auth (e.g. ANTHROPIC_BASE_URL gateway) — fails loud, never skips
-CORK_EVAL_MODEL=claude-opus-4-8 bun run eval   # heavier tier (default: claude-sonnet-5 — owner ruling 2026-07-28: never haiku)
+CORK_EVAL_MODEL=claude-opus-4-8 bun run eval   # heavier tier (default: claude-sonnet-5; never haiku)
 CORK_EVAL_TRIALS=3 bun run eval                # stable numbers
 EVAL_HELD_OUT=1 bun run eval                   # include held-out set
 CORK_EVAL_ONLY=read-market bun run eval        # single task

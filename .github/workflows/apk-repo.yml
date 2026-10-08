@@ -142,7 +142,7 @@ jobs:
           v="${TAG#v}"
           case "$v" in
             *-rc.*) apkver="${v%%-rc.*}_rc${v##*-rc.}"; candidate=true ;;
-            *-*)    echo "::error::unrecognized pre-release suffix in $TAG — only -rc.N maps to apk version grammar (policy R7 candidate space)"; exit 1 ;;
+            *-*)    echo "::error::unrecognized pre-release suffix in $TAG — only -rc.N maps to apk version grammar"; exit 1 ;;
             *)      apkver="$v"; candidate=false ;;
           esac
           { echo "tag=$TAG"; echo "candidate=$candidate"; echo "apkver=$apkver"; } >> "$GITHUB_OUTPUT"

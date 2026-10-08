@@ -1,4 +1,4 @@
-// [K7] chain-over-indexer verification for rollover orders, two independent legs:
+// Chain-over-indexer verification for rollover orders, two independent legs:
 //   1. STATUS — `ISettler.orderStatus(orderDigest)` (public view @ v0.1.0-rc.2) via the regular
 //      resolved RPC: the authoritative CURRENT lifecycle status, readable with zero tokens.
 //   2. EVENT HISTORY — `eth_getLogs` over a logs-capable endpoint (HyperRPC preferred; ordinary
@@ -9,7 +9,7 @@
 // Event signatures are verbatim from rollover v0.1.0-rc.2 (ISettler/IPartialSettler —
 // unchanged by the rc.2 wire break, which touched only typehashes/ABI length);
 // the ERC-7683 `Open` event's tuple layout is not reproduced here, so an Open log surfaces as
-// an unlabeled event rather than being guessed [K3-honest].
+// an unlabeled event rather than being guessed.
 import { keccak256, stringToHex, toEventSelector } from "viem";
 import { z } from "zod";
 import { fetchWithTimeout } from "./fetch-timeout.ts";

@@ -65,7 +65,7 @@ describe("cork_decode order — JIT extension labeling", () => {
     expect((jit["constraint"] as Record<string, string>)["rateMax"]).toBe((2n * 10n ** 18n).toString());
     expect(jit["permits"]).toBe(1);
     expect(jit["enableJitMint"]).toBe(true);
-    // Audit R1.3: the carried fee/override values are raw and shape-identical across the
+    // The carried fee/override values are raw and shape-identical across the
     // 1e18=1% / 1e18=1.0 families — the label must place each in ITS family, never the other's.
     const scales = jit["scales"] as Record<string, string>;
     expect(scales.swapFeePercentage).toContain("1e18 = 1%");

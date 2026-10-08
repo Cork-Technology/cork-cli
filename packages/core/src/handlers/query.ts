@@ -183,7 +183,7 @@ function marketCreatedSpecFor(emitters: MarketEmitter[], filters: QueryFilters):
 }
 
 /**
- * full-decentralized [C12]: the event-derived subset over HyperSync, with a live-tail RPC merge for
+ * full-decentralized: the event-derived subset over HyperSync, with a live-tail RPC merge for
  * freshness (see fetchLiveTail). Structural honesty: resting orders / RFQs emit no events — those
  * resources are venue-only in EVERY mode.
  */
@@ -205,7 +205,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
   let load = ctx.hyperSync ? { source: ctx.hyperSync } : await loadHyperSync(chainId, token);
   let windowedFallback: { code: string; message: string } | undefined;
   if ("error" in load && !token && !ctx.hyperSync) {
-    // Tokenless fallback (owner scope 2026-08-13): windowed eth_getLogs over the resolved RPC —
+    // Tokenless fallback: windowed eth_getLogs over the resolved RPC —
     // slow-but-free, honestly bounded (a capped walk surfaces as pagination_incomplete). The
     // connectivity pledge holds: still RPC-only, never the venue. Only the MISSING-token case
     // falls back; a set-but-broken token or napi failure stays an honest hypersync_unavailable.
@@ -375,7 +375,7 @@ async function handleQueryHyperSync(input: QueryInput, filters: QueryFilters, ch
     }
 
     const run = await runScanWithTail(ctx, chainId, hs, spec);
-    // Honest completeness (F15): a HyperSync scan that hits the page bound is partial EVIDENCE,
+    // Honest completeness: a HyperSync scan that hits the page bound is partial EVIDENCE,
     // never presented as the complete set — mirroring the venue path's pagination discipline.
     if (!run.complete) {
       hsWarnings.push({ code: "pagination_incomplete", message: `the HyperSync scan hit the page bound before reaching the archive height${run.nextBlock !== undefined ? ` (stopped at block ${run.nextBlock})` : ""}; counts/items are partial evidence, not the complete set` });
@@ -492,7 +492,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   assertFiltersApplicable(input.resource, input.filters);
 
   // `sort` is the orderbook's ranking switch; on any other resource it would be silently
-  // unapplied — the parameter-ignored green no-op (C13) — so it is refused with teaching.
+  // unapplied — the parameter-ignored green no-op — so it is refused with teaching.
   if (input.sort !== undefined && input.resource !== "orderbook") {
     throw new ToolInputError("cork_query", [{ path: ["sort"], message: `sort applies to resource 'orderbook' only (it ranks resting orders best-first for filters.account); '${input.resource}' has no ranking — omit sort` }]);
   }
@@ -522,7 +522,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       return handleQueryHyperSync(input, filters, chainId, ctx);
     }
     // Default/hybrid: venue-DISCOVERED rows, chain-VERIFIED best-effort. Mode is explicit,
-    // never a silent substitute [R1/§7] — lite-decentralized cannot serve venue-only resources.
+    // never a silent substitute — lite-decentralized cannot serve venue-only resources.
     if (input.mode !== undefined && input.mode !== "hybrid") {
       return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'hybrid' (venue rows, chain-verified), or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
     }
@@ -591,7 +591,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           traversal = await collectVenuePages(paging, (cursor) => getRolloverContracts(deps, { chainId, ...(filters.account ? { owner: filters.account.toLowerCase() } : {}), ...(filters.address ? { address: filters.address.toLowerCase() } : {}), ...(filters.factory ? { factory: filters.factory.toLowerCase() } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
         }
       }
-      // Hybrid's verification leg [K7]: the venue DISCOVERED these rows; the chain now CONFIRMS
+      // Hybrid's verification leg: the venue DISCOVERED these rows; the chain now CONFIRMS
       // them through the same readers lite-decentralized serves (one implementation, two
       // consumers). null = a resource with no on-chain footprint (rfqs; rollover fills/contracts
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
@@ -599,8 +599,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       let items = verification ? verification.items : traversal.items;
       // rfqs with answers embedded: label every option FIRM (a LIVE resting order cites it via
       // quoteRef) or indicative, from the same ranked-book read `offers` makes — the venue serves
-      // no firm label, and a quote nobody can buy must not read like one (owner ruling
-      // 2026-09-02). One extra bounded book read, only when answers ride along.
+      // no firm label, and a quote nobody can buy must not read like one (2026-09-02). One
+      // extra bounded book read, only when answers ride along.
       let firmness: { source: string; orderbookPagination: unknown } | undefined;
       const firmWarnings: Array<{ code: string; message: string }> = [];
       if (input.resource === "rfqs" && (filters.withAnswers === true || filters.rfqId !== undefined)) {
@@ -638,7 +638,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         const skipped = rolloverRows.length - capped.length + unread.length;
         if (skipped > 0) firmWarnings.push({ code: "pagination_incomplete", message: `rfqs: ${skipped} rollover RFQ(s) are served WITHOUT \`firm\` flags — ${unread.length > 0 ? `their rollover-orders read did not answer (${unread.join(", ")})` : ""}${unread.length > 0 && rolloverRows.length > capped.length ? "; " : ""}${rolloverRows.length > capped.length ? `only the first ${ROLLOVER_FIRMNESS_READS} rollover RFQs on a page are joined — read one with filters.rfqId` : ""}` });
       }
-      // The orderbook's DEFAULT shape is the ranked view (owner ruling 2026-09-02): the taker's
+      // The orderbook's DEFAULT shape is the ranked view (2026-09-02): the taker's
       // question is "what can I fill best, as this sender?", and the venue's newest-first order
       // does not answer it. Ranking runs AFTER verification so dead rows are already gone and
       // exclusivity is already decoded; `sort:"venue"` restores the verbatim rows.
@@ -651,7 +651,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           // Watch: every ranked read returns the next watermark; a `since` diffs this read against
           // the one it followed. Announcements (`appeared`, `better`) are CONFIRMED rows only —
           // the hybrid leg already dropped chain-dead rows, and an unverified row rides under
-          // `unconfirmed` (owner ruling 2026-09-02: verify before announce).
+          // `unconfirmed` (verify before announce, 2026-09-02).
           const watermark = encodeBookWatermark(bookWatermarkOf(ranked));
           let changes: Record<string, unknown> | undefined;
           if (input.since !== undefined) {
@@ -754,13 +754,13 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
   }
 
   // whitelisted-addresses: event-derived enumeration (WhitelistManager's membership mappings are
-  // not enumerable on-chain) — its natural mode is full-decentralized, with a live-view [K7]
+  // not enumerable on-chain) — its natural mode is full-decentralized, with a live-view
   // verification leg when an RPC also resolves.
   if (input.resource === "whitelisted-addresses") {
     return handleQueryWhitelistedAddresses(input, filters, chainId, ctx);
   }
 
-  // Data mode is explicit, never a silent fallback [R1/§7]: chain resources serve only
+  // Data mode is explicit, never a silent fallback: chain resources serve only
   // lite-decentralized (RPC). Requesting an unwired mode fails loudly instead of being ignored.
   // ONE exception: account-state WITHOUT a poolId is the positions sweep, whose pool enumeration
   // is venue-discovered (hybrid, the default) or a HyperSync scan (full-decentralized) — its own
@@ -790,8 +790,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     const { generations, source: configSource, configOverride } = await resolveGenerations(chainId);
     const selected = generations.find((g) => g.label === generation?.label) ?? generations.find((g) => g.primary);
     // `data.generation` is the SAME compact ref every other result carries (label/status/
-    // distribution — generationRefOf), and `provenance.generation` rides too (review B3,
-    // 2026-09-22: this branch used to answer a wider shape in data and none in provenance). The
+    // distribution — generationRefOf), and `provenance.generation` rides too (2026-09-22:
+    // this branch used to answer a wider shape in data and none in provenance). The
     // extras a config reader wants — primary flag, per-block contractsVersion — live under
     // `data.selected`, so the shared ref stays one shape everywhere.
     return envelope({
@@ -902,8 +902,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       try {
         run = await runScanWithTail(ctx, chainId, hs, spec);
       } catch (err) {
-        // An endpoint that refuses eth_getLogs even at the floor cannot serve the walk (owner
-        // ruling 2026-09-23): an AUTOMATIC endpoint is reported to the breaker and the walk is
+        // An endpoint that refuses eth_getLogs even at the floor cannot serve the walk: an
+        // AUTOMATIC endpoint is reported to the breaker and the walk is
         // re-run ONCE on the next resolution — the same recovery a transport failure gets — while
         // an EXPLICIT endpoint (the operator's own choice) fails loudly naming the host.
         if (!(err instanceof LogRangeCapError) || !windowed || resolved.source === "explicit") throw err;
@@ -939,7 +939,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
 
   try {
     if (input.resource === "cork-pool") {
-      // The resolver already read shares(poolId) on this manager — passed through (review C1).
+      // The resolver already read shares(poolId) on this manager — passed through.
       const s = await readPoolState(client, addrs, filters.poolId, ctx.atBlock, pd.shares);
       return envelope({
         state: "ok",
@@ -963,7 +963,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           // WHICH cover this pool's cST is — the Market struct does not store the recipe, so the
           // limits the pool was created with are the chain's own answer (topic "cover").
           cover: poolCover(s.market),
-          // Unit labels on the most-read resource (footgun audit R1: swapFeePercentage at
+          // Unit labels on the most-read resource (swapFeePercentage at
           // 1e18=1% beside WAD rates was the single highest-risk unlabeled output — the two are
           // identically shaped and 100x apart). Same convention as the compute kinds.
           scales: {
@@ -999,7 +999,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [filters.account!], ...blockOpt });
       const dec = (token: `0x${string}`) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: "decimals", ...blockOpt });
-      // Decimals ride along (audit R1.2): balances/allowances are native base units, and without
+      // Decimals ride along: balances/allowances are native base units, and without
       // the per-role decimals a 6-dec reference balance reads 10^12 too small on an 18-dec
       // assumption. cST/cPT are always 18 (protocol invariant, same claim as the compute labels).
       const [collateral, reference, corkSwapToken, corkPrincipalToken, collateralDecimals, referenceDecimals] = await Promise.all([
@@ -1021,7 +1021,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         // permit2 funding needs TWO layers: the ERC-20 approval TO Permit2 (`permit2`) AND the
         // Permit2-INTERNAL (user, token, spender=adapter) allowance with its uint48 expiry
         // (`permit2Internal`) — reporting only the first let bundles look funded and still
-        // revert on a zero/expired internal allowance (F18). Internal read is best-effort
+        // revert on a zero/expired internal allowance. Internal read is best-effort
         // (null where Permit2 isn't deployed on the chain).
         const nowSecs = nowSecondsOf(ctx);
         const entries = await Promise.all(
@@ -1039,8 +1039,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
               // ALWAYS expired — no special case. The earlier form carved 0 out as "not expired",
               // so a hypothetical (amount>0, expiration 0) allowance read as fundable when the
               // contract would revert AllowanceExpired; and its `<=` flipped the boundary second.
-              // The funding pre-flight predicts the authority, never improves on it (audit R9;
-              // same fidelity ruling as the premium band).
+              // The funding pre-flight predicts the authority, never improves on it (same
+              // fidelity rule as the premium band).
               ? { amount: p2[0] as bigint, expiration: Number(p2[1]), expired: nowSecs > BigInt(Number(p2[1])) }
               : null;
             return [role, { corkAdapter: toAdapter, permit2: toPermit2, permit2Internal }] as const;
@@ -1083,7 +1083,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
  * membership mappings are NOT enumerable on-chain, so the event history is the only enumeration
  * source — served over the same HyperSync path that powers markets/fills/flows. When an RPC also
  * resolves, every derived row is re-checked against the live isGlobalWhitelisted /
- * isMarketWhitelisted views [K7: chain outranks any derivation, including our own].
+ * isMarketWhitelisted views (chain outranks any derivation, including our own).
  */
 async function handleQueryWhitelistedAddresses(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   if (input.mode === "hybrid") {
@@ -1120,7 +1120,7 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
       ? { [wantPool]: replayed.enabledByPool[wantPool] ?? false }
       : replayed.enabledByPool;
 
-    // [K7] live-view verification leg (best-effort): re-check every derived row against the
+    // Live-view verification leg (best-effort): re-check every derived row against the
     // contract's own views. A disagreement is possible exactly when the scan was partial.
     const VERIFY_CAP = 200;
     let verification = "skipped (no rows, or no RPC resolved) — rows are event-derived only";
@@ -1144,7 +1144,7 @@ async function handleQueryWhitelistedAddresses(input: QueryInput, filters: Query
         warnings.push(...rpcWarn(resolved));
         const stale = items.filter((row) => row.verified === false);
         if (stale.length > 0) {
-          warnings.push({ code: "status_mismatch", message: `${stale.length} event-derived row(s) failed live-view verification (verified:false) — the chain view outranks the event replay [K7]; the scan likely missed later removal events` });
+          warnings.push({ code: "status_mismatch", message: `${stale.length} event-derived row(s) failed live-view verification (verified:false) — the chain view outranks the event replay; the scan likely missed later removal events` });
         }
       } catch (err) {
         verification = "attempted but the live views failed — rows are event-derived only";

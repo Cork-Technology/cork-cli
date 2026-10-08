@@ -308,7 +308,7 @@ describe("MarketCreated scans across generations", () => {
     expect(decodeMarketRows([log9(V03_PM)], EMITTERS)).toEqual([]);
     expect(decodeMarketRows([log7(PRIMARY_PM)], EMITTERS)).toEqual([]);
     expect(decodeMarketRows([log7(RCV)], EMITTERS)).toEqual([]);
-    // The emitter table is REQUIRED (review A4, 2026-09-22): an EMPTY table decodes nothing —
+    // The emitter table is REQUIRED: an EMPTY table decodes nothing —
     // there is no 8-field default under which a 10-field log could vanish silently, and no
     // "one known manager" path that reads a log without saying which wire it was read on.
     expect(decodeMarketRows([log7(RCV)], [])).toEqual([]);
@@ -441,7 +441,7 @@ describe("scan-cache identity carries the row-shape schema", () => {
       expect(legacyId.startsWith(`${String(CHAIN)}:markets:0:`)).toBe(true);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({ entries: { [legacyId]: { watermark: 123, rows: [{ poolId: POOL }] } } }));
-      // A stale-schema key is DROPPED at load (review C6, 2026-09-22): never served, and the next
+      // A stale-schema key is DROPPED at load: never served, and the next
       // write no longer carries its rows forward.
       expect(readScanCache(legacyId)).toBeUndefined();
       expect(readScanCache(id)).toBeUndefined();

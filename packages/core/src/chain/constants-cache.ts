@@ -1,8 +1,8 @@
 // Long-TTL cache for on-chain CONTRACT CONSTANTS (immutables and near-immutables a contract
 // self-reports: MAX_FEE_PERCENTAGE, maxExpiryDuration, role hashes). The alternative was the
 // footgun this module retires: replicating a contract's constant as a source literal, which
-// drifts silently when the contract redeploys with a different value (audit follow-up
-// 2026-08-28, the C12 replicated-verdict class applied to constants).
+// drifts silently when the contract redeploys with a different value (the replicated-verdict
+// class applied to constants).
 //
 // Contract with callers:
 //   - `cachedContractConstant` is SYNC (memory → disk, TTL-checked): value gates that must work

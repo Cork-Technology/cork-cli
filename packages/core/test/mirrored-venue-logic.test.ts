@@ -1,4 +1,4 @@
-// The route-logic mirror register [C12]: the openapi capture tripwires SCHEMA drift, but venue
+// The route-logic mirror register: the openapi capture tripwires SCHEMA drift, but venue
 // releases can move route BEHAVIOR without touching a schema — cork-api 0.4.1's quote_ref party
 // rule did, and the requester-only mirror out-rejected the venue in production until a human
 // noticed. MIRRORED_VENUE_LOGIC names every such mirror so the spec tripwire's teaching can

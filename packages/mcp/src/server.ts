@@ -23,7 +23,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       // The signing topic's summary IS the server instructions — one constant, three surfaces
       // (initialize instructions, cork_capabilities topic:"signing", HTTP /docs/signing), so
       // drift between them is impossible by construction. Clients of a REMOTE deployment learn
-      // in-band that every prepared artifact is unsigned and completed client-side [K1].
+      // in-band that every prepared artifact is unsigned and completed client-side.
       instructions: DOC_TOPICS.signing!.summary,
     },
   );
@@ -44,7 +44,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
       // Display-only label (models see name/description/schema; title is client-UI plumbing).
       title: t.title,
       // One worked example inline (shipped input examples measurably raise parameter accuracy);
-      // the full example set + filled templates live behind cork_capabilities [C13].
+      // the full example set + filled templates live behind cork_capabilities.
       description: t.description + descriptionExample(t.name),
       inputSchema: inputJsonSchema(t.name),
       outputSchema: ENVELOPE_SCHEMA,
@@ -81,9 +81,9 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
             : String(err);
       // Even the failure path honors the advertised outputSchema: a minimal error envelope as
       // structuredContent, with the teaching payload (issues/remediation/corrected example) as its
-      // data so the agent's next call can succeed without a doc lookup [v2 §5.4].
+      // data so the agent's next call can succeed without a doc lookup.
       // provenance.chainId echoes the REQUESTED chain when one was passed — a hardcoded 1 misled
-      // clients that branch on it (F20).
+      // clients that branch on it.
       const requestedChain = (args as { chainId?: unknown } | undefined)?.chainId;
       const chainId = ChainId.safeParse(requestedChain).data ?? 1;
       const errorEnvelope = {

@@ -95,7 +95,7 @@ struct MarketParams {
 ```
 
 `ResolvedConstraint` is unchanged. `PermitParams` changed with the nested adapter 0.5.0
-(market-registry PR #65, redeployed on both chains 2026-10-07; the address lives in
+(redeployed on both chains 2026-10-07; the address lives in
 `cork-defaults.v2.json`): the permit carries one `bytes signature` in place of `v`, `r`, `s`:
 
 ```solidity
@@ -259,7 +259,7 @@ market, added in the 0.3.x line):
 | `ExpiryOutOfRange` | The market would live longer than the registry's `maxExpiryDuration` (inclusive bound; 30 days at deployment, governance-movable) |
 | `SwapFeeOutOfRange` | 8-field pool manager (`phoenix/v0.3-rc.1`): a fee field above the 5% cap (`5e18` on the 1e18-=-1% scale) |
 | `InvalidFees` | 10-field pool manager (`phoenix/v0.4-rc.1`): a fee field at or above 100% (`100e18`); there is no `MAX_FEE_PERCENTAGE` getter on this set |
-| `InvalidRate` | 10-field pool manager: the oracle's live rate falls outside the carried constraint at creation — the lesson of the first nested rehearsal: an anchor of 1.0 on an undeployed NAV pair whose vault rate is 1.09 builds a market the fill rejects |
+| `InvalidRate` | 10-field pool manager: the oracle's live rate falls outside the carried constraint at creation — for example, an anchor of 1.0 on an undeployed NAV pair whose vault rate is 1.09 builds a market the fill rejects |
 
 The tool's pre-flights surface most of these before anything is signed: `recipe_not_found`,
 `recipe_refused`, `jit_side_mismatch`, `constraint_window_notice`, and `invalid_order_terms`

@@ -58,7 +58,7 @@ describe("lopInvalidatorPlan (MakerTraitsLib layout)", () => {
     }
   });
 
-  it("the same request id reproduces the same nonce (byte-identical retries [K2])", () => {
+  it("the same request id reproduces the same nonce (byte-identical retries)", () => {
     expect(mk("inv-test-0001").order.makerTraits).toBe(mk("inv-test-0001").order.makerTraits);
     expect(mk("inv-test-0001").nonce).toBe(mk("inv-test-0001").nonce);
   });
@@ -154,7 +154,7 @@ const track = (ctx: HandlerContext) =>
 
 const BIT_TRAITS = ((1n << 255n) | (0n << 120n)).toString(); // no-partial, nonce 0 → slot 0 mask 1
 
-describe("track reconcile: LOP invalidator leg [K7]", () => {
+describe("track reconcile: LOP invalidator leg", () => {
   it("resting order, chain says live → ok, chain-sourced, cancellable", async () => {
     const env = await track(stubCtx({ bookRow: { orderHash: HASH, maker: MAKER, makerTraits: BIT_TRAITS }, chainRead: 0n }));
     expect(env.state).toBe("ok");
@@ -165,7 +165,7 @@ describe("track reconcile: LOP invalidator leg [K7]", () => {
     expect(v.chainVerification.cancellable).toBe(true);
   });
 
-  it("venue still lists it but the chain bit is set → CONFLICT, chain outranks [K7]", async () => {
+  it("venue still lists it but the chain bit is set → CONFLICT, chain outranks", async () => {
     const env = await track(stubCtx({ bookRow: { orderHash: HASH, maker: MAKER, makerTraits: BIT_TRAITS }, chainRead: 1n }));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("status_mismatch");

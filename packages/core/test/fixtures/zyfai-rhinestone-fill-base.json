@@ -1,5 +1,5 @@
 {
-  "note": "Zyfai's second risk transfer on Base (2026-09-30T16:44:13Z): a Rhinestone IntentExecutor.executeSinglechainOps envelope around approve + fillOrderForSelf on Zyfai's v0.4 ForSelf adapter. Captured live; the decoder must unwrap it to the inner Cork legs.",
+  "note": "A live Base transaction (2026-09-30T16:44:13Z): a Rhinestone IntentExecutor.executeSinglechainOps envelope around approve + fillOrderForSelf on an integrator's v0.4 ForSelf adapter. Captured live; the decoder must unwrap it to the inner Cork legs.",
   "chainId": 8453,
   "txHash": "0xee1d42cc5b483f77e6f44c45e7b80306e9b0367c56b879a1ca8e82a84b09a602",
   "blockNumber": "51998653",

@@ -1,4 +1,4 @@
-// Streamable HTTP projection (Phase 2a): the SAME server surface over HTTP. The handler is a
+// Streamable HTTP projection: the SAME server surface over HTTP. The handler is a
 // pure fetch function, so the whole suite runs offline with zero sockets — the SDK client's
 // custom-fetch hook drives real Streamable HTTP protocol traffic straight into the handler.
 import { describe, expect, it } from "vitest";
@@ -164,7 +164,7 @@ describe("/readyz diagnostics", () => {
     process.env.CORK_RPC_CACHE_FILE = file;
     try {
       const handler = createHttpHandler({ token: "sekrit" });
-      // The FULL view needs a bearer (cork-cli-private#6); the MCP token is one of the two.
+      // The FULL view needs a bearer; the MCP token is one of the two.
       const res = await handler(new Request("http://cork.test/readyz", { headers: { authorization: "Bearer sekrit" } }));
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
@@ -205,7 +205,7 @@ describe("/readyz diagnostics", () => {
   });
 });
 
-describe("/readyz: two views (cork-cli-private#6)", () => {
+describe("/readyz: two views", () => {
   const SUMMARY_KEYS = ["admission", "config", "rpc", "venue"];
   const body = async (res: Response) => (await res.json()) as { status: string; detail: string; degraded: boolean; note?: string; subsystems: Record<string, Record<string, unknown>> };
 
@@ -298,7 +298,7 @@ describe("/readyz: two views (cork-cli-private#6)", () => {
   });
 });
 
-describe("security headers ride EVERY response (cork-cli-private#6)", () => {
+describe("security headers ride EVERY response", () => {
   const expectSecured = (res: Response, label: string) => {
     for (const [name, value] of Object.entries(MCP_SECURITY_HEADERS)) expect(res.headers.get(name), `${label}: ${name}`).toBe(value);
   };

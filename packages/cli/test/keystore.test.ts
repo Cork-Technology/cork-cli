@@ -1,6 +1,6 @@
 // CLI signing with a password-protected keystore: the v3 format against the spec's own vectors,
 // owner-only files, our own directory only, a human-only password, a yes before any signature,
-// and a hard wall between the MCP server and this code [K1].
+// and a hard wall between the MCP server and this code.
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,7 +153,7 @@ describe("the password comes from a human at a terminal only", () => {
   });
 });
 
-describe("the MCP server can never sign [K1]", () => {
+describe("the MCP server can never sign", () => {
   it("no MCP, core or schemas source reaches the signing modules", () => {
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(join(dir, d.name)) : d.name.endsWith(".ts") ? [join(dir, d.name)] : []));
     for (const pkg of ["mcp", "core", "schemas"]) {

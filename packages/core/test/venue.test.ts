@@ -1,6 +1,6 @@
 // Centralized-mode venue wiring, fully offline: an injected fetch stub plays api-phoenix.
 // Covers query routing (markets/orderbook/fills/limit-order-markets/flows), mode gating,
-// submit relays with [K3] recomputation (tampered payloads are NOT relayed), the venue POST
+// submit relays with local recomputation (tampered payloads are NOT relayed), the venue POST
 // outcome map (201/200/400/409/429), and track reconcile via venue lifecycle rows.
 import { beforeAll, describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
@@ -13,7 +13,7 @@ import { proveRfqWrite, rfqRecord, stubResolved, stubRpc, type StubCall, coverQu
 
 const NOW = 1_790_000_000n;
 
-// cork_submit now RECOVERS signatures against the recomputed commitments [K3/F3/F14], so relay
+// cork_submit now RECOVERS signatures against the recomputed commitments, so relay
 // fixtures must be genuinely signed. Anvil dev key #0 — public knowledge, test-only.
 const SIGNER = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
 
@@ -293,7 +293,7 @@ describe("cork_query venue-backed resources", () => {
   });
 });
 
-describe("cork_submit relays [K1] with local recomputation [K3]", () => {
+describe("cork_submit relays with local recomputation", () => {
   // The shipped worked example is a coherent payload (its rolloverIntentHash IS the zero-digest
   // hash of its intent) — reuse it as the canonical fixture.
   const example = TOOL_EXAMPLES.cork_submit![0]!.input as Record<string, unknown>;
@@ -383,7 +383,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
         signature: await signLop(1, order),
         side: "SELL",
         premiumAnnualized: "0.036",
-        expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
+        expiry: 0, // makerTraits "0" encode no expiry — the listing must agree
         nonce: "0",
         allowsPartialFills: true,
       },
@@ -450,7 +450,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
     expect(rejected.warnings[0]?.code).toBe("venue_rejected");
   });
 
-  it("rfq-open: clientRequestId becomes the venue request_id (idempotency [K2] on the wire)", async () => {
+  it("rfq-open: clientRequestId becomes the venue request_id (idempotency on the wire)", async () => {
     const seen: Seen[] = [];
     const example2 = await proveRfqWrite(SIGNER, TOOL_EXAMPLES.cork_submit![1]!.input as never);
     const env = await runTool("cork_submit", example2, ctxWith([{ match: "/rfqs/v2", status: 201, body: { rfq_id: "rfq_001", state: "open" } }], seen));
@@ -464,7 +464,7 @@ describe("cork_submit relays [K1] with local recomputation [K3]", () => {
   });
 });
 
-describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithmetic tripwires (F5) + rfq-open validation (F6)", () => {
+describe("footgun hardening: derive-and-clamp on submit + exact-arithmetic tripwires + rfq-open validation", () => {
   const order = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
   const lop = async (over: Record<string, unknown> = {}) => ({
     chainId: 1,
@@ -472,7 +472,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     action: { type: "lop-order", order, signature: await signLop(1, order), side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: "0", allowsPartialFills: true, ...over },
   });
 
-  it("F3: listing fields contradicting the signed makerTraits → conflict listing_traits_mismatch, NOT relayed", async () => {
+  it("listing fields contradicting the signed makerTraits → conflict listing_traits_mismatch, NOT relayed", async () => {
     const seen: Seen[] = [];
     const env = await runTool("cork_submit", await lop({ expiry: 1795000000 }), ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen));
     expect(env.state).toBe("conflict");
@@ -484,7 +484,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(partialLie.warnings[0]?.code).toBe("listing_traits_mismatch");
   });
 
-  it("F3: a signature that does not recover to the maker → conflict, NOT relayed", async () => {
+  it("a signature that does not recover to the maker → conflict, NOT relayed", async () => {
     const seen: Seen[] = [];
     const base = await lop();
     const forged = { ...base, action: { ...base.action, order: { ...order, maker: "0xc0ffee0000000000000000000000000000000001" } } };
@@ -494,7 +494,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 
-  it("F3/ERC-1271: a contract maker is verified with the fill's own isValidSignature staticcall — rejection is NOT relayed", async () => {
+  it("ERC-1271: a contract maker is verified with the fill's own isValidSignature staticcall — rejection is NOT relayed", async () => {
     const seen: Seen[] = [];
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
     const rpcAnswering = (magic: string) => async () =>
@@ -509,7 +509,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
 
-  it("F3/ERC-1271 attribution: a REVERTING isValidSignature is a definitive rejection (conflict, NOT relayed); a transport failure discloses and relays", async () => {
+  it("ERC-1271 attribution: a REVERTING isValidSignature is a definitive rejection (conflict, NOT relayed); a transport failure discloses and relays", async () => {
     const seen: Seen[] = [];
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
     const throwing = (err: Error) => async () => stubResolved({ readContract: async () => { throw err; } });
@@ -525,7 +525,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
 
-  it("F3/ERC-1271: with no RPC the gap is DISCLOSED (relayed with chain_read_failed), never silent", async () => {
+  it("ERC-1271: with no RPC the gap is DISCLOSED (relayed with chain_read_failed), never silent", async () => {
     const seen: Seen[] = [];
     const base = await lop({ makerAccountType: "ERC1271", signature: "0xdeadbeef" });
     const env = await runTool("cork_submit", base, { ...ctxWith([{ match: "/limit-orders/v1", status: 201, body: {} }], seen), resolveRpc: async () => null });
@@ -534,7 +534,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(1);
   });
 
-  it("F14: a rollover order whose signature does not recover to order.user → conflict, NOT relayed", async () => {
+  it("a rollover order whose signature does not recover to order.user → conflict, NOT relayed", async () => {
     const seen: Seen[] = [];
     const tampered = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: { orderSize: string } } };
     tampered.action.order.orderSize = "999"; // digest changes → the example's real signature no longer matches
@@ -547,7 +547,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 
-  it("F14: submit re-runs the settler-mode gate the prepare path enforces", async () => {
+  it("submit re-runs the settler-mode gate the prepare path enforces", async () => {
     const seen: Seen[] = [];
     const flipped = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as { action: { order: Record<string, unknown> } };
     flipped.action.order.allowPartialFills = true; // example settler is the ExactSettler
@@ -557,7 +557,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 
-  it("F5: an EXACTLY-100x premium divergence is blocked (the float ratio rounded to 99.99999999999999)", async () => {
+  it("an EXACTLY-100x premium divergence is blocked (the float ratio rounded to 99.99999999999999)", async () => {
     const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1", premium_annualized: "0.041" }] } }] };
     const env = await runTool(
       "cork_submit",
@@ -568,7 +568,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(env.warnings[0]?.code).toBe("premium_scale_mismatch");
   });
 
-  it("F5: a cited option with no parsable premium is a conflict, not a silent skip", async () => {
+  it("a cited option with no parsable premium is a conflict, not a silent skip", async () => {
     const rfq = { rfq_id: "rfq_1", request: { requester: SIGNER.address }, answers: [{ answer_id: "ans_1", answer: { options: [{ option_id: "1" }] } }] };
     const env = await runTool(
       "cork_submit",
@@ -580,7 +580,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(env.warnings[0]?.message).toContain(UNITS_TOPIC_REFERENCE);
   });
 
-  it("F5: the rfq-answer 0.5 cap replicates the venue's parseFloat refine — a 17-digit just-under value fails THERE, so it fails here", async () => {
+  it("the rfq-answer 0.5 cap replicates the venue's parseFloat refine — a 17-digit just-under value fails THERE, so it fails here", async () => {
     const collateral = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
     const answer = async (p: string) => proveRfqWrite(SIGNER, { chainId: 42161, clientRequestId: "test-edge-0001", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: SIGNER.address, status: "quoted", options: await signQuotes(SIGNER, [{ option_id: "1", chain_id: 42161, collateral_asset: collateral, premium_annualized: p, order: coverQuoteOrder(SIGNER.address, collateral) }]) } }, "new_position");
     // 16 digits: parseFloat = 0.4999999999999999 < 0.5 — the venue accepts, so we relay.
@@ -598,24 +598,23 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(atCap.warnings[0]?.code).toBe("invalid_order_terms");
     // The cap is POLICY (pilot posture, spec-invisible, relaxable) — the message must say so
     // and must NOT teach it as structure, or callers over-fit to a bound expected to move
-    // (owner ruling: pattern = contract, bound = current policy).
+    // (pattern = contract, bound = current policy).
     expect(atCap.warnings[0]?.message).toContain("POLICY");
     expect(atCap.warnings[0]?.message).toContain("relaxable");
     expect(atCap.warnings[0]?.message).not.toContain("STRUCTURE");
   });
 
-  it("F5: a wrong-SCALE premium (percent number / wad integer) is a STRUCTURE reject with the units-table route", async () => {
+  it("a wrong-SCALE premium (percent number / wad integer) is a STRUCTURE reject with the units-table route", async () => {
     const answer = (p: string) => ({ chainId: 42161, clientRequestId: "test-edge-0002", action: { type: "rfq-answer", rfqId: "rfq_1", underwriter: "0xc0ffee0000000000000000000000000000000001", status: "quoted", options: [{ option_id: "1", premium_annualized: p }], auth: { method: "signature", signature: "0x00" } } });
     // "4.1" is the book listing's percent number; "41000000000000000" is 4.1% as a wad — both
-    // are the classic cross-surface scale mistakes, both fail the R13-pinned wire shape.
+    // are the classic cross-surface scale mistakes, both fail the fixed fraction-string wire shape.
     for (const bad of ["4.1", "41000000000000000"]) {
       const seen: Seen[] = [];
       const env = await runTool("cork_submit", answer(bad), ctxWith([{ match: "/rfqs/v2/rfq_1/answers", status: 201, body: { answer_id: "a" } }], seen));
       expect(env.state, bad).toBe("unavailable");
       expect(env.warnings[0]?.code, bad).toBe("invalid_order_terms");
-      // Structure, not policy: this rejection is permanent under R13 and the message says so.
+      // Structure, not policy: this rejection is permanent (a field's unit never changes in place) and the message says so.
       expect(env.warnings[0]?.message, bad).toContain("STRUCTURE");
-      expect(env.warnings[0]?.message, bad).toContain("R13");
       expect(env.warnings[0]?.message, bad).not.toContain("POLICY");
       expect(env.warnings[0]?.message, bad).toContain(UNITS_TOPIC_REFERENCE);
       // Fail-early means fail-LOCAL: nothing reached the venue.
@@ -623,7 +622,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     }
   });
 
-  it("F6: rfq-open validates the window and validUntil like its rollover sibling", async () => {
+  it("rfq-open validates the window and validUntil like its rollover sibling", async () => {
     const seen: Seen[] = [];
     const base = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
     const inverted = JSON.parse(JSON.stringify(base));
@@ -641,7 +640,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
     expect(seen.filter((s) => s.method === "POST")).toHaveLength(0);
   });
 
-  it("rfq-open: an EQUAL window is refused locally with the venue's strict rule and the one-expiry recipe (the 2026-10-01 integration triage, item 5)", async () => {
+  it("rfq-open: an EQUAL window is refused locally with the venue's strict rule and the one-expiry recipe", async () => {
     const seen: Seen[] = [];
     const equal = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![1]!.input)) as { action: Record<string, unknown> };
     (equal.action.expiryWindow as { notBefore: number; notAfter: number }).notBefore = 1795604800;
@@ -683,7 +682,7 @@ describe("footgun hardening: derive-and-clamp on submit (F3/F14) + exact-arithme
 describe("cork_track reconcile via venue lifecycle", () => {
   const digest = `0x${"3".repeat(64)}`;
 
-  it("rollover order found → venue-reported lifecycle with the [K7] disclosure", async () => {
+  it("rollover order found → venue-reported lifecycle with the chain-verification disclosure", async () => {
     const env = await runTool(
       "cork_track",
       { mode: "reconcile", subject: { kind: "orderHash", orderHash: digest }, format: "concise" },
@@ -727,7 +726,7 @@ describe("cork_track reconcile via venue lifecycle", () => {
   });
 });
 
-describe("R4: numbers-contract tripwires + quote_ref cross-check + extension orders", () => {
+describe("numbers-contract tripwires + quote_ref cross-check + extension orders", () => {
   const lopOrder = { salt: "123", maker: SIGNER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000", makerTraits: "0" };
   const lopBaseP = (async () => ({
     chainId: 1,
@@ -738,7 +737,7 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
       signature: await signLop(1, lopOrder),
       side: "SELL",
       premiumAnnualized: "0.00036", // 0.036% — a fraction-of-a-fraction paste, below the 0.1% tripwire
-      expiry: 0, // makerTraits "0" encode no expiry — the listing must agree [F3]
+      expiry: 0, // makerTraits "0" encode no expiry — the listing must agree
       nonce: "0",
       allowsPartialFills: true,
     },
@@ -833,8 +832,8 @@ describe("R4: numbers-contract tripwires + quote_ref cross-check + extension ord
     expect(own.state).toBe("ok");
     expect(own.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
 
-    // The underwriter of the CITED answer (maker-mode SELL citing its own quote, cork-api 0.4.1 /
-    // gh#60) → relays. Case-flipped to prove the compare.
+    // The underwriter of the CITED answer (maker-mode SELL citing its own quote, cork-api 0.4.1)
+    // → relays. Case-flipped to prove the compare.
     const underwriter = await withRfq({ rfq_id: "rfq_1", request: { requester: BUYER }, answers: [answer("ans_1", SIGNER.address.toUpperCase().replace("0X", "0x"))] });
     expect(underwriter.state).toBe("ok");
     expect(underwriter.warnings.some((w) => w.code === "citation_unresolved")).toBe(false);
@@ -1023,7 +1022,7 @@ describe("edge branches: pass answers, hooks round-trip, list shapes, transport 
     expect(posted.intent.preRolloverHooks.length).toBe(1);
   });
 
-  it("rollover-order with an UNRECOGNIZED settler relays WITH settler_not_recognized (F14 parity with prepare)", async () => {
+  it("rollover-order with an UNRECOGNIZED settler relays WITH settler_not_recognized (parity with prepare)", async () => {
     const example = JSON.parse(JSON.stringify(TOOL_EXAMPLES.cork_submit![0]!.input)) as {
       action: { order: Record<string, unknown> & { settler: string; rolloverParams: Record<string, unknown> }; signature?: string };
     };
@@ -1623,7 +1622,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
   });
 });
 
-// ── auction-priced resting orders on taker-fill (fusion F2, the fill side) ───────────────────
+// ── auction-priced resting orders on taker-fill (fusion, the fill side) ───────────────────
 // The amount getter charges the DECAYED price, so the default slippage cap must be the curve's
 // CEILING — a floor-based cap (the plain signed ratio) reverts TakingAmountTooHigh for the whole
 // decay window, making the default artifact dead bytes.
@@ -1908,8 +1907,8 @@ describe("RFQ negotiation surface (rfq-counter, supersedes, view) — venue cont
 });
 
 describe("normalizeRfqRow — the venue's RFQ envelope is flattened ONCE at the boundary", () => {
-  // The venue stores the requester's POSTed body verbatim under `request` (cork-api
-  // get-rfqs.schema.ts) beside the row-level facts. A flat fixture hid this for three rc cuts;
+  // The venue stores the requester's POSTed body verbatim under `request` (the venue's RFQ list
+  // schema) beside the row-level facts. A flat fixture hid this for three rc cuts;
   // the 2026-09-21 staging rehearsal found answer-rfq refusing every real RFQ.
   const row = {
     rfq_id: "rfq_x", state: "open", version: 4, received_at: 1_790_000_000, answers: [], answer_count: 0,

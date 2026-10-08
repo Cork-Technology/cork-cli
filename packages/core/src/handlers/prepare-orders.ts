@@ -187,7 +187,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // The gate-facing artifact is content-addressed so an independent policy gate can pin
       // exactly what it admitted before submit.
       const artifact = { kind: "signed-maker-order", orderHash: finalized.orderHash, recoveredSigner, makerAccountType, signature: finalized.signature, extension: finalized.extension, submitInput };
-      // Approval requirements re-derived from the SIGNED bytes [K3]: the Permit2 sourcing bit
+      // Approval requirements re-derived from the SIGNED bytes: the Permit2 sourcing bit
       // and expiry from the signed makerTraits; for a JIT extension, the adapter/collateral
       // from the decoded extension and the predicted cST from its embedded permit. Advisory
       // only — deliberately OUTSIDE `artifact`, so the digest pins signed content alone.
@@ -216,8 +216,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             code: "caller_signed_artifact",
             message:
               makerAccountType === "ERC1271"
-                ? "contract-maker signature verified via the ERC-1271 isValidSignature staticcall (the same check the fill performs), not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact"
-                : "signature verified and recovered, not created [K1]; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact",
+                ? "contract-maker signature verified via the ERC-1271 isValidSignature staticcall (the same check the fill performs), not created here; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact"
+                : "signature verified and recovered, not created here; pass submitInput verbatim to cork_submit after your independent policy gate admits this artifact",
           },
           ...finalizeWarnings,
         ],
@@ -248,7 +248,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     let extension = action.extension;
     const warnings: Array<{ code: string; message: string }> = [];
     let jitData: MakerJitReport | LegacyJitReport | undefined;
-    // U8 (design §9): on the flat wire a CONTRACT maker (a Safe) cannot sign the ECDSA-only
+    // On the flat wire a CONTRACT maker (a Safe) cannot sign the ECDSA-only
     // ERC-2612 permit a JIT mint needs, so when its pool does not exist yet the completion path
     // starts with create-pool and the two allowances. On the nested wire (adapter 0.5.0+) the
     // permit carries ERC-1271 bytes, so a contract maker that already carries a permit for the cST
@@ -305,8 +305,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
             }
             // A generation with a registry block but no phoenix block has no pool manager to
-            // create on — a refusal naming the set, never bytes with a skipped prediction (review
-            // A2, 2026-09-22; the ladder's phoenix-wire gate already refused, this is the second
+            // create on — a refusal naming the set, never bytes with a skipped prediction
+            // (2026-09-22; the ladder's phoenix-wire gate already refused, this is the second
             // tripwire on the same fact).
             if (jitDep?.poolManager === undefined) {
               return unavailable(chainId, "unknown_deployment", `generation '${ladder.generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown and no pool manager exists to predict the cST on — refresh cork-defaults.v2.json`, ctx);
@@ -365,7 +365,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         const extraData = codec.encodeExtraData(jitParams, permits);
         if (ladder.verified) {
           // Decode round-trip: the deployed adapter's own decoder is the layout oracle for the
-          // bytes this build produced. A disagreement is the finding's failure class — refused.
+          // bytes this build produced. A disagreement is the bytes-decoder failure class — refused.
           const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
           if ("gate" in layout) return layout.gate;
           jitData = { ...jitData, extraDataLayout: layout.status };
@@ -374,7 +374,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       }
     }
 
-    // ── optional Cork-native decaying-premium auction (fusion plan F2): the deployed Fusion
+    // ── optional Cork-native decaying-premium auction: the deployed Fusion
     // settlement rides as a pure AMOUNT GETTER (no postInteraction → fills stay permissionless);
     // the signed takingAmount is the FLOOR and the price decays down to it. Composes with the
     // JIT extension above: one blob, one salt binding. Pure local byte-building — no RPC. ──
@@ -434,7 +434,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       return unavailable(chainId, "invalid_order_terms", err instanceof Error ? err.message : "maker order construction failed", ctx);
     }
     if (action.auction) {
-      // The fusion echo is derived from the BUILT BYTES, not the input struct [K3]: decode the
+      // The fusion echo is derived from the BUILT BYTES, not the input struct: decode the
       // signed-artifact extension with the same decoder every consumer uses, so an encode bug
       // can never produce an echo that disagrees with what the maker actually signs.
       let dec: DecodedFusionOrder;
@@ -588,7 +588,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // address no generation vouches for has no wire — and with two live wires (rc.2 and 0.2)
       // a guess is a coin toss on SIGNED bytes: the pre-0.6 fallback took the primary's 0.2
       // typehash, so an rc.2-shaped partner filler could never reproduce the commitment
-      // (BaseFiller__JitMarketHashMismatch at best). Refused since 2026-09-22 (review A1);
+      // (BaseFiller__JitMarketHashMismatch at best). Refused since 2026-09-22;
       // a plain order (no commitment) keeps the warn-and-build path — the venue's admission
       // decides, and nothing wire-shaped is signed.
       if (act.jitMarket !== undefined || (act.jitMarketHash !== undefined && act.jitMarketHash !== ZERO_JIT_MARKET_HASH)) {
@@ -604,7 +604,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     const settlerGeneration = cls.status === "active" ? cls.generation : undefined;
     const jitWire = settlerGeneration?.wire;
 
-    // Optional JIT market commitment: hash the negotiated instruction locally [K3], or take a
+    // Optional JIT market commitment: hash the negotiated instruction locally, or take a
     // pre-computed hash verbatim; never both (two sources of the same commitment can disagree).
     if (act.jitMarket && act.jitMarketHash) {
       return unavailable(chainId, "invalid_order_terms", "jitMarket and jitMarketHash are mutually exclusive — pass the instruction to hash locally, or the pre-computed commitment, not both", ctx);
@@ -616,7 +616,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         return unavailable(chainId, "invalid_order_terms", `a jitMarket instruction cannot be committed for settler ${act.settler}: ${jitWire === "rc.1" ? "its generation predates jitMarketHash (rc.1)" : "no live rollover generation on this chain speaks a JIT commitment wire"} — bind the order to an active settler (${activeSettlersTeaching(rollover, "EXACT")}; ${activeSettlersTeaching(rollover, "PARTIAL")})`, ctx);
       }
       // The recipe bytes + salt, resolved by the ONE alias rule every JIT input shares
-      // (handlers/jit.ts resolveJitBytesInput, since 2026-09-22 — review B2 found three
+      // (handlers/jit.ts resolveJitBytesInput, since 2026-09-22 — there were three
       // behaviours across the registry, create-pool and rollover blocks): `extraData` is the
       // input name, `additionalData` the deprecated alias (info deprecation_notice), both present
       // and different is two payloads and refuses as invalid input; an explicit "0x" counts as
@@ -636,7 +636,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       // The pool id width is the pool manager's, read from the settler's chain generation (its
       // phoenix block) — declared, never inferred from the rollover wire (the pre-0.6
       // `phoenixWireOfRolloverWire` mapping did that, and a generation whose rollover block
-      // outlived its phoenix block would have hashed the wrong width: review A2, 2026-09-22).
+      // outlived its phoenix block would have hashed the wrong width, 2026-09-22).
       // A generation with no phoenix block cannot create the destination pool at all — refused.
       const { generation: phoenixGeneration } = await getDep(ctx, chainId, { generation: settlerGeneration!.label });
       const phoenixWire = phoenixGeneration?.wire;
@@ -676,7 +676,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             wantConstraint: false,
           });
           if (!res.gate && res.oracle.address && settlerGeneration !== undefined && mrGeneration?.label === settlerGeneration.label) {
-            // ONE derivation for one identity (review B6): deriveJitMarket on the phoenix wire
+            // ONE derivation for one identity: deriveJitMarket on the phoenix wire
             // resolved above — 10-field hashes the two fees INTO the id, 8-field ignores them.
             const constraint = {
               rateMin: BigInt(jm.constraint.rateMin),
@@ -773,7 +773,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       warnings.push({ code: "invalid_order_terms", message: `no slippage floor: ${unfloored.join(" and ")} ${unfloored.length > 1 ? "are" : "is"} not set and will be SIGNED as 0, so a filler may complete this roll at whatever rate the two pools give at fill time — pass the floor${unfloored.length > 1 ? "s" : ""} you would accept (cork_compute unwind-rate prices the collateral leg at today's rate)` });
     }
 
-    // Deterministic venue-admission battery, shared with submit ([F14]: the two surfaces must
+    // Deterministic venue-admission battery, shared with submit (the two surfaces must
     // refuse the same orders). The builder pins intent.deadline = fillDeadline; the hooks it
     // carries are checked by the same shape rule the submit side runs.
     const violation = checkRolloverOrderTerms({
@@ -882,10 +882,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
 
     // ── Inline signed order: the caller already holds the bytes, so the venue is NOT
     // contacted at all — a flaky book or a dropped row cannot block a fill of bytes in hand.
-    // The verification bar is the venue path's and stricter: [K3] local re-hash against the
+    // The verification bar is the venue path's and stricter: local re-hash against the
     // claimed orderHash, the salt↔extension binding OrderLib enforces at fill, and the maker
     // signature verified the way the fill verifies it (ecrecover / the ERC-1271 staticcall);
-    // the shared tail then runs the same on-chain liveness pre-flight [K7].
+    // the shared tail then runs the same on-chain liveness pre-flight.
     if (action.signedOrder) {
       const so = action.signedOrder;
       const order: LopOrder = { salt: BigInt(so.order.salt), maker: so.order.maker, receiver: so.order.receiver, makerAsset: so.order.makerAsset, takerAsset: so.order.takerAsset, makingAmount: BigInt(so.order.makingAmount), takingAmount: BigInt(so.order.takingAmount), makerTraits: BigInt(so.order.makerTraits) };
@@ -940,7 +940,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       const parsed = parseSignedLopOrder(row);
       if (!parsed.ok) return unavailable(chainId, "invalid_service_response", `venue returned a malformed signed order — ${parsed.error}`, ctx);
       const signed = parsed.value;
-      // [K3] re-hash the venue's order locally; a row that does not hash to the requested order
+      // Re-hash the venue's order locally; a row that does not hash to the requested order
       // (or disagrees with the venue's own claimed hash) yields NO fill bytes.
       const localOrderHash = hashLopOrder(chainId, lop, signed.order);
       if (localOrderHash.toLowerCase() !== wanted || (signed.venueOrderHash !== undefined && signed.venueOrderHash.toLowerCase() !== localOrderHash.toLowerCase())) {
@@ -958,7 +958,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       if (signed.order.makingAmount === 0n) {
         return unavailable(chainId, "invalid_service_response", `venue returned a resting order with makingAmount 0 for ${action.orderHash} — a malformed row; no fill bytes were built`, ctx);
       }
-      // The venue's row is DISCOVERY, not authority [K3]: the extension rule and the maker
+      // The venue's row is DISCOVERY, not authority: the extension rule and the maker
       // signature are checked exactly as the inline path checks bytes in hand — a row the venue
       // serves with a signature its maker never made, or bytes its salt never committed to,
       // yields no fill (the fill would only revert) and the venue's `makerAccountType` claim is
@@ -1140,7 +1140,7 @@ async function buildTakerFillArtifact(a: {
   quoteCover?: Record<string, unknown> | undefined;
 }): Promise<Envelope> {
   const { ctx, chainId, account, clientRequestId, action, lop, signed, localOrderHash } = a;
-  // Exclusivity pre-flight, chain-free from the signed bytes [K3]: a reserved order admits ONE
+  // Exclusivity pre-flight, chain-free from the signed bytes: a reserved order admits ONE
   // filler — the LOP compares the LOW 80 BITS of msg.sender to the suffix the maker signed and
   // reverts PrivateOrder() otherwise. The sender is whoever CALLS the LOP: the account on the
   // raw path, the ForSelf ADAPTER on the wrapper path (the wrapper is the LOP's caller, the
@@ -1164,7 +1164,7 @@ async function buildTakerFillArtifact(a: {
       ctx,
     });
   }
-  // Liveness pre-flight [K7]: the venue can list rows whose on-chain invalidator already
+  // Liveness pre-flight: the venue can list rows whose on-chain invalidator already
   // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
   // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
   // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
@@ -1183,7 +1183,7 @@ async function buildTakerFillArtifact(a: {
             data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
             chainId,
             source: "chain",
-            warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue [K7]; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
+            warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
             ctx,
           });
         }
@@ -1202,7 +1202,7 @@ async function buildTakerFillArtifact(a: {
       throw new ToolInputError("cork_prepare_orders", [{ path: ["action", action.interaction !== undefined ? "interaction" : "jitMarket"], message: "forSelf cannot carry a taker interaction — the wrapper zeroes the interaction-length bits by design (a mid-fill callee while it holds a live allowance would defeat its custody model). Lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path" }]);
     }
   }
-  // FOREIGN extension targets (owner requirement 2026-09-23): the signed extension names every
+  // FOREIGN extension targets (2026-09-23): the signed extension names every
   // contract the LOP will CALL inside the taker's transaction — the amount getters that set the
   // price, the maker's pre- and post-interaction hooks. A target that is neither a configured
   // generation's JIT adapter nor the release-pinned Fusion settlement is code nobody here has
@@ -1238,7 +1238,7 @@ async function buildTakerFillArtifact(a: {
     jitData = built.jit;
     jitWarnings.push(...built.warnings);
   }
-  // Auction-priced resting order (fusion F2): the amount getter charges the DECAYED price,
+  // Auction-priced resting order: the amount getter charges the DECAYED price,
   // not the signed floor — so buildTakerFill's default slippage cap (the signed ratio, i.e.
   // the floor) would make the artifact revert TakingAmountTooHigh for the entire decay
   // window. Default the cap to the curve's CEILING instead: valid at ANY broadcast time
@@ -1251,8 +1251,8 @@ async function buildTakerFillArtifact(a: {
     try {
       auctionDec = decodeFusionOrder(signed.order, signed.extension, chainId);
     } catch (err) {
-      // A CLASSIFIED getter means the order's price comes from a contract we cannot price
-      // (audit ARTIFACT-FUSION-003). We must not DERIVE a cap from its tail bytes — that would
+      // A CLASSIFIED getter means the order's price comes from a contract we cannot price.
+      // We must not DERIVE a cap from its tail bytes — that would
       // be inventing a number for a charge we do not understand. A taker who sets an explicit
       // maximumTakingAmount still gets bytes: the LOP enforces that cap on-chain
       // (TakingAmountTooHigh), so the unknown getter can only make the fill revert, never
@@ -1312,7 +1312,7 @@ async function buildTakerFillArtifact(a: {
   // contract maker on an unborn JIT cST (every fill reverts), or a code-less makerAsset with
   // no creating hook (the fill silently moves nothing while the taker pays — simulation shows
   // that class GREEN, which is why this decode-based check exists beside simulation). Decoded
-  // from the SIGNED bytes [K3]; chain facts read in ONE concurrent batch with the maker-side
+  // from the SIGNED bytes; chain facts read in ONE concurrent batch with the maker-side
   // approval annotation against the client the liveness pre-flight already resolved (the
   // batching client coalesces the overlapping legs — no extra chain-contact policy).
   // Build-and-warn, never refuse: every reason is the MAKER's to fix, without re-signing.
@@ -1450,7 +1450,7 @@ async function buildTakerFillArtifact(a: {
       ...(action.interaction !== undefined ? { approvalsNote: "a custom taker interaction rides this fill — any tokens the interaction contract itself pulls are OUTSIDE this approvals report; discover them with cork_track simulate before granting anything" } : {}),
       ...(jitData ? { jit: jitData } : {}),
       ...(auctionData ? { auction: auctionData } : {}),
-      // Money outputs carry their unit [R1 convention]: two tokens' quanta meet on this result
+      // Money outputs carry their unit: two tokens' quanta meet on this result
       // and neither is necessarily 18-decimals.
       scales: { requiredMakingAmount: "base units of makerAsset (the token's own decimals)", requiredTakingAmount: "base units of takerAsset — the on-chain cap the calldata enforces", unitsTopic: UNITS_TOPIC_REFERENCE },
       simulationRequired: true,
@@ -1470,9 +1470,9 @@ function slotLabel(makerTraits: bigint): string {
   return p.mode === "bit" ? `slot ${p.slot}` : "the remaining-amount invalidator (no slot word)";
 }
 
-/** `cancel` with scope `slot` (cork-cli-private#15): LOP.bitsInvalidateForOrder for the anchor
+/** `cancel` with scope `slot`: LOP.bitsInvalidateForOrder for the anchor
  *  order's slot word, the mask = every OTHER resting order of this maker in that slot, read from
- *  the venue book. The book is DISCOVERY, not authority [K3]: every row is re-hashed locally and
+ *  the venue book. The book is DISCOVERY, not authority: every row is re-hashed locally and
  *  judged from its SIGNED makerTraits (maker, invalidator mode, slot); a row that does not hash
  *  to its own claim is skipped and counted. Fail-closed on an incomplete traversal: a mask built
  *  from a partial book under-sweeps and the `retires` list would lie, so a conflict names the

@@ -1,4 +1,4 @@
-// Streamable HTTP projection of the same MCP server (Phase 2a of the remote-deploy plan). One
+// Streamable HTTP projection of the same MCP server. One
 // fetch handler (Request → Response) serves three routes:
 //   POST /mcp              — the MCP Streamable HTTP endpoint (SDK web-standard transport,
 //                            STATELESS: sessionIdGenerator undefined + a fresh createCorkServer
@@ -12,7 +12,7 @@
 //                            process serves: the pure tools (capabilities/decode/byte-building)
 //                            need no upstream, so "not ready" would lie — ingress/monitoring
 //                            alert on the BODY (subsystems.*.degraded), not the status code.
-//                            TWO VIEWS (cork-cli-private#6, 2026-10-07): the public body is the
+//                            TWO VIEWS (2026-10-07): the public body is the
 //                            SUMMARY — one `degraded` flag per subsystem and the aggregate — and
 //                            nothing else; the FULL view (RPC hosts and breaker states, the venue
 //                            host and its last outcome, in-flight counts and the admission bounds,
@@ -31,7 +31,7 @@
 // The handler is a pure function so tests drive it without a socket; `startHttpServer` wraps it
 // in Bun.serve for the real deployment (container entrypoint: `ch mcp --http`).
 //
-// Every response — the transport's included — carries MCP_SECURITY_HEADERS (cork-cli-private#6):
+// Every response — the transport's included — carries MCP_SECURITY_HEADERS:
 // the endpoint serves JSON and markdown to machine clients, so nothing here is ever meant to be
 // rendered, framed, cached by an intermediary, or sniffed into another type; the headers say so
 // once, in one place, instead of relying on every route and every SDK version to say it.
@@ -39,7 +39,7 @@
 // Auth: when CORK_MCP_TOKEN is set the MCP endpoint requires `Authorization: Bearer <token>`;
 // unset = open — the deployed endpoint is public BY DESIGN (a workshop hands its URL to a room).
 // The token is never logged. Open does not mean unbounded: admission.ts enforces the body, depth,
-// batch, concurrency and deadline bounds an ingress cannot see, per CLIENT (audit MCP-NET-003).
+// batch, concurrency and deadline bounds an ingress cannot see, per CLIENT.
 // Clients CANNOT override the RPC endpoint per-call — server reads run on server-side RPC
 // config only, and broadcasting is always client-side (cork_capabilities topic:"signing").
 import { timingSafeEqual } from "node:crypto";
@@ -170,8 +170,8 @@ export function readyzBody(detail: "summary" | "full", diag: { rpc: ReturnType<t
 /** The pure fetch handler — testable without a listening socket. `peerAddress` is supplied by
  *  the server wrapper (Bun knows the socket's peer; a bare Request does not). */
 export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, peerAddress?: string) => Promise<Response> {
-  // X-Forwarded-For is trusted only when the OPERATOR says an ingress is in front (audit
-  // DB-002). It used to default on for any non-loopback bind — a guess: a bare
+  // X-Forwarded-For is trusted only when the OPERATOR says an ingress is in front. It used to
+  // default on for any non-loopback bind — a guess: a bare
   // `--host 0.0.0.0` on a box with no proxy let every caller mint a fresh principal per request
   // and walk past the per-client cap. Default OFF fails the safe way (one shared bucket behind
   // an undeclared ingress, visible in /readyz) instead of the silent one.

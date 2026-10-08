@@ -1,4 +1,4 @@
-// track mode:"simulate" — eth_call dry-run of FROZEN prepared bytes [K1: executes nothing].
+// track mode:"simulate" — eth_call dry-run of FROZEN prepared bytes (executes nothing).
 // A revert is a successful simulation whose answer is wouldRevert:true, never a fabricated error.
 import { describe, expect, it } from "vitest";
 import { runTool, type HandlerContext } from "@cork/core";

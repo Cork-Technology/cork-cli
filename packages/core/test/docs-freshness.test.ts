@@ -1,9 +1,9 @@
-// Docs-freshness gate — the drift class behind cork-cli issue #1 (the partner quickstart shipped
+// Docs-freshness gate — the drift class where the partner quickstart shipped
 // a full release cycle documenting the RETIRED registry generation while cork-defaults.json at
-// the same tag carried the current one). Docs are prose, so no type checker sees them rot; this
+// the same tag carried the current one. Docs are prose, so no type checker sees them rot; this
 // suite makes the rot self-announcing by tying the quickstart's generation markers to the SAME
 // config the tool resolves. The next registry redeploy edits cork-defaults.json → this fails →
-// the doc refresh becomes part of the change, not a partner-filed issue.
+// the doc refresh becomes part of the change, not a later report.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { BUNDLED_DEFAULTS } from "../src/config-remote.ts";
@@ -35,7 +35,7 @@ const LEGACY_STACKS = Object.values(ARBITRUM.sets)
   .filter((mr): mr is MarketRegistryBlock & Record<string, unknown> => mr !== undefined && mr.wire === "legacy");
 
 /** Superseded 0.3.x stacks, pinned as history: these exact addresses shipped in the quickstart's
- *  worked examples after the 0.3.3 redeploy retired them (issue #1's drift inventory). Config no
+ *  worked examples after the 0.3.3 redeploy retired them (the drift inventory). Config no
  *  longer records them anywhere (git history does), so they are constants here — append the next
  *  generation's set when it retires; never remove entries. */
 const RETIRED_032_STACK = [
@@ -71,7 +71,7 @@ describe("docs freshness: zyfai-quickstart.md tracks the configured registry gen
 
   it("every 'contracts release X' claim names an ACTIVE generation's contractsVersion, and the primary's is claimed — a config relabel without a doc refresh fails here", () => {
     const claims = [...quickstart.matchAll(/contracts release \*{0,2}(\d+\.\d+\.\d+)/g)].map((m) => m[1]!);
-    expect(claims.length, "the quickstart is expected to state its releases at least twice (status block, §5G)").toBeGreaterThanOrEqual(2);
+    expect(claims.length, "the quickstart is expected to state its releases at least twice (status block, risks section)").toBeGreaterThanOrEqual(2);
     const active = new Set(ACTIVE_REGISTRIES.map((mr) => mr.contractsVersion));
     for (const v of claims) expect(active.has(v), `'contracts release ${v}' names no ACTIVE registry generation (${[...active].join(", ")})`).toBe(true);
     expect(claims, "the primary's release must be claimed somewhere").toContain(PRIMARY.contractsVersion);
@@ -113,7 +113,7 @@ describe("docs freshness: jit-order-anatomy.md is address-free by design", () =>
   });
 });
 
-describe("docs freshness: docs/cli.md's staging config.json example parses and merges (cork-cli-private#35, #9)", () => {
+describe("docs freshness: docs/cli.md's staging config.json example parses and merges", () => {
   const cli = read("../../../docs/cli.md");
   const section = cli.slice(cli.indexOf("### Point one install at staging"));
   const block = /```json\n([\s\S]*?)\n```/u.exec(section)?.[1];

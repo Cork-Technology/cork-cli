@@ -1,6 +1,6 @@
-// The FILLER side of a rollover (2026-10-01, the 2026-10-01 integration triage, item 4) and the per-account
-// rollover clone: pure byte-building against the 0.2.0 / rc.2 contracts (rollover-private
-// `origin/main` 38a4a55 = the deployed 0.2.0; the rc.2 layout differs only in JITMarketParams).
+// The FILLER side of a rollover and the per-account rollover clone: pure byte-building against
+// the 0.2.0 / rc.2 contracts (the rc.2 layout differs from the deployed 0.2.0 only in
+// JITMarketParams).
 //
 // A roll order is the cPT HOLDER's intent (rollover-intent, signed under the CorkSettler domain).
 // Its counterparty — the filler — brings the SOURCE cST (the cover buyer's own position in the

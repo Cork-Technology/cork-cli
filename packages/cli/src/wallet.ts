@@ -1,7 +1,7 @@
 // Signing from the CLI with a password-protected keystore. This is the ONE place cork-cli signs,
 // and only a human can make it sign: the password is typed at the terminal (prompt.ts), and every
 // signature is preceded by a plain-English summary and an explicit yes. The MCP server never
-// reaches this file [K1] — packages/cli/test/keystore.test.ts fails if MCP or core imports it.
+// reaches this file — packages/cli/test/keystore.test.ts fails if MCP or core imports it.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Command } from "commander";

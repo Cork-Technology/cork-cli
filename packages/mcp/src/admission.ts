@@ -1,4 +1,4 @@
-// Application-level admission for the Streamable HTTP endpoint (audit MCP-NET-003, 2026-08-24).
+// Application-level admission for the Streamable HTTP endpoint.
 //
 // The deployed endpoint is PUBLIC and deliberately open (the workshop hands its URL to a room of
 // people). "The ingress owns limits" was true for bandwidth and connection counts, and false for
@@ -134,7 +134,7 @@ export class AdmissionController {
    * still waiting on. The signal makes that settlement prompt: the venue transport refuses to
    * start another call and aborts the one in flight, the long-poll sleep resolves, and the
    * dispatch unwinds. A body read that cannot be cancelled (a client trickling bytes) ends when
-   * the socket does; until then the slot is honestly occupied. (Audit DB-001, 2026-09-11: the
+   * the socket does; until then the slot is honestly occupied. (The
    * deadline used to abort a flag nobody downstream consumed, while the response waited for
    * the whole dispatch.)
    */

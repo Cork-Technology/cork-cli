@@ -8,7 +8,7 @@ import { LOP_ADDRESSES } from "../orders.ts";
 import { parseSignedLopOrder } from "../datasources/venue.ts";
 import { defaultProbeBudget, PROBE_SUCCESS_TARGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "./fill-simulate.ts";
 
-// ── offers: the unified discovery view (owner ruling 2026-09-02) ─────────────────────────────
+// ── offers: the unified discovery view (2026-09-02) ─────────────────────────────
 // An OFFER is a price somebody can actually buy: a live, signed resting order. A quote (an RFQ
 // answer option) is FIRM only when a live order cites it — via quoteRef, or (RFQ v2) by being
 // the very order the option carries (its served `order_hash`) — otherwise it is

@@ -1,5 +1,5 @@
 // Bit-exact port of ConstraintRateAdapter._calculateRate / previewAdjustedRate,
-// plus the committed-descent impairment-floor projection (RFC §5.2, C7).
+// plus the committed-descent impairment-floor projection.
 import { max, min, mulDiv, WAD } from "./fixed.ts";
 import type { ConstraintState, Market } from "../types.ts";
 
@@ -96,7 +96,7 @@ export interface ImpairmentFloor {
 }
 
 /**
- * Committed-descent worst-case floor over `horizonSeconds` from `tEval` (RFC §5.2, verified C7).
+ * Committed-descent worst-case floor over `horizonSeconds` from `tEval`.
  *
  * The on-chain preview can only move the rate by one bucket; the *reachable* floor requires
  * modelling repeated adversarial commits. The stored `remainingCredits` is as of

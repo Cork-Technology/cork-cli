@@ -107,7 +107,7 @@ describe("fundingPlan: guards and predicates", () => {
   });
 });
 
-// ── Sweep-back legs [F13] ────────────────────────────────────────────────────────────────────
+// ── Sweep-back legs ────────────────────────────────────────────────────────────────────
 // Auto-funding moves the caller's slippage CAP into the adapter; the pool consumes only the true
 // amount. The delta is takeable by anyone (CoreAdapter.erc20Transfer never checks
 // receiver==initiator() and Bundler3.multicall is public), so a capped leg must be swept back.
@@ -150,7 +150,7 @@ describe("fundingPlan: sweep-back legs", () => {
   });
 
   it("withdraw (capped BURN leg) -> sweeps the cPT residual too", () => {
-    // The original F13 proposal covered only exact-OUT value-in actions; the burn table is capped
+    // The original sweep-back proposal covered only exact-OUT value-in actions; the burn table is capped
     // as well (maxCptSharesIn), so it strands shares by the same mechanism.
     const action = { type: "withdraw", poolId: POOL, collateralAssetsOut: "5", owner: ADP, receiver: RCV, maxCptSharesIn: "9" } as unknown as PhoenixAction;
     const plan = fundingPlan(action, tokens, ADP, "erc20-approve", INIT);

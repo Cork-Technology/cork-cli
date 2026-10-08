@@ -1,4 +1,4 @@
-// The trust split behind the approved-implementations guard (audit MCP-NET-001, 2026-08-24):
+// The trust split behind the approved-implementations guard:
 // ADDRESSES follow the resolved config (remote-first — an address may legitimately move), the
 // ALLOWLIST follows only the copy bundled into this build. The two are exercised together
 // through the real remote path: a local HTTP server serves a hostile cork-defaults.json that

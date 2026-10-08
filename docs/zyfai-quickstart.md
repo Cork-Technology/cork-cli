@@ -186,8 +186,7 @@ the floor, the payout is the loss less the whole band.
 
 Liquidity cover answers duration risk: you cannot sell or redeem the reference at its book value
 in time. It is not protection against the reference losing value. Impairment cover answers credit
-risk: the reference loses value. The cover bought in the first live trade (Base, 2026-09-10) was
-liquidity cover.
+risk: the reference loses value.
 
 **A loss the share price does not report moves no rate.** The liquidity and impairment recipes
 read the rate oracle, and a NAV oracle reads the vault's reported share price. A fixed-rate pool

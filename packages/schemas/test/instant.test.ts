@@ -1,4 +1,4 @@
-// venueInstant — the ONE boundary parser for every venue timestamp (2026-09-23). Two admitted
+// venueInstant — the ONE boundary parser for every venue timestamp. Two admitted
 // shapes, both unambiguous; everything Date.parse would have quietly accepted is refused.
 import { describe, expect, it } from "vitest";
 import { isoOfSeconds, venueInstant } from "../src/instant.ts";

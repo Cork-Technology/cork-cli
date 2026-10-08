@@ -1,7 +1,7 @@
 // Token-authority byte-building for cork_prepare_phoenix authority-onboard / authority-revoke.
 // Builds an unsigned DIRECT ERC-20 approve tx for the token owner to execute — deliberately NOT
 // a Bundler3 leg, because an approve routed through the bundler would key the allowance to the
-// bundler contract instead of the owner. Unsigned bytes only [K1].
+// bundler contract instead of the owner. Unsigned bytes only.
 import { encodeFunctionData, parseAbi } from "viem";
 import { U256_MAX } from "../math/fixed.ts";
 

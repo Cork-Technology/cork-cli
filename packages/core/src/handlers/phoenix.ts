@@ -113,8 +113,8 @@ export function handlePhoenixAuthority(input: PreparePhoenixInput, depWarn: Arra
  * cork_prepare_phoenix — bundle assembly: funding legs, action leg, sweep-back, pre-flights.
  *
  * Every pool-action bundle is ATOMIC: the initiator's pull legs, the Cork action, and the
- * sweep-back of any capped residual ride one multicall. The action is never emitted on its own
- * (audit ARTIFACT-PREFUND-001): an action-only bundle only works against tokens parked on the
+ * sweep-back of any capped residual ride one multicall. The action is never emitted on its own:
+ * an action-only bundle only works against tokens parked on the
  * shared adapter beforehand, and that balance is takeable by anyone through the public
  * `Bundler3.multicall` + the adapter's receiver-unchecked `erc20Transfer` until the action lands.
  *
@@ -198,7 +198,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     [tokens.cst.toLowerCase()]: "cST",
     [tokens.cpt.toLowerCase()]: "cPT",
   };
-  // Pre-flight guards [§5.4]: expiry, pause (global + per-pool bit), and whitelist. All
+  // Pre-flight guards: expiry, pause (global + per-pool bit), and whitelist. All
   // build-and-warn — a bundle that can only revert is still returned, clearly labelled.
   warnings.push(
     ...(await poolPreflightWarnings({
@@ -218,7 +218,7 @@ export async function handlePreparePhoenix(input: PreparePhoenixInput, ctx: Hand
     // upgrade nobody admitted yet, or an address that moved ahead of a release).
     ...(await approvedImplementationGuard(resolved.client, input.chainId, { roles: PHOENIX_IMPLEMENTATION_ROLES, ...(gen ? { generation: gen.label } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) })),
   );
-  // Sweep-back [F13]: auto-funding moves the caller's slippage CAP into the adapter, but the
+  // Sweep-back: auto-funding moves the caller's slippage CAP into the adapter, but the
   // pool consumes only the true amount. The delta is not just stranded — CoreAdapter's
   // erc20Transfer never checks receiver==initiator() and Bundler3.multicall is public, so
   // anyone can take it in a later block. Return it to the declared initiator in-bundle.

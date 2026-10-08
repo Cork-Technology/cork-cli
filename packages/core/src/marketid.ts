@@ -9,8 +9,8 @@
 // The wire is an EXPLICIT argument and the market's shape is checked against it: a 10-field
 // market hashed as 8 fields (or the reverse) is refused, never silently widened or narrowed — a
 // viem decode of a 10-field `market()` return through an 8-field ABI succeeds silently, so the
-// hash is the last place this class can be caught (0.6 design contract, "never a silent
-// widening"). Golden vectors: the 8-field cast vector and the 10-field `pm.getId` captured live
+// hash is the last place this class can be caught (never a silent
+// widening). Golden vectors: the 8-field cast vector and the 10-field `pm.getId` captured live
 // 2026-09-22 on 42161, both pinned in test/marketid.test.ts.
 import { encodeAbiParameters, keccak256 } from "viem";
 import type { PhoenixWire } from "./generations.ts";

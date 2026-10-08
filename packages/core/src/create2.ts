@@ -1,7 +1,7 @@
 // Standard CREATE2 address derivation (EIP-1014):
 //   address = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
 // Used by `ch capabilities --json '{"topic":"verify"}'` to reproduce Cork's Safe-Singleton-Factory deployments
-// (deployer 0x914d7Fec…43d7) from prod.toml salt + Sourcify creation bytecode (verified C10).
+// (deployer 0x914d7Fec…43d7) from prod.toml salt + Sourcify creation bytecode.
 import { concatHex, getAddress, keccak256, pad, slice, toHex } from "viem";
 
 /** keccak256(0xff ++ deployer ++ salt ++ initCodeHash), last 20 bytes, checksummed. */

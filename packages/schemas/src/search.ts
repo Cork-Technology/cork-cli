@@ -1,4 +1,4 @@
-// Variant-level tool search [R6 / RFC §5.8]: token-overlap scoring over each tool's name, CLI
+// Variant-level tool search: token-overlap scoring over each tool's name, CLI
 // path, description, example titles, AND per-variant hint phrases — so a natural-language query
 // like "executed trades history" resolves to cork_query → fills even though no tool description
 // contains those words. Substring token matching keeps simple stems working ("trade" ⊂ "trades",
@@ -69,7 +69,7 @@ export const SEARCH_HINTS: Record<ToolName, readonly SearchHint[]> = {
     { variant: "maker-order", text: "limit order maker sign typed data sell buy place resting" },
     { variant: "maker-order/jitMarket", text: "jit just in time market creation mint fill hook adapter create market via order coverage extraData additionalData oracle salt oracleSalt nested generation" },
     { variant: "maker-ladder", text: "ladder rungs several orders at once one cancels the other oco revision ladder better price reserved then open split standing offer many takers capacity" },
-    { variant: "answer-rfq", text: "answer an rfq quote firm offer underwriter reserved for requester premium notional tenor act 365 kernel amounts cite option quote ref re-rest one capacity many rfqs" },
+    { variant: "answer-rfq", text: "answer an rfq quote firm offer underwriter reserved for requester premium notional tenor act 365 amounts cite option quote ref re-rest one capacity many rfqs" },
     { variant: "rfq-write", text: "sign prove rfq v2 write signature typed data eip-712 cork rfq corkrfqwrite body hash open answer counter requester underwriter auth proof" },
     { variant: "refresh-order", text: "re-rest refresh renew extend expiry resting order same nonce same bit revision before expiry ttl window" },
     { variant: "taker-fill", text: "fill take order taker execute against" },

@@ -401,7 +401,7 @@ export async function handleQueryRegistry(input: QueryInput, filters: QueryFilte
     const probe = await probePairWrapper(client, mr.registry, filters.collateralAsset, filters.referenceAsset, modeName, { wire, oracleSalt: filters.oracleSalt });
     if (probe.address !== null && probe.deployed) {
       const read = await readOracleRate(client, probe.address);
-      // rateScale rides INSIDE the shared oracle shape (audit R1.5): the fixed-rate family
+      // rateScale rides INSIDE the shared oracle shape: the fixed-rate family
       // already labels its rate at the top level; the pair family was the unlabeled half.
       // A deployed oracle whose rate() reverts is the cheapest catch of the whole read path —
       // said explicitly (rateReadable:false + the revert, plus an info warning), never by
@@ -591,7 +591,7 @@ interface RecipeResolution {
 /** WHY a deployed oracle's rate() read produced no rate: the contract REVERTED (a fact about
  *  the oracle/source — the oracle_rate_unreadable diagnosis), or the read never reached a
  *  verdict (a transport failure — indeterminate, the RPC's fault, retryable). Conflating the
- *  two sent operators repairing inputs and oracles during RPC outages (audit DB-007). */
+ *  two sent operators repairing inputs and oracles during RPC outages. */
 export type OracleRateReadFailure = "revert" | "transport";
 
 async function readOracleRate(client: RegistryClient, oracle: `0x${string}`): Promise<{ rate: bigint | null; rateError?: string; rateReadFailure?: OracleRateReadFailure }> {
@@ -678,7 +678,7 @@ export async function resolveRecipeOracleConstraint(args: {
   /** Nested wire: the salt of the pair's FIRST wrapper (the simulated deploy carries it). */
   oracleSalt?: `0x${string}` | undefined;
   /** The registry wire to dispatch on (defaults to `mr`'s DECLARED wire — the block always
-   *  carries one; a silent fall-back to flat was removed 2026-09-22, review D). */
+   *  carries one; a silent fall-back to flat was removed 2026-09-22). */
   wire?: MarketRegistryWire | undefined;
   wantConstraint: boolean;
 }): Promise<RecipeResolution> {
@@ -764,7 +764,7 @@ export async function staticResolveConstraint(
     const o = args.oracle;
     // A read that never reached the recipe is no verdict on the recipe: the RPC failed, the
     // constraint is unknown, and the only correct advice is "retry" — not "fix additionalData"
-    // and not "the oracle reverts" (audit DB-007).
+    // and not "the oracle reverts".
     if (isTransportFailure(err) || (o.deployed && o.rateReadFailure === "transport")) {
       return { gate: unavailable(chainId, "chain_read_failed", `the recipe.resolve staticcall could not be completed: ${revertReason(err)}${o.deployed && o.rateReadFailure === "transport" ? ` (the oracle ${o.address}'s rate() read had already failed in transport: ${o.rateError})` : ""} — a transport failure, indeterminate; the constraint was NOT resolved. Retry, or set CORK_RPC_URL to a working endpoint`, ctx) };
     }
@@ -908,7 +908,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     } else if (!shares.exists) {
       extra.push({ code: "rate_drift_notice", message: "the pool does not exist yet, so this prediction is conditioned on TODAY's oracle rate and drifts stepwise until pinned. In 2.1.0 the pinning moment is EARLIER than pool creation: an order that CARRIES this constraint fixes the pool id and share addresses at signing — sign, and this identity holds however far the rate moves (staleness then guards via recipe.verify, not a moving id)" });
     }
-    // T6: a prediction can be internally consistent yet describe an UNCREATABLE market — say so.
+    // A prediction can be internally consistent yet describe an UNCREATABLE market — say so.
     const nowSecs = nowSecondsOf(ctx);
     if (!shares.exists && expiry <= nowSecs) {
       extra.push({ code: "would_revert", message: `expiry ${expiry} is not in the future (now ${nowSecs}) — createNewPool requires a future expiry, so a JIT fill for this market would revert; the identity below is for a market that cannot be created` });

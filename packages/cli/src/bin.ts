@@ -26,7 +26,7 @@ const ctx = {
 // `ch mcp` — the MCP stdio server must own stdout from process start (any stray byte corrupts
 // the protocol stream), so it is intercepted BEFORE the commander projection ever loads. The
 // server module is shared with the `cork-mcp` dev entrypoint (packages/mcp/src/bin.ts): one
-// core, two thin shells (RFC 011).
+// core, two thin shells.
 if (argv[0] === "mcp") {
   if (argv.includes("--help") || argv.includes("-h")) {
     // Without this, --help would fall through and silently START the stdio server (which then

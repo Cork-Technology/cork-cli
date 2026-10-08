@@ -1,6 +1,6 @@
 // Phala/dstack attestation verification — the PURE logic behind scripts/verify-deployment.ts
 // (thin shell over this module, per the one-typed-core architecture). Everything here is local
-// byte math over caller-supplied bytes: no fetches, no trust in any service's parse [K3].
+// byte math over caller-supplied bytes: no fetches, no trust in any service's parse.
 //
 // Grounded empirically 2026-08-06 against:
 //   - docs.phala.com/phala-cloud/attestation/verify-your-application.md (replay algorithm,

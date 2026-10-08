@@ -30,9 +30,9 @@ export const Hex = hex<`0x${string}`>(/^0x[0-9a-fA-F]*$/, "expected 0x-prefixed 
 export const Bytes32 = hex<`0x${string}`>(/^0x[0-9a-fA-F]{64}$/, "expected 0x-prefixed 32-byte hex")
   .meta({ id: "Bytes32" });
 
-/** Cork MarketId = keccak256(abi.encode(Market)) — 8-field struct hash [C1]. */
+/** Cork MarketId = keccak256(abi.encode(Market)) — 8-field struct hash. */
 export const MarketId = Bytes32.describe(
-  "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+  "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
 ).meta({ id: "MarketId" });
 
 const U256_MAX = (1n << 256n) - 1n;
@@ -109,7 +109,7 @@ export type ChainId = z.infer<typeof ChainId>;
 export const DataMode = z
   .enum(["hybrid", "lite-decentralized", "full-decentralized"])
   .describe(
-    "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side",
+    "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side",
   );
 export type DataMode = z.infer<typeof DataMode>;
 
@@ -127,5 +127,5 @@ export const ClientRequestId = z
   .max(128)
   .refine((s) => !s.startsWith(OCO_GROUP_NONCE_NAMESPACE), { message: `must not start with '${OCO_GROUP_NONCE_NAMESPACE}' — that prefix is the ocoGroup nonce namespace; an id carrying it would seed the same invalidator bit as the group it names` })
   .describe(
-    "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry",
+    "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry",
   );

@@ -3,8 +3,8 @@
   "tools": [
     {
       "name": "cork_query",
-      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped [K7]. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
-      "descriptionTokensApprox": 215,
+      "description": "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*). Example — Read a cork-pool's full live market state (demo pool, vnet): {\"resource\":\"cork-pool\",\"filters\":{\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\"}}",
+      "descriptionTokensApprox": 214,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -62,7 +62,7 @@
               "lite-decentralized",
               "full-decentralized"
             ],
-            "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+            "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
           },
           "filters": {
             "type": "object",
@@ -170,7 +170,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -343,7 +343,7 @@
                       "type": "string"
                     },
                     "additionalProperties": {},
-                    "description": "the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes [K3]"
+                    "description": "the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes"
                   },
                   "baseFeeWei": {
                     "description": "block base fee in WEI for the gas-bump term; omitted = gas bump skipped = the UPPER-BOUND price (public-node eth_call cannot verify this term — it runs with basefee 0)",
@@ -546,7 +546,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": {
           "MarketId": {
-            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
           },
           "Bytes32": {
@@ -638,7 +638,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -746,8 +746,8 @@
     },
     {
       "name": "cork_decode",
-      "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3]. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
-      "descriptionTokensApprox": 380,
+      "description": "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse. Example — Decode a Bundler3 multicall to labeled Cork legs: {\"kind\":\"calldata\",\"data\":\"0x374f435d000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000ccccccccccccbad6f772a511b337d9ccc957040700000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c4d5f2e59eceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a0000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c0ffee00000000000000000000000000000000010000000000000000000000000000000000000000000000001bc16d674ec8000000000000000000000000000000000000000000000000000000000000001e8480000000000000000000000000000000000000000000000000000000006a5e14e600000000000000000000000000000000000000000000000000000000\"}",
+      "descriptionTokensApprox": 379,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -760,7 +760,7 @@
               "event",
               "receipt"
             ],
-            "description": "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way"
+            "description": "all local reconstruction. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way"
           },
           "data": {
             "anyOf": [
@@ -870,7 +870,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -978,8 +978,8 @@
     },
     {
       "name": "cork_capabilities",
-      "description": "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure [C13]. Example — Find the right tool/variant for 'unwind': {\"search\":\"unwind\"}",
-      "descriptionTokensApprox": 89,
+      "description": "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure. Example — Find the right tool/variant for 'unwind': {\"search\":\"unwind\"}",
+      "descriptionTokensApprox": 87,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1042,7 +1042,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -1150,8 +1150,8 @@
     },
     {
       "name": "cork_prepare_phoenix",
-      "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
-      "descriptionTokensApprox": 222,
+      "description": "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities. Example — Unsigned deposit bundle (10 sUSDe into the demo pool): {\"chainId\":1,\"account\":\"0xc0ffee0000000000000000000000000000000001\",\"clientRequestId\":\"demo-deposit-0001\",\"fundingMode\":\"erc20-approve\",\"action\":{\"type\":\"deposit\",\"poolId\":\"0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a\",\"collateralAssetsIn\":\"10000000000000000000\",\"receiver\":\"0xc0ffee0000000000000000000000000000000001\",\"minCptAndCstSharesOut\":\"1\"}}",
+      "descriptionTokensApprox": 219,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1178,7 +1178,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
           },
           "fundingMode": {
             "type": "string",
@@ -1730,7 +1730,7 @@
             "description": "absolute unix timestamp in SECONDS (not ms; ms-scale values are rejected), decimal string — a wall-clock moment, not a relative duration"
           },
           "MarketId": {
-            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
           },
           "Bytes32": {
@@ -1795,7 +1795,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -1930,7 +1930,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
           },
           "action": {
             "oneOf": [
@@ -2316,7 +2316,7 @@
                         "type": "string",
                         "minLength": 8,
                         "maxLength": 128,
-                        "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+                        "description": "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
                       }
                     },
                     "required": [
@@ -2329,7 +2329,7 @@
                     "description": "the exact data object returned by cork_prepare_orders maker-order"
                   },
                   "signature": {
-                    "description": "the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]",
+                    "description": "the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here",
                     "$ref": "#/$defs/Hex"
                   },
                   "listing": {
@@ -2403,7 +2403,7 @@
                   "listing"
                 ],
                 "additionalProperties": false,
-                "description": "verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs [K1]"
+                "description": "verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs"
               },
               {
                 "type": "object",
@@ -2459,7 +2459,7 @@
                         "additionalProperties": false
                       },
                       "signature": {
-                        "description": "the maker's signature over the order — verified locally before any bytes are built [K3]: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs",
+                        "description": "the maker's signature over the order — verified locally before any bytes are built: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs",
                         "$ref": "#/$defs/Hex"
                       },
                       "extension": {
@@ -2472,7 +2472,7 @@
                       "signature"
                     ],
                     "additionalProperties": false,
-                    "description": "fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs [K7]. Omit to discover the order on the venue book by `orderHash`"
+                    "description": "fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs. Omit to discover the order on the venue book by `orderHash`"
                   },
                   "fillMakingAmount": {
                     "description": "making amount to receive; omit for the full remaining order",
@@ -2660,7 +2660,7 @@
                         "description": "RELATIVE deadline for the wrapper's own deadline check, seconds from now — re-anchors to the clock on every call; pass deadlineAt for byte-stable retries"
                       },
                       "deadlineAt": {
-                        "description": "absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes [K2]",
+                        "description": "absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes",
                         "$ref": "#/$defs/UnixSeconds"
                       }
                     },
@@ -2801,7 +2801,7 @@
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "jitMarketHash": {
-                    "description": "pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally [K3]; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket",
+                    "description": "pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket",
                     "$ref": "#/$defs/Bytes32"
                   },
                   "jitMarket": {
@@ -2901,7 +2901,7 @@
                       "constraint"
                     ],
                     "additionalProperties": false,
-                    "description": "negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash [K3] — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"
+                    "description": "negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"
                   },
                   "allowPartialFills": {
                     "type": "boolean",
@@ -3117,7 +3117,7 @@
                     "const": "rollover-fill"
                   },
                   "orderDigest": {
-                    "description": "the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it [K3]; a disagreement is a conflict, never filled",
+                    "description": "the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it; a disagreement is a conflict, never filled",
                     "$ref": "#/$defs/Bytes32"
                   },
                   "signedOrder": {
@@ -3863,7 +3863,7 @@
                   "rfqId"
                 ],
                 "additionalProperties": false,
-                "description": "answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"
+                "description": "answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts by the ACT/365 rule — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"
               },
               {
                 "type": "object",
@@ -4126,7 +4126,7 @@
                               },
                               "additionalProperties": {}
                             },
-                            "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
+                            "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent: a field's unit never changes in place), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
                           },
                           "reasonCode": {
                             "type": "string",
@@ -4177,7 +4177,7 @@
                           "premiumAnnualized": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
+                            "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by the versioning rule (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
                             "x-units": "{%}"
                           },
                           "optionRef": {
@@ -4239,7 +4239,7 @@
                   "request"
                 ],
                 "additionalProperties": false,
-                "description": "the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs [K1]"
+                "description": "the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs"
               }
             ]
           },
@@ -4266,7 +4266,7 @@
             "description": "EVM address"
           },
           "MarketId": {
-            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
           },
           "Bytes32": {
@@ -4358,7 +4358,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -4490,7 +4490,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
           },
           "action": {
             "oneOf": [
@@ -4751,7 +4751,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -4859,8 +4859,8 @@
     },
     {
       "name": "cork_track",
-      "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7]. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
-      "descriptionTokensApprox": 78,
+      "description": "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict'. Example — Digest-pin an artifact you were handed: {\"mode\":\"verify\",\"subject\":{\"kind\":\"artifact\",\"artifact\":{\"any\":\"json\"}}}",
+      "descriptionTokensApprox": 77,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4895,7 +4895,7 @@
                   "artifact"
                 ],
                 "additionalProperties": false,
-                "description": "a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is [K3]"
+                "description": "a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is"
               },
               {
                 "type": "object",
@@ -4931,7 +4931,7 @@
                   "orderHash"
                 ],
                 "additionalProperties": false,
-                "description": "a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state [K7]"
+                "description": "a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state (chain outranks venue)"
               },
               {
                 "type": "object",
@@ -5035,7 +5035,7 @@
             "pattern": "^0x[0-9a-fA-F]{64}$"
           },
           "MarketId": {
-            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
           },
           "Address": {
@@ -5095,7 +5095,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",
@@ -5203,8 +5203,8 @@
     },
     {
       "name": "cork_submit",
-      "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2]. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"jitMarketHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x0c8cb5af9b2e3b8121ffc8b8c3a3bd9bd77afe194b20f62cb55cd04d0b9e734b004b4cd56082c23f9bda704c58126acc61f3c36b7963db0530abf9003e4d31dd1c\"}}",
-      "descriptionTokensApprox": 566,
+      "description": "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs; idempotent by clientRequestId. Example — Relay a signed rollover order to the venue (intent hash + digest recomputed before relay): {\"chainId\":42161,\"clientRequestId\":\"demo-submit-0001\",\"action\":{\"type\":\"rollover-order\",\"order\":{\"user\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"fillerHint\":\"0x0000000000000000000000000000000000000000\",\"exclusiveFiller\":\"0x0000000000000000000000000000000000000000\",\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"premiumToken\":\"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\",\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"originChainId\":\"42161\",\"destinationChainId\":\"42161\",\"openDeadline\":\"1795000000\",\"fillDeadline\":\"1795604800\",\"orderSalt\":\"8811723641\",\"orderSize\":\"250000000000000000000\",\"minPremiumPerShare\":\"12000000000000000\",\"allowPartialFills\":false,\"allowUnderfill\":false,\"premiumPaymentMode\":0,\"rolloverIntentHash\":\"0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84\",\"rolloverParams\":{\"srcCstToken\":\"0x9D39A5DE30e57443BfF2A8307A4256c8797A3497\",\"dstCstToken\":\"0x53E82ABbb12638F09d9e624578ccB666217a765e\",\"minCaReceived\":\"0\",\"minSharesOut\":\"0\",\"srcPoolId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"dstPoolId\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"settler\":\"0xF4ffd4b3FAedb784b04d1883119840515f224C2f\",\"jitMarketHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}},\"intent\":{\"rolloverContract\":\"0xc0ffee0000000000000000000000000000000001\",\"deadline\":\"1795604800\",\"nonce\":\"1\",\"preRolloverHooks\":[],\"midRolloverHooks\":[],\"postRolloverHooks\":[],\"premiumHooks\":[]},\"signature\":\"0x0c8cb5af9b2e3b8121ffc8b8c3a3bd9bd77afe194b20f62cb55cd04d0b9e734b004b4cd56082c23f9bda704c58126acc61f3c36b7963db0530abf9003e4d31dd1c\"}}",
+      "descriptionTokensApprox": 563,
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5223,7 +5223,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "caller-chosen idempotency key — reuse it when retrying the same request [K2]. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
+            "description": "caller-chosen idempotency key — reuse it when retrying the same request. Artifacts are deterministic for identical inputs, observed state, and clock; deadline/expiry fields are wall-clock + duration, so bytes re-anchor in time on a later retry"
           },
           "action": {
             "oneOf": [
@@ -5303,7 +5303,7 @@
                         "description": "0=upfront, 1=on-settle — must match what the signature covers"
                       },
                       "rolloverIntentHash": {
-                        "description": "EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed [K3]",
+                        "description": "EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed",
                         "$ref": "#/$defs/Bytes32"
                       },
                       "rolloverParams": {
@@ -5530,7 +5530,7 @@
                     "additionalProperties": false
                   },
                   "signature": {
-                    "description": "the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs [K1]",
+                    "description": "the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs",
                     "$ref": "#/$defs/Hex"
                   },
                   "quoteRef": {
@@ -5612,7 +5612,7 @@
                     "additionalProperties": false
                   },
                   "signature": {
-                    "description": "the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]",
+                    "description": "the maker's EIP-712 signature over the LOP v4 order — this tool never signs",
                     "$ref": "#/$defs/Hex"
                   },
                   "extension": {
@@ -5877,7 +5877,7 @@
                             "const": "signature"
                           },
                           "signature": {
-                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here",
                             "$ref": "#/$defs/Hex"
                           }
                         },
@@ -5950,7 +5950,7 @@
                       },
                       "additionalProperties": {}
                     },
-                    "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
+                    "description": "priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent: a field's unit never changes in place), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"
                   },
                   "reasonCode": {
                     "type": "string",
@@ -5984,7 +5984,7 @@
                             "const": "signature"
                           },
                           "signature": {
-                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here",
                             "$ref": "#/$defs/Hex"
                           }
                         },
@@ -6039,7 +6039,7 @@
                   "premiumAnnualized": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
+                    "description": "new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by the versioning rule (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)",
                     "x-units": "{%}"
                   },
                   "optionRef": {
@@ -6093,7 +6093,7 @@
                             "const": "signature"
                           },
                           "signature": {
-                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]",
+                            "description": "the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here",
                             "$ref": "#/$defs/Hex"
                           }
                         },
@@ -6181,7 +6181,7 @@
             "pattern": "^0x[0-9a-fA-F]{64}$"
           },
           "MarketId": {
-            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)) [C1]. Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
+            "description": "Cork poolId (MarketId) = keccak256(abi.encode(Market)). Get one from cork_query resource:'cork-pools' or api-phoenix.cork.tech/v1/pools/",
             "$ref": "#/$defs/Bytes32"
           },
           "UintStr": {
@@ -6246,7 +6246,7 @@
                   "lite-decentralized",
                   "full-decentralized"
                 ],
-                "description": "explicit data mode; never silent-fallback [RFC §7] — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
+                "description": "explicit data mode; never silent-fallback — each name is a CONNECTIVITY PLEDGE about which external parties a call may contact. hybrid (renamed from 'centralized' 2026-08-13)=venue-DISCOVERED rows, chain-VERIFIED best-effort: the venue API (api-phoenix) supplies the list, chain point-reads confirm each consequential row (dead rows dropped, indeterminate rows labeled verification:'unverified'; no RPC → all rows labeled unverified). lite-decentralized=direct RPC chain state reads, YOUR RPC only (default for chain resources). full-decentralized=chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue. Omit to let the resource pick its natural mode. Ask cork_capabilities topic:'modes' for the side-by-side"
               },
               "chainId": {
                 "type": "number",

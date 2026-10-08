@@ -29,7 +29,7 @@ const JIT_VALUE_SITE: ValueGateSite = { fees: "JIT fee percentages", expiryField
  *  8-field: the registry stack's MAX_FEE_PERCENTAGE (5e18 = 5%, INCLUSIVE) — read live through
  *  the long-TTL constants cache where the adapter/creator expose the view, the compiled 5e18
  *  otherwise. 10-field: Phoenix v1.4.0-rc.1 reverts InvalidFees() at OR ABOVE 100e18 (100%),
- *  and NO contract of that generation exposes a cap view (facts D4) — so the largest allowed
+ *  and NO contract of that generation exposes a cap view — so the largest allowed
  *  fee is 100e18 − 1 and nothing is ever refreshed for it. */
 export interface FeeRule {
   maxAllowed: bigint;
@@ -87,7 +87,7 @@ export function farFutureExpiryWarning(expiryTimestamp: bigint, nowSecs: bigint)
 }
 
 /** The recipe-bytes + oracle-salt inputs of EVERY JIT block — the registry jitMarket, create-pool
- *  AND the rollover jitMarket — resolved by ONE rule (2026-09-22, review B2: the rollover branch
+ *  AND the rollover jitMarket — resolved by ONE rule (2026-09-22: the rollover branch
  *  had its own alias check with the opposite canonical name, no deprecation notice, a different
  *  refusal class, and a presence test that let an explicit "0x" hide a conflicting alias):
  *  `extraData` is the input name (the 0.5.0 contracts' word); `additionalData` is accepted as a
@@ -292,7 +292,7 @@ export async function runJitPreflightLadder(args: {
   const codec = wireCodec(mr.wire);
   const wire = codec.wire;
   // The pool-id width is DECLARED by the generation's phoenix block, never inferred from the
-  // registry wire (the pre-0.6 `nested → 10-field` guess: review A2, 2026-09-22 — a generation
+  // registry wire (the pre-0.6 `nested → 10-field` guess, 2026-09-22 — a generation
   // carrying a registry block but no phoenix block has no pool manager to create on, and a
   // guessed width derives an id no fill produces, OrderNotForPool on chain).
   if (phoenixWireResolved === undefined) {
@@ -363,7 +363,7 @@ export async function runJitPreflightLadder(args: {
       roleHolder = mr.adapter;
       // Opportunistic cache refresh for the fee cap the value gate consumed earlier this call
       // (and will consume next call): a contract constant, one read per TTL — flat wire only,
-      // the nested stack exposes no such view (facts D4).
+      // the nested stack exposes no such view.
       await refreshContractConstant(client, chainId, mr.adapter, "MAX_FEE_PERCENTAGE");
     } else {
       const creator = mr.marketCreator!;
@@ -521,7 +521,7 @@ export async function buildTakerJitInteraction(args: {
         preCalls.push({ to: ladder.registry, data: source === "fixed" ? buildDeployFixedRateOracleCall(rateOverride) : codec.deployCall(jm.collateralAsset, jm.referenceAsset, oracle.mode ?? "price", oracleSalt) });
       }
       // A generation with a registry block but no phoenix block has no pool manager to create on
-      // — a refusal naming the set, not a warning that lets bytes ride (review A2, 2026-09-22;
+      // — a refusal naming the set, not a warning that lets bytes ride (2026-09-22;
       // the ladder's own phoenix-wire gate makes this unreachable, kept as the second tripwire).
       if (jitDep?.poolManager === undefined) {
         return { gate: unavailable(chainId, "unknown_deployment", `generation '${ladder.generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown and no pool manager exists to predict the cST on — refresh cork-defaults.v2.json`, ctx) };
@@ -700,7 +700,7 @@ export async function prepareJitLegacy(args: {
   return { extension, jitData, warnings };
 }
 
-// ── The bytes-decoder gate (finding 2026-09-03) ────────────────────────────────
+// ── The bytes-decoder gate ────────────────────────────────
 // An ABI names a `bytes` parameter but cannot describe its layout, so a hook that DECODES bytes
 // this tool ENCODES is the one place where code drift can silently re-read a market or a fee —
 // a revert is the good outcome there, a wrong market is the bad one. The interface-first guard
@@ -752,7 +752,7 @@ export function bytesDecoderGate(a: {
  *  compare what it read back, field for field, with what we meant. Verified = the deployed
  *  decoder agrees on every field; unchecked = the adapter exposes no helper (pre-0.4.0) or the
  *  read failed, said in words, never guessed; a disagreement is a conflict with no bytes — the
- *  exact failure class the finding describes, caught before anyone signs. The helper's RETURN
+ *  exact failure class the bytes-decoder gate guards against, caught before anyone signs. The helper's RETURN
  *  layout differs per wire under one selector (flat: the 10-member flat struct with the bytes
  *  named additionalData; nested: the (MarketParams, enableJitMint) wrapper) — read with the
  *  wire's ABI and normalized through the codec's own unwrapper, never by shape-guessing. */

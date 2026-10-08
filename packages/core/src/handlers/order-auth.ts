@@ -10,8 +10,8 @@
 //   4. liveness     — the invalidator bit is unspent (an RPC read; lopInvalidatorPlan)
 //
 // Until 2026-09-11 only the venue-free inline fill checked all four; venue-sourced rows (the
-// book, the venue fill path, refresh) checked 1 and 4 and inherited the venue's word for 2 and 3
-// (audit DB-004). This module is the ONE home of checks 2 and 3 so no path can drift again:
+// book, the venue fill path, refresh) checked 1 and 4 and inherited the venue's word for 2 and 3.
+// This module is the ONE home of checks 2 and 3 so no path can drift again:
 // the pure verdicts live here, the envelope shaping for the build paths beside them, and the
 // book's per-row leg composes the same functions.
 import { isAddressEqual, recoverAddress } from "viem";
@@ -194,7 +194,7 @@ export async function authenticateSignedOrder(a: {
     // Indeterminate, not a verdict: the signature does not ecrecover to the maker, and the read
     // that would say whether the maker is a contract (whose ERC-1271 answer is the real test)
     // failed in transport. Refusing this as a mismatch would attribute an RPC outage to the
-    // order (the DB-007 class).
+    // order.
     return { ok: false, envelope: unavailable(chainId, "chain_read_failed", `the signature recovers to ${verdict.recoveredSigner}, not the order maker ${order.maker}, and the maker's code could not be read (the RPC call failed) — so whether the maker is a contract account whose ERC-1271 answer would validate it is unknown; retry with a working RPC. ${a.consequence}`, ctx) };
   }
   if (verdict.kind === "erc1271_rejected" || verdict.kind === "eoa_mismatch" || verdict.kind === "unparseable") {

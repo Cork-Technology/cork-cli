@@ -29,7 +29,7 @@ export interface CorkAddresses extends PoolManagerRef {
 
 /** The pool's share tokens as an EARLIER read in the same call returned them — the generation
  *  resolver's `shares(poolId)` (generations.ts). Passed through so the state read does not ask
- *  the same manager the same question twice (review C1, 2026-09-22). Safe across blocks: a pool's
+ *  the same manager the same question twice. Safe across blocks: a pool's
  *  share contracts are set at creation and never change, so a value read at "latest" by the
  *  resolver is the value at any pinned block at or after creation. */
 export interface KnownShares {
@@ -78,8 +78,8 @@ export interface PoolTokensRead {
 }
 
 /** Read `market(poolId)` through the ABI of the manager's declared wire — `marketAbiFor` is the
- *  ONE place that choice is made (this function branched on the wire itself until 2026-09-22,
- *  review B5). The 8-field decode is the 0.5.x one; the 10-field decode carries the two fee words
+ *  ONE place that choice is made (this function branched on the wire itself until 2026-09-22).
+ *  The 8-field decode is the 0.5.x one; the 10-field decode carries the two fee words
  *  a narrower ABI would drop. viem types the return by the ABI, so the Market8/Market10 shape
  *  follows the wire without a widening cast. */
 async function readMarketTuple(client: PublicClient, pm: PoolManagerRef, poolId: `0x${string}`, blockArg: { blockNumber?: bigint }): Promise<Market> {
@@ -199,7 +199,7 @@ export async function readPoolState(
 
 /** The `fee_view_mismatch` warning a 10-field fee disagreement surfaces as — ONE spelling for
  *  every handler that reads pool state (cork-pool, the three compute kinds, track marketRef). Its
- *  own code since 2026-09-22 (review B7): a tuple ≠ views split on the pool's IDENTITY is a chain
+ *  own code since 2026-09-22: a tuple ≠ views split on the pool's IDENTITY is a chain
  *  fact a reader must be able to branch on, not the local-computation class `invalid_state` names. */
 export function feeDisagreementWarnings(s: Pick<PoolStateRead, "feeDisagreements" | "poolId">): Array<{ code: string; message: string }> {
   if (!s.feeDisagreements || s.feeDisagreements.length === 0) return [];

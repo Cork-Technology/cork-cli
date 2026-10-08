@@ -1,4 +1,4 @@
-// cork_prepare_phoenix `data.approvals` (2026-10-01, the 2026-10-01 integration triage, item 3): every pool
+// cork_prepare_phoenix `data.approvals` (2026-10-01): every pool
 // bundle names the grants it needs — the initiator's pulls to the cork adapter (one ERC-20
 // allowance in erc20-approve mode, the two Permit2 layers in permit2 mode) and, on a burn-side
 // action with an `owner` that is not the adapter, the OWNER's allowance to the cork adapter (the

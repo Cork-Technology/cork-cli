@@ -11,7 +11,7 @@ import { readScanCache, SCAN_CACHE_MAX_ROWS, SCAN_CACHE_SCHEMA, writeScanCache }
 // os.homedir() does not follow a runtime HOME change (Node's does), so on a Node-less host — where
 // vitest itself runs under Bun — the HOME redirect was silently ignored, the gate test passed
 // vacuously, and the gate-dropped mutants survived while writing into the developer's REAL
-// ~/.cache (mutation run on 4f7099d, 2026-09-23). The mock holds on either runtime.
+// ~/.cache (a mutation run, 2026-09-23). The mock holds on either runtime.
 const home = vi.hoisted(() => ({ dir: undefined as string | undefined }));
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -20,7 +20,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 /** Keys carry the row-shape schema prefix, as `scanCacheId` writes them — a key without it is a
- *  stale-schema entry and is pruned at load (review C6). */
+ *  stale-schema entry and is pruned at load. */
 const k = (name: string) => `v${String(SCAN_CACHE_SCHEMA)}:${name}`;
 
 const VAR = "CORK_SCAN_CACHE_FILE";

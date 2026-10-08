@@ -335,7 +335,7 @@ describe("cork_query registry-* (2.1.0 chain views)", () => {
     expect(d.modeNote).toContain("defaulted"); // the applied default is disclosed in data, not a warning
     expect(d.oracle.deployed).toBe(true);
     expect(BigInt(d.oracle.rate)).toBe(WAD);
-    // Audit R1.5: the pair family's rate label (the fixed family already had one) — rides
+    // The pair family's rate label (the fixed family already had one) — rides
     // INSIDE the shared oracle shape so derive-cork-pool inherits the same self-description.
     expect(d.oracle.rateScale).toContain("1e18 = 1.0");
   });

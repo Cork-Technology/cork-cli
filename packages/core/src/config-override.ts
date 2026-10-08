@@ -4,15 +4,14 @@
 // Two layers, two owners:
 //   - `cork-defaults.v2.json` is the RELEASED public document: bundled into the build and fetched
 //     from the binary's line config branch, config/<major>.<minor> (config-remote.ts). Partners read it; it never carries a
-//     non-canonical deployment set (policy R5b: a public file is a partner-facing projection).
-//   - `config.json` is the OPERATOR's local document, never fetched from GitHub. Internal sets
-//     (staging, dark-launch, a vnet), an internal RPC book, or an emergency address fix live here
-//     — the escape hatch tag pinning removed. The private tree carries Cork's own copy; the
-//     public port excludes the file by name (scripts/port-to-public.ts EXCLUDED_FILES).
+//     non-canonical deployment set (a public file is a partner-facing projection).
+//   - `config.json` is the OPERATOR's local document, never fetched from GitHub. Operator-only
+//     sets (staging, dark-launch, a vnet), an operator RPC book, or an emergency address fix live
+//     here — the escape hatch tag pinning removed. The public tree ships no `config.json`.
 //
 // Merge rule (`mergeConfig`): the override wins, at the granularity of a WHOLE SET. A set in
 // `config.json` replaces the set with the same key in the default, or adds a new one; a set is
-// never merged field by field, because policy R5b requires every set to be complete and a
+// never merged field by field, because every set must be complete and a
 // half-merged set is how a signer ends up with one contract from each generation. `primary`,
 // a chain's LOP address and its Fusion settlement entry are replaceable too. `only` (a partner
 // pinning the sets it has integrated) keeps just the listed set keys of that chain after the
@@ -79,7 +78,7 @@ export interface OverrideSummary {
 }
 
 /** Where the override is read from, in order: `CORK_CONFIG_FILE`; the user's config dir; the
- *  repo root of a SOURCE run (the private tree's own `config.json`, beside cork-defaults.v2.json —
+ *  repo root of a SOURCE run (a checkout's own `config.json`, beside cork-defaults.v2.json —
  *  absent from the public tree and from a compiled binary, whose import.meta.url is virtual). */
 export function overrideCandidatePaths(env: NodeJS.ProcessEnv = process.env): string[] {
   const out: string[] = [];

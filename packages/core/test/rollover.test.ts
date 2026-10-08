@@ -128,7 +128,7 @@ describe("order digest", () => {
     expect(built.orderDigest).toBe(computeOrderDigest(42161, built.order as OrderDataStruct));
   });
 
-  it("is deterministic for identical inputs and clientRequestId-sensitive [K2]", () => {
+  it("is deterministic for identical inputs and clientRequestId-sensitive", () => {
     const a = buildRolloverIntent(intentArgs());
     const b = buildRolloverIntent(intentArgs());
     expect(a.orderDigest).toBe(b.orderDigest);
@@ -300,7 +300,7 @@ describe("runTool cork_prepare_orders rollover-intent", () => {
     expect(inverted.warnings[0]?.code).toBe("invalid_order_terms");
   });
 
-  it("identical calls produce byte-identical envelopes (digest-stable) [K2]", async () => {
+  it("identical calls produce byte-identical envelopes (digest-stable)", async () => {
     const a = await runTool("cork_prepare_orders", base, ctx);
     const b = await runTool("cork_prepare_orders", base, ctx);
     expect(a.provenance.digest).toBe(b.provenance.digest);
@@ -642,7 +642,7 @@ describe("the 0.2 settlers (phoenix/v0.4-rc.1) — config pins + ERC-5267 domain
 });
 
 describe("the rollover destination pool id is derived by the ONE JIT derivation (deriveJitMarket on the phoenix wire)", () => {
-  // deriveRolloverJitPool and phoenixWireOfRolloverWire were deleted 2026-09-22 (review B6/A2):
+  // deriveRolloverJitPool and phoenixWireOfRolloverWire were deleted 2026-09-22:
   // the rollover branch derives with deriveJitMarket on the settler generation's DECLARED phoenix
   // wire — never a width inferred from the rollover wire.
   const base = {
@@ -722,7 +722,7 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     expect(notice?.message).toContain("oracleSalt committed");
   });
 
-  it("a settler generation that declares NO phoenix block refuses unknown_deployment — the pool id width is declared, never inferred from the rollover wire (review A2)", async () => {
+  it("a settler generation that declares NO phoenix block refuses unknown_deployment — the pool id width is declared, never inferred from the rollover wire", async () => {
     // `ctx.deployment` is the SDK address override: getDep short-circuits on it and returns no
     // generation, which is exactly the shape of a generation whose rollover block outlived its
     // phoenix block. Before the fix, `phoenixWireOfRolloverWire` guessed 10-field from the 0.2
@@ -753,7 +753,7 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     const alias = await runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: jitMarket.additionalData, oracleSalt: SAMPLE_02.oracleSalt } } }, ctx);
     expect(hashOf(alias)).toBe(GOLDEN_02);
     // Both present and different is INVALID INPUT (the ONE alias rule every JIT block shares
-    // since 2026-09-22 — the rollover branch used to answer invalid_order_terms here, review B2).
+    // since 2026-09-22 — the rollover branch used to answer invalid_order_terms here).
     await expect(runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx)).rejects.toBeInstanceOf(ToolInputError);
     // An explicit "0x" COUNTS as present: it is not a silent default that lets the alias win.
     await expect(runTool("cork_prepare_orders", { ...base, action: { ...base.action, jitMarket: { ...jitMarket, additionalData: "0x", extraData: "0xdead", oracleSalt: SAMPLE_02.oracleSalt } } }, ctx)).rejects.toBeInstanceOf(ToolInputError);
@@ -992,7 +992,7 @@ describe("runTool rollover admission battery (venue-parity gates) + settler gene
     unwindSwapFeePercentage: "200000000000000000",
   };
 
-  it("jitMarket is hashed locally into rolloverParams.jitMarketHash [K3] — identical to passing the pre-computed commitment", async () => {
+  it("jitMarket is hashed locally into rolloverParams.jitMarketHash — identical to passing the pre-computed commitment", async () => {
     const viaParams = await run({ jitMarket: JIT_MARKET });
     expect(viaParams.state).toBe("ok");
     const post = (viaParams.data as Record<string, unknown>).venuePost as { order: { rolloverParams: { jitMarketHash: string } } };

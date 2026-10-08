@@ -1,5 +1,5 @@
-// cork_prepare_orders rollover-fill + deploy-rollover-contract (2026-10-01, the 2026-10-01 integration triage
-// item 4): the FILLER side of a rollover. Real bytes throughout — the roll order is built by the
+// cork_prepare_orders rollover-fill + deploy-rollover-contract (2026-10-01): the FILLER side of
+// a rollover. Real bytes throughout — the roll order is built by the
 // same intent builder a holder signs with, signed with a throwaway key, and the fill calldata is
 // decoded back through the BaseFiller ABI to prove the job the contract will read.
 import { describe, expect, it } from "vitest";

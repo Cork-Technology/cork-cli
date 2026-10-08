@@ -1,7 +1,6 @@
 // cork_prepare_orders: the FILLER side of a rollover (`rollover-fill`) and the per-account clone
-// (`deploy-rollover-contract`) — 2026-10-01, the 2026-10-01 integration triage, item 4. Until now the maker side
-// existed (rollover-intent → cork_submit rollover-order) and nothing could take a posted roll
-// order: underwriter-one's v0.4 roll orders were re-posted every half hour and never filled.
+// (`deploy-rollover-contract`). Until now the maker side existed (rollover-intent →
+// cork_submit rollover-order) and nothing could take a posted roll order.
 //
 // The roll order's counterparty is the SOURCE cST holder — the cover buyer whose position the
 // holder's cPT is being rolled with. The fill runs through the generation's BaseFiller (the
@@ -98,7 +97,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   }
   const { order, signature } = parsed;
 
-  // ── [K3] the digest is RECOMPUTED from the payload; the claimed digest must match ──
+  // ── the digest is RECOMPUTED from the payload; the claimed digest must match ──
   if (Number(order.originChainId) !== chainId) {
     return refuse("invalid_order_terms", `the order's originChainId is ${order.originChainId}, not ${chainId} — its digest lives under that chain's settler domain and it cannot be filled here`);
   }

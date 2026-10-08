@@ -124,7 +124,7 @@ describe("API-surface drift gate", () => {
     const guidance =
       `The public @cork/core API surface changed (${deltas.length} delta${deltas.length === 1 ? "" : "s"}): ` +
       `${deltas.slice(0, 15).join("; ")}${deltas.length > 15 ? "; …" : ""}. ` +
-      `A removal or kind change breaks published consumers (minor bump below 1.0.0, policy R10); an addition widens the covered surface. ` +
+      `A removal or kind change breaks published consumers (minor bump below 1.0.0); an addition widens the covered surface. ` +
       `If intentional, note it in CHANGELOG.md and regenerate: UPDATE_API_SURFACE=1 bunx vitest run packages/core/test/api-surface.test.ts`;
     expect(surface, guidance).toEqual(committed);
   });

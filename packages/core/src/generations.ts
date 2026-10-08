@@ -1,5 +1,5 @@
-// Generations — a chain hosts a SET of contract generations; one is primary (cork-cli 0.6 design
-// contract, 2026-09-22; owner ruling: v0.5.1 is the last release of the previous generation and
+// Generations — a chain hosts a SET of contract generations; one is primary (since the 0.6
+// line, 2026-09-22: v0.5.1 is the last release of the previous generation and
 // the 0.6 line adds the Distribution phoenix/v0.4-rc.1 set while KEEPING every older set
 // readable, decodable and — where the chain still fills — preparable. Nothing here retires an
 // address).
@@ -14,7 +14,7 @@
 // Distribution names where one exists (`phoenix/v0.4-rc.1`) and our own for the eras before the
 // Distribution existed (`arbitrum-v1.1`, `mainnet`).
 //
-// Why a set and not a flat "current + historical" list (the PR #17 shape this supersedes): the
+// Why a set and not a flat "current + historical" list (the earlier shape this supersedes): the
 // three registry generations and the two phoenix identity generations were decided by DIFFERENT
 // mechanisms there (a config array with a literal tag vs a chain-blind address list, defaulting
 // unknown managers to the newest wire), and four string vocabularies described the same fact.
@@ -54,7 +54,7 @@ export type MarketRegistryWire = (typeof MARKET_REGISTRY_WIRES)[number];
  *  RETIRED 2026-08-13, kept so a retired settler is named precisely, never encoded for), `rc.2`
  *  (RolloverParams.jitMarketHash, 864 bytes; JITMarketParams without oracleSalt) or `0.2`
  *  (bytes32 oracleSalt after additionalData — the JITMarketParams typehash changes).
- *  OrderData/RolloverParams are identical in rc.2 and 0.2. The design contract names only rc.2
+ *  OrderData/RolloverParams are identical in rc.2 and 0.2. The 0.6 line targets only rc.2
  *  and 0.2; rc.1 is added so the retired block does not have to DECLARE a wire it never spoke —
  *  a config claiming a wire the contract does not implement is the exact class this model
  *  exists to remove. */
@@ -126,7 +126,7 @@ export const RolloverBlockSchema = z
      *  JITMarketCreated when a fill creates the destination pool) — optional because the July
      *  rc.1 record predates the Distribution's component baselines. */
     baseFiller: Address.optional(),
-    /** The generation's hook MODULES (rollover 0.2.0 src/modules): the delegatecall targets a
+    /** The generation's hook MODULES (rollover 0.2.0 hook modules): the delegatecall targets a
      *  holder's clone runs per phase — the pre-hook that pulls the src cPT in and the post-hook
      *  that returns the dst cPT (`standardRolloverHooks`). Optional: the rc.1/rc.2 records predate
      *  the module baselines. */
@@ -227,7 +227,7 @@ export type GenerationSelection = { ok: true; generation: ResolvedGeneration } |
 export const GENERATION_BLOCK_KINDS = ["phoenix", "marketRegistry", "rollover"] as const;
 export type GenerationBlockKind = (typeof GENERATION_BLOCK_KINDS)[number];
 
-/** The `generation` input's ALIASES (migration, 2026-09-22 — owner requirement: v0.6.0 supports
+/** The `generation` input's ALIASES (migration, 2026-09-22 — v0.6.0 supports
  *  the previous AND the current generation at once so users can move funds). `primary` = omit;
  *  `previous` = the newest ACTIVE non-primary generation that carries the block kinds the call
  *  needs (config order after the primary — `generationsOf` already orders that way); `all` is
@@ -301,8 +301,8 @@ export function selectGeneration(list: readonly ResolvedGeneration[], label?: Ge
   const generation = label === undefined ? primaryOf(list) : list.find((g) => g.label === label);
   if (generation === undefined) {
     // The label is the caller's OWN field, so the refusal is invalid-input-class everywhere
-    // (handlers/shared.ts `generationRefusal` throws it; 2026-09-22 review B1 found two exit
-    // codes for one typo). A near miss gets the same did-you-mean the schema layer gives enum
+    // (handlers/shared.ts `generationRefusal` throws it; it once had two exit codes for one
+    // typo). A near miss gets the same did-you-mean the schema layer gives enum
     // typos — the list alone made a caller diff four labels by eye.
     const nearest = label !== undefined ? nearestValue(label, [...list.map((g) => g.label), ...GENERATION_ALIASES]) : undefined;
     return {

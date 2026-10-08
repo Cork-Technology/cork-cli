@@ -111,7 +111,7 @@ describe("GET retry vs POST no-retry", () => {
     expect(breaker.byHost[HOST]).toEqual({ failures: 0, openedAt: null }); // the success reset the blip
   });
 
-  it("POST relays are NEVER transport-retried ([K2] retries are the caller's, keyed by clientRequestId)", async () => {
+  it("POST relays are NEVER transport-retried (retries are the caller's, keyed by clientRequestId)", async () => {
     let calls = 0;
     const deps: VenueDeps = {
       fetch: async () => {
@@ -126,7 +126,7 @@ describe("GET retry vs POST no-retry", () => {
   });
 });
 
-describe("the caller's signal ends venue work (audit DB-001) — an abort is never a venue fault", () => {
+describe("the caller's signal ends venue work — an abort is never a venue fault", () => {
   it("an already-aborted signal starts NO call: no fetch, no breaker bookkeeping, VenueAborted", async () => {
     let calls = 0;
     const breaker: VenueBreakerState = { byHost: {} };

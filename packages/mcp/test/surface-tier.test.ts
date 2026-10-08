@@ -22,7 +22,7 @@ function firstDefWithDescription(s: Json): Record<string, unknown> {
   throw new Error("no $defs description found in the fixture — the fixture format regressed");
 }
 
-describe("surface tier classifier (mechanical boundary, owner-approved 2026-08-11)", () => {
+describe("surface tier classifier (mechanical boundary, 2026-08-11)", () => {
   it("identical surfaces are tier none", () => {
     expect(classifySurfaceDelta(FIXTURE, clone()).tier).toBe("none");
   });

@@ -60,8 +60,8 @@ function checkedUrl(raw: string | URL, expectedOrigin?: string, base?: URL): URL
  * Fetch that follows redirects MANUALLY, validating each hop before it can receive a request.
  *
  * The default `fetch` follows redirects itself, which means the FIRST the caller hears of a hop
- * is after the body has already been delivered to wherever the redirect pointed (audit
- * MCP-NET-004). For a venue relay that body is a signed order. So: `redirect: "manual"`, every
+ * is after the body has already been delivered to wherever the redirect pointed. For a venue
+ * relay that body is a signed order. So: `redirect: "manual"`, every
  * Location checked against the ORIGINAL origin before it is requested, and a body-bearing method
  * followed only across 307/308 (the statuses that preserve method and body).
  *

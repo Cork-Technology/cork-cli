@@ -3,8 +3,8 @@
 // `balanceOf(address(this))`). Leg fn is on the adapter itself (it inherits GeneralAdapter1):
 //   erc20-approve -> erc20TransferFrom(token, adapter, amount)   (initiator pre-approves adapter)
 //   permit2       -> permit2TransferFrom(token, adapter, amount) (initiator has a Permit2 allowance)
-// There is deliberately NO "tokens already in the adapter" mode (audit ARTIFACT-PREFUND-001,
-// 2026-08-24): a balance parked on the adapter ahead of the action is takeable by anyone through
+// There is deliberately NO "tokens already in the adapter" mode: a balance parked on the
+// adapter ahead of the action is takeable by anyone through
 // the public Bundler3.multicall + the adapter's unguarded erc20Transfer, for as long as it sits
 // there. Pull, action and sweep-back must be ONE transaction.
 import { encodeFunctionData, parseAbi, zeroAddress } from "viem";
@@ -224,8 +224,8 @@ const UINT160_MAX = (1n << 160n) - 1n;
 
 /**
  * The token grants a pool bundle needs BEFORE it is broadcast, derived from the same tables the
- * funding legs come from (2026-10-01, the 2026-10-01 integration triage, item 3): every pulled input is an
- * allowance from the INITIATOR to the Cork adapter — a plain ERC-20 allowance in erc20-approve
+ * funding legs come from: every pulled input is an allowance from the INITIATOR to the Cork
+ * adapter — a plain ERC-20 allowance in erc20-approve
  * mode, the two Permit2 layers in permit2 mode (the ERC-20 allowance to the Permit2 contract,
  * plus Permit2's internal (initiator, token, spender = adapter) allowance the adapter's
  * permit2TransferFrom consumes) — and a burn from an `owner` that is not the adapter is an

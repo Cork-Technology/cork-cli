@@ -1,4 +1,4 @@
-// full-decentralized datasource [C12]: bulk-historical event queries over Envio HyperSync.
+// full-decentralized datasource: bulk-historical event queries over Envio HyperSync.
 // HyperSync is backfill-only (no eth_call) — live state stays on RPC (lite-decentralized), and
 // the pre-commitment venue flow (resting orders, RFQs) emits NO events and can never be served
 // by any indexer, ours or Envio's. What IS event-derived: market discovery (MarketCreated),
@@ -14,7 +14,7 @@
 //    1.1.0 — commit dcdab8f, 2026-02-25 — and has never built linux-arm64-musl) leave it
 //    undefined and answer with a target-specific reason. Before 0.4.1 the
 //    bare image could never serve full-decentralized mode: the package was imported by name
-//    and no node_modules exists inside a compiled binary (found by ops, 2026-08-20).
+//    and no node_modules exists inside a compiled binary.
 //  - a source run imports the package by NAME; its own loader picks the binding at runtime
 //    (setting CH_HYPERSYNC_BINDING to a `.node` path in the environment overrides that).
 import { decodeEventLog, parseAbi, toEventSelector } from "viem";
@@ -126,7 +126,7 @@ interface WindowedRpcClient {
 /** The endpoint refused an eth_getLogs range AT the floor: it cannot serve the walk at all. Thrown
  *  (never swallowed) so the caller can decide — an AUTOMATIC endpoint fails over to the next one
  *  the way a transport failure does; an EXPLICIT one (the operator's own --rpc-url) fails loudly
- *  naming the host (owner ruling 2026-09-23). Carries the refused span for the message. */
+ *  naming the host (2026-09-23). Carries the refused span for the message. */
 export class LogRangeCapError extends Error {
   constructor(
     public readonly fromBlock: number,
@@ -233,7 +233,7 @@ export async function loadHyperSync(chainId: number, token: string | undefined):
     source: {
       // HyperSync answers are PAGED: each response carries `nextBlock`, the resume point. This
       // closure is now JUST the transport (one napi page → a normalized HyperSyncPage); the
-      // page-walk, completeness, and page-cap honesty live in the pure collectPagedLogs (F15).
+      // page-walk, completeness, and page-cap honesty live in the pure collectPagedLogs.
       async queryLogs(q) {
         return collectPagedLogs(q.fromBlock, async (fromBlock) => {
           const res = await client.get({
@@ -325,7 +325,7 @@ function strictTopics(l: HyperSyncLog): [Hex, ...Hex[]] {
 }
 
 /** Fields every decoded row carries. blockNumber rides as a decimal string — chain integers are
- *  strings on the wire (F10). Row types below are type aliases (not interfaces) so their implicit
+ *  strings on the wire. Row types below are type aliases (not interfaces) so their implicit
  *  index signatures keep them assignable to the generic row plumbing (Record<string, unknown>). */
 export type LogMeta = {
   blockNumber: string;
@@ -386,7 +386,7 @@ export type LopFillRow = LogMeta & {
 
 /** Decode MarketCreated logs, choosing the ABI by the EMITTER's declared wire (`emitters`,
  *  from the chain's generations — REQUIRED: the optional parameter with an 8-field default was
- *  a public /indexer path on which a 10-field log was silently dropped, review A4, 2026-09-22)
+ *  a public /indexer path on which a 10-field log was silently dropped, fixed 2026-09-22)
  *  — a 10-field manager's 9-arg log through the 7-arg ABI fails the strict topic count and a
  *  7-arg log through the 9-arg ABI fails on data length, and both failures are SKIPPED rather
  *  than retried with the other ABI: the wire is a config fact about the emitter, not something

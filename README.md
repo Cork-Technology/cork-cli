@@ -2,7 +2,7 @@
 
 One tool for Cork Phoenix, three ways to use it: an **MCP server** for AI agents, a **CLI** for
 people and scripts, and a **TypeScript SDK** for integrators. All three are projections of the
-same typed core (RFC 011), so they share one contract: 9 tools that read protocol state, run
+same typed core, so they share one contract: 9 tools that read protocol state, run
 bit-exact math, decode bytes, and build **unsigned** transactions and orders.
 
 One safety property shapes everything: **these tools never sign and never hold keys.** You sign
@@ -279,7 +279,7 @@ are always client-side (see `cork_capabilities topic:"signing"`).
 | `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech). With `CORK_CONFIG_FILE` naming a staging set this is the whole staging switch — see "Point one install at staging" in docs/cli.md. |
 | `CORK_CONFIG_FILE` / `CORK_CONFIG_NO_OVERRIDE` | A local `config.json` that adds or replaces whole deployment sets, moves a chain's primary, or restricts the visible sets (`only`); `=1` on the second turns the layer off. Results the override shaped warn `config_override_active`. |
 | `CORK_PROBE_BUDGET` | Default eth_call budget of the offers probe walk, per side (integer 1..25; default 6; a per-call `probeBudget` input wins). Values outside the range are ignored. |
-| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs — the config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire; see "Address config" in CLAUDE.md). |
+| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs — the config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire). |
 
 `GET /docs/signing` serves the sign-and-broadcast guide as markdown — the same constant that
 backs `cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the
@@ -479,18 +479,18 @@ The chosen endpoint and breaker state are cached in-process and on disk
 re-probing. When a read falls back to a community RPC, the result envelope carries an
 `rpc_fallback` warning naming the host.
 
-> Note: the built-in default endpoints embed access tokens and are committed intentionally
-> (owner decision). This is a deliberate exception to the "never commit an RPC URL" rule, which
+> Note: the built-in default endpoints embed access tokens and are committed intentionally.
+> This is a deliberate exception to the "never commit an RPC URL" rule, which
 > still applies to `CORK_RPC_URL` / `CORK_TEST_RPC` — those stay environment-only.
 
-## Design invariants (RFC 011)
+## Design invariants
 
 - **One typed core.** MCP, CLI, and SDK are thin projections of the same `runTool` dispatch and
   the same registry — no logic forks between surfaces.
-- **Prepare ≠ sign ≠ submit** [K1]. Preparation returns unsigned bytes; nothing is signed or
+- **Prepare ≠ sign ≠ submit**. Preparation returns unsigned bytes; nothing is signed or
   broadcast by these tools. The one side-effecting tool (`cork_submit`) only relays a
   caller-signed payload.
-- **Reconstruct, never trust a supplied parse** [K3]. `cork_decode` re-derives Cork calldata
+- **Reconstruct, never trust a supplied parse**. `cork_decode` re-derives Cork calldata
   (recursively unwrapping Bundler3 multicall/reenter) from bytes; unknown legs are surfaced
   raw, never silently dropped.
 - **Honest phase-gating.** Unimplemented tool variants return an `unavailable` envelope with a
@@ -608,10 +608,10 @@ Implemented + tested:
   fills/contracts) also serves `full-decentralized` mode over HyperSync, never the venue.
 - **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run
   on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt, orderHash /
-  submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer [K7]).
+  submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer).
 - **cork_submit** — the one side-effecting tool: relays caller-signed/authored payloads to the venue
   (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`, `rfq-counter`), recomputing commitments
-  before relay [K3].
+  before relay.
 
 Deliberately gated (`unavailable` with a reason, never faked): only `cork_compute` rfq-quote — a
 pricing model deferred by product decision (a Fusion-style decaying-premium order is the

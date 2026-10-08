@@ -2,7 +2,7 @@
 // Cork legs are decoded to {action, params}; nested bundles recurse; unknown legs are surfaced
 // raw (with selector) rather than dropped — a decoder that silently hides legs is a footgun.
 //
-// A selector names an ABI SHAPE, not a contract (audit ARTIFACT-DECODE-002, 2026-08-24): any
+// A selector names an ABI SHAPE, not a contract: any
 // contract can expose `safeDeposit(...)` or `multicall(...)`. So every leg also carries a
 // `verification` verdict against the targets the caller vouches for (`DecodeTrustTargets`):
 //   trusted    — the leg's `to` IS the configured contract for that role;
@@ -12,7 +12,7 @@
 //   unverified — nothing to compare against: no target configured for the role, or a role the
 //                decoder has no authority for (an ERC-20 token, an integrator-deployed ForSelf
 //                adapter). Honest, not a contradiction.
-// With no targets at all (the default) every labeled leg is `unverified` — the pre-audit
+// With no targets at all (the default) every labeled leg is `unverified` — the earlier
 // behaviour, now stated instead of implied.
 import { decodeFunctionData, toFunctionSelector, type AbiFunction } from "viem";
 import { corkAdapterAbi } from "./corkAdapterAbi.ts";
@@ -43,8 +43,8 @@ export interface DecodeTrustTargets {
   /** An integrator-deployed ForSelf adapter, once the caller has verified its bindings. */
   forSelf?: `0x${string}` | undefined;
   /** Every configured generation's REFERENCE ForSelf adapter (the Distribution record's
-   *  `forSelf.adapter`), each with its generation label (2026-10-01, the 2026-10-01 integration triage, item 2):
-   *  a call to one of them is trusted and labeled with the generation; an integrator's own
+   *  `forSelf.adapter`), each with its generation label: a call to one of them is trusted and
+   *  labeled with the generation; an integrator's own
    *  adapter (Zyfai's) stays `unverified` — verify it with cork_track verify kind forSelfAdapter. */
   forSelfAdapters?: readonly { address: `0x${string}`; label: string }[] | undefined;
   /** Token contracts a plain ERC-20 leg (approve/transfer/transferFrom) may be trusted at —

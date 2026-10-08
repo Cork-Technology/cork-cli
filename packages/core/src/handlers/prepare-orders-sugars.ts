@@ -28,9 +28,9 @@ export interface SugarDeps {
   annotateApprovals: (ctx: HandlerContext, chainId: PrepareOrdersInput["chainId"], entries: ApprovalRequirement[]) => Promise<ApprovalRequirement[]>;
 }
 
-// ── answer-rfq: the underwriter's every-RFQ sequence as ONE call (the underwriter use cases U1/U4) ──
+// ── answer-rfq: the underwriter's every-RFQ sequence as ONE call ──
 // Reads the RFQ (and the cited option) from the venue, derives the pool the cover creates on fill,
-// computes the kernel's amounts, and re-enters the maker-order path with the derived action — so
+// computes the ACT/365 premium amounts, and re-enters the maker-order path with the derived action — so
 // every pre-flight, approval, JIT and auction rule the maker-order path applies is applied here
 // too, by the same code. Nothing here picks a premium: the option's, or the caller's.
 type AnswerRfqAction = Extract<PrepareOrdersInput["action"], { type: "answer-rfq" }>;
@@ -285,7 +285,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // through a ForSelf adapter is not that caller, so reserving for the requester account would
   // lock out the only party the reservation is for (PrivateOrder). Until the venue serves the
   // RFQ's fill_sender, an undeclared sender means an OPEN order, said in a warning — never a
-  // guess (the kernel's rule for the same case, 2026-09-04).
+  // guess (the agent convention for the same case, 2026-09-04).
   if (!action.reserve && action.fillSender !== undefined) {
     throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "fillSender"], message: "fillSender reserves the fill; it contradicts reserve:false" }]);
   }
@@ -375,7 +375,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   // the one `answer.pool` reports.
   const pinnedConstraint = action.jitMarket?.constraint ?? (dd.pool.constraint ? { rateMin: String(dd.pool.constraint.rateMin), rateMax: String(dd.pool.constraint.rateMax), rateChangePerDayMax: String(dd.pool.constraint.rateChangePerDayMax), rateChangeCapacityMax: String(dd.pool.constraint.rateChangeCapacityMax) } : undefined);
 
-  // ── amounts, the kernel's way ──
+  // ── amounts, the ACT/365 way ──
   let collateralDecimals: number;
   try {
     collateralDecimals = Number(await resolved.client.readContract({ address: collateralAsset, abi: erc20Abi, functionName: "decimals" }));
@@ -508,7 +508,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         takingAmount: takingAmount.toString(),
         makingAmount: makingAmount.toString(),
         impliedPremiumWad: impliedWad.toString(),
-        formula: "takingAmount = ceil(premium × notional × tenorSeconds / 31536000) in collateral base units (ACT/365, rounded toward the maker — the kernel's premium_amount); makingAmount = notional rescaled to the 18-decimal cST",
+        formula: "takingAmount = ceil(premium × notional × tenorSeconds / 31536000) in collateral base units (ACT/365, rounded toward the maker — the venue's premium_amount); makingAmount = notional rescaled to the 18-decimal cST",
         reservedFor: allowedSender ?? null,
         reach: allowedSender !== undefined ? "reserved" : "open",
         expirySeconds,
@@ -544,7 +544,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   };
 }
 
-// ── refresh-order: re-rest a resting order of yours on the SAME bit with a new expiry (U2) ──
+// ── refresh-order: re-rest a resting order of yours on the SAME bit with a new expiry ──
 export async function handleRefreshOrder(input: PrepareOrdersInput, action: RefreshOrderAction, ctx: HandlerContext, sugar: SugarDeps): Promise<Envelope> {
   const chainId = input.chainId;
   const lop = LOP_ADDRESSES[chainId];
@@ -576,7 +576,7 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
   if (old.maker.toLowerCase() !== input.account.toLowerCase()) {
     return unavailable(chainId, "invalid_order_terms", `order ${action.orderHash} was made by ${old.maker}, not by ${input.account} — only the maker can re-rest its order (the new order is signed by account)`, ctx);
   }
-  // The venue row is DISCOVERY, not authority [K3]: before its terms become a NEW signature
+  // The venue row is DISCOVERY, not authority: before its terms become a NEW signature
   // request, the extension rule and the maker signature are checked exactly as a fill checks
   // them — a refresh must never re-sign bytes the venue served with a signature `account`
   // never made, or an extension the salt never committed to. Chain-free for an EOA maker;
@@ -586,7 +586,7 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
   const traits = decodeMakerTraits(old.makerTraits);
   const plan = lopInvalidatorPlan(old.makerTraits);
   if (plan.mode !== "bit") return unavailable(chainId, "invalid_order_terms", "this order uses the remaining-amount invalidator (allowMultipleFills) — a refresh shares a BIT, which only single-fill orders have; post a maker-order instead", ctx);
-  // Liveness [K7]: a spent bit means the old order is dead AND a refresh on the same nonce would
+  // Liveness: a spent bit means the old order is dead AND a refresh on the same nonce would
   // be dead on arrival — refuse, and say what to do instead.
   const resolved = await getRpc(ctx, chainId);
   const warnings: Array<{ code: string; message: string }> = [...auth.warnings];

@@ -1,5 +1,5 @@
 {
-  "$comment": "The three cancel entrypoints of 1inch Limit Order Protocol v4, copied from contracts/interfaces/IOrderMixin.sol (OrderMixin.sol implements them). `MakerTraits` is `type MakerTraits is uint256`, so its ABI word is uint256. Selectors: cancelOrder 0xb68fb020, cancelOrders 0x89e7c650, bitsInvalidateForOrder 0x05b1ea03. The deployed LOP (0x111111125421cA6dc452d289314280a0f8842A65 on every chain this tool serves) answers these; experiments/fork-harness/script/cancel-sweep-rehearsal.ts drives them on a fork.",
+  "$comment": "The three cancel entrypoints of 1inch Limit Order Protocol v4, copied from contracts/interfaces/IOrderMixin.sol (OrderMixin.sol implements them). `MakerTraits` is `type MakerTraits is uint256`, so its ABI word is uint256. Selectors: cancelOrder 0xb68fb020, cancelOrders 0x89e7c650, bitsInvalidateForOrder 0x05b1ea03. The deployed LOP (0x111111125421cA6dc452d289314280a0f8842A65 on every chain this tool serves) answers these.",
   "functions": [
     {
       "name": "cancelOrder",

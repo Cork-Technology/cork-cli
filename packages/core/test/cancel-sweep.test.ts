@@ -1,12 +1,11 @@
-// cork-cli-private#15: `cancel` scope "slot" — one bitsInvalidateForOrder that retires the
+// `cancel` scope "slot" — one bitsInvalidateForOrder that retires the
 // anchor order's bit AND the bit of every other resting order of the maker in the same 256-bit
 // slot word, read from the venue book. Semantics pinned against limit-order-protocol v4 source:
 // BitInvalidatorLib.massInvalidate(nonce, mask) writes word[nonce >> 8] |= (1 << (nonce & 0xff))
 // | mask; OrderMixin.bitsInvalidateForOrder reverts OrderIsNotSuitableForMassInvalidation for a
 // remaining-invalidator order. Nothing here is mocked below the venue: rows are REAL signed
 // orders (buildMakerOrder with pinned nonces, hashed and signed by real keys), the venue is the
-// usual fetch stub, and the chain effect is proven on a fork by
-// experiments/fork-harness/script/cancel-sweep-rehearsal.ts.
+// usual fetch stub, and the chain effect is proven on a fork.
 import { describe, expect, it } from "vitest";
 import { encodeFunctionData, keccak256, toFunctionSelector, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";

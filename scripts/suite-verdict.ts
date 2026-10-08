@@ -2,8 +2,8 @@
 // run was supposed to execute — never from the exit code or the console.
 //
 // Why: on 2026-10-07 the CI step `bun run test` (vitest on Bun) printed the banner, ONE file
-// (packages/core/test/venue.test.ts, 100 tests, 588 ms), no summary, and exited 0 after 3 s
-// (cork-cli-private run 37622917869). The step passed. Every other file of the suite never ran.
+// (packages/core/test/venue.test.ts, 100 tests, 588 ms), no summary, and exited 0 after 3 s.
+// The step passed. Every other file of the suite never ran.
 // An exit code says "nothing I ran failed"; it cannot say "I ran everything". So the gate holds the
 // report to the file set vitest itself discovered before the run: every discovered file must have
 // a result, no test may fail, no file may error at load, and at least one test must have run.

@@ -1,22 +1,22 @@
-// hybrid mode's verification legs [K7]: the venue DISCOVERS rows, the chain CONFIRMS them.
+// hybrid mode's verification legs: the venue DISCOVERS rows, the chain CONFIRMS them.
 // One implementation, two consumers — every read below calls the same chain-read code the
 // lite-decentralized paths serve (the LOP invalidator classifiers, poolManagerAbi market()
 // reads, the settler orderStatus view), never a private re-implementation.
 //
-// The split rule (owner decision 2026-08-13): a row the chain DEFINITIVELY refutes — a dead
-// invalidator, a pool no configured pool manager knows, a fill log absent from its claimed
+// The split rule: a row the chain DEFINITIVELY refutes — a dead invalidator, a pool no
+// configured pool manager knows, a fill log absent from its claimed
 // block range, a rollover status the settler contradicts — is DROPPED and counted; serving it
 // would hand the caller state that can only revert or mislead. A row whose verification was
 // INDETERMINATE (transport failure, budget exhausted, unparseable row) is KEPT, labeled
 // verification:"unverified" — evidence stays unless the chain itself refutes it.
 //
-// Budget (owner decision 2026-08-13): pages up to HYBRID_VERIFY_BUDGET rows verify fully;
-// larger pages verify the first HYBRID_VERIFY_BUDGET rows (the venue lists newest-first) and
-// label the rest "unverified" with a warning.
+// Budget: pages up to HYBRID_VERIFY_BUDGET rows verify fully; larger pages verify the first
+// HYBRID_VERIFY_BUDGET rows (the venue lists newest-first) and label the rest "unverified" with
+// a warning.
 //
-// trading-pairs rows are NEVER dropped: the venue is the authority on what is LISTED (owner
-// decision 2026-08-13), and a JIT order legitimately lists a pair whose pool does not exist
-// yet — chain existence rides as an `exists` annotation, not a liveness verdict.
+// trading-pairs rows are NEVER dropped: the venue is the authority on what is LISTED, and a JIT
+// order legitimately lists a pair whose pool does not exist yet — chain existence rides as an
+// `exists` annotation, not a liveness verdict.
 import { zeroAddress } from "viem";
 import { marketAbiFor } from "../chain/abis.ts";
 import { classifyInvalidatorWord, decodeMakerTraits, hashLopOrder, isAllowedSender, LOP_ADDRESSES, type LopInvalidatorPlan, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
@@ -130,7 +130,7 @@ interface AnnotatedBook {
   warnings: Warning[];
 }
 
-/** The chain-free half of orderbook verification [K3], run on EVERY row whether or not an RPC
+/** The chain-free half of orderbook verification, run on EVERY row whether or not an RPC
  *  resolves: parse the signed order once, re-hash it, check the extension rule OrderLib enforces
  *  at fill, ecrecover the signature, and decode what its makerTraits commit to. Two
  *  self-contradictions are settled here without a chain read, and a row showing either is
@@ -184,13 +184,13 @@ async function annotateBookRows(rows: Row[], chainId: number, lop: `0x${string}`
   }
   const warnings: Warning[] = [];
   if (hashLies > 0) {
-    warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash [K3]; a row that misrepresents its own order is unusable under either hash` });
+    warnings.push({ code: "order_hash_mismatch", message: `${String(hashLies)} venue row(s) DROPPED — the signed order they carry does not hash to their claimed orderHash; a row that misrepresents its own order is unusable under either hash` });
   }
   if (extensionLies > 0) {
-    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies)} venue row(s) DROPPED chain-free — their extension bytes are not the ones the salt/makerTraits commit to (OrderLib.isValidExtension): no fill of such a row can ever succeed [K3]` });
+    warnings.push({ code: "signature_or_reconstruction_mismatch", message: `${String(extensionLies)} venue row(s) DROPPED chain-free — their extension bytes are not the ones the salt/makerTraits commit to (OrderLib.isValidExtension): no fill of such a row can ever succeed` });
   }
   if (echoLies > 0) {
-    warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word [K3]; the venue's echo was not used` });
+    warnings.push({ code: "listing_traits_mismatch", message: `${String(echoLies)} venue row(s) listed an allowedSender that contradicts their signed makerTraits — the served allowedSender/exclusivity are decoded locally from the signed word; the venue's echo was not used` });
   }
   return { lop, rows: served, parsed, dropped: hashLies + extensionLies, warnings };
 }
@@ -263,7 +263,7 @@ export async function verifyVenueRows(a: {
     const bookLop = book.lop;
     const nowSeconds = nowSecondsOf(ctx);
     // The chain's generations, for the readiness decode: a JIT hook is read on the wire of the
-    // generation its adapter belongs to, never trial-decoded (jit-extension.ts, review A3).
+    // generation its adapter belongs to, never trial-decoded (jit-extension.ts).
     const bookGenerations = generationsOf((await resolveConfig()).defaults, chainId);
     // Phase 1 — from the chain-free parse above, collect the UNIQUE invalidator reads the
     // page needs. One bit word covers 256 orders of the same (maker, slot), so rows dedupe
@@ -467,7 +467,7 @@ export async function verifyVenueRows(a: {
   } else {
     // rollover-orders kind=orders: the settler's own orderStatus view arbitrates each row's
     // claimed lifecycle — the same read cork_track reconcile performs. But the SETTLER ADDRESS
-    // comes from the venue row, which is untrusted discovery data (audit STATE-003): only a
+    // comes from the venue row, which is untrusted discovery data: only a
     // configured active or retired generation may be called or believed. An unknown address is
     // never queried — a read against it is an attacker-chosen contract answering a question we
     // would then treat as chain truth — and its row stays venue-provenance, labeled.
@@ -504,7 +504,7 @@ export async function verifyVenueRows(a: {
       // The generation rides on the row as ONE object — `{ label, status }` for a configured
       // settler (status = the rollover block's standing, active | retired), `{ status: "unknown" }`
       // for an address no generation vouches for — so a reader sees WHY a row is unverified and
-      // WHICH generation vouched for a verified one (review B4, 2026-09-22: a status string with a
+      // WHICH generation vouched for a verified one (2026-09-22: a status string with a
       // `*Label` twin said one fact twice).
       const labeled =
         generation === undefined ? row
@@ -538,7 +538,7 @@ export async function verifyVenueRows(a: {
   for (const row of overBudget) keep(row, "unverified");
 
   if (chainDropped > 0) {
-    warnings.push({ code: "status_mismatch", message: `${String(chainDropped)} venue row(s) DROPPED — the chain definitively refutes them (${droppedWhy.join("; ")}); chain outranks the venue [K7]` });
+    warnings.push({ code: "status_mismatch", message: `${String(chainDropped)} venue row(s) DROPPED — the chain definitively refutes them (${droppedWhy.join("; ")}); chain outranks the venue` });
   }
   if (transportUnverified > 0) {
     warnings.push({ code: "chain_read_failed", message: `${String(transportUnverified)} row(s) could not be verified (transport failure) — kept, labeled verification:'unverified'` });

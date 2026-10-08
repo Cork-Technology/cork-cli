@@ -1,6 +1,6 @@
 // Token-approval requirements for the 1inch LOP v4 order lifecycle — WHO must grant WHAT to
 // WHOM before an order can rest fillable or a fill can broadcast, with the unsigned approval
-// transaction payload for each grant [K1: prepared, never signed here].
+// transaction payload for each grant (prepared, never signed here).
 //
 // Ground truth (verified against the deployed LOP v4 source, OrderMixin.sol):
 //  - Default maker pull: `transferFrom(maker → taker)` on the maker asset — needs a plain ERC-20
@@ -65,7 +65,7 @@ export interface ApprovalRequirement {
    *  signature bytes, so a contract wallet signs it through ERC-1271. */
   wallets: "eoa+contract" | "eoa-only";
   note: string;
-  /** The unsigned grant tx [K1]; null for erc2612-permit (a signature, not a transaction). */
+  /** The unsigned grant tx; null for erc2612-permit (a signature, not a transaction). */
   unsignedTx: UnsignedApprovalTx | null;
   /** Best-effort chain annotation (absent = not checked / not checkable). */
   satisfied?: boolean;

@@ -1,4 +1,4 @@
-// Phase 1 acceptance pins (remote-MCP signing plan): the signing doc topic resolves by name AND
+// Signing-topic pins: the signing doc topic resolves by name AND
 // every alias AND via search, and every prepare result carries the data.execution completion
 // pointer. All offline (config-only paths).
 import { describe, expect, it } from "vitest";
@@ -81,8 +81,8 @@ describe("doc topic: units", () => {
       { field: "unwindSwapFeePercentage", marker: "1e18 = 1%", xu: "D18{%}" },
       { field: "rateOverride", marker: "1e18 = 1.0", xu: "D18{1}" },
       { field: "rate", marker: "1e18 = 1.0", xu: "D18{1}" },
-      // The four constraint bounds — the headline fields of collisions #1 and #3. Since audit R2
-      // they carry their OWN describe + x-units (RateConstraintWire); the parent `constraint`
+      // The four constraint bounds — the headline fields of collisions #1 and #3. These
+      // carry their OWN describe + x-units (RateConstraintWire); the parent `constraint`
       // description still states the scale and is checked via parent-propagation.
       { field: "constraint", marker: "1e18 = 1.0" },
       { field: "rateMin", marker: "1e18 = 1.0", xu: "D18{1}" },
@@ -92,7 +92,7 @@ describe("doc topic: units", () => {
       { field: "initialRateBump", marker: "1e7", xu: "D7{%}" },
       { field: "rateBump", marker: "1e7", xu: "D7{%}" },
       { field: "premium", marker: "PERCENT", xu: "{%}" },
-      // rfq-counter's typed premium: fraction-string per the venue contract, pinned by R13 —
+      // rfq-counter's typed premium: fraction-string per the venue contract, pinned by the versioning rule —
       // the marker is the shared "fraction" stem ("decimal-fraction STRING" in the schema,
       // "fraction STRINGS" on the topic row).
       { field: "premiumAnnualized", marker: "fraction", xu: "{%}" },
@@ -249,7 +249,7 @@ describe("doc topic: orders", () => {
     const line = body.split("\n").find((l) => l.includes("`exclusivity`") && l.includes("classified"));
     expect(line, "the topic states how exclusivity is classified").toBeDefined();
     for (const v of BOOK_EXCLUSIVITY) expect(body, `exclusivity value '${v}' is taught`).toContain(`\`${v}\``);
-    // Synonyms the board, the kernel, and 1inch use all resolve to the canonical column.
+    // Synonyms trading agents and 1inch use all resolve to the canonical column.
     for (const syn of ["dedicated", "private", "single-taker", "OCO", "one-cancels-the-other", "dutch auction", "allowed sender"]) {
       expect(body, `synonym '${syn}' is mapped`).toContain(syn);
     }

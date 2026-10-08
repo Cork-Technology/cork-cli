@@ -1,4 +1,4 @@
-// Emitter-authenticated event attribution (audit STATE-007, 2026-08-24).
+// Emitter-authenticated event attribution.
 //
 // A topic0 names an ABI shape, not a contract: any contract can emit `OrderSettled(bytes32)`.
 // Labeling a receipt's logs by topic alone therefore lets ANY emitter in the transaction —
@@ -16,14 +16,14 @@ import { BASE_FILLER_JIT_MARKET_CREATED_TOPIC, SETTLER_EVENTS } from "./rollover
 import { rolloverGenerations } from "./rollover.ts";
 
 /** Who is allowed to emit a given protocol event. The pre-2.1.0 adapter is a `jitAdapter` too
- *  (its `legacyJitAdapter` role was retired 2026-09-22, review B4): which JITMarketCreated
+ *  (its `legacyJitAdapter` role was retired 2026-09-22): which JITMarketCreated
  *  signature an adapter emits is a WIRE fact, gated by `EMITTER_WIRE_TOPICS`, not a role. */
 export type EmitterRole = "exactSettler" | "partialSettler" | "baseFiller" | "factory" | "jitAdapter" | "marketCreator" | "poolManager" | "whitelistManager";
 
 /** The compact generation reference every emitter carries — the chain generation's label and
  *  its `active | read-only` status (generations.ts GenerationStatus, the one vocabulary; until
  *  2026-09-22 this field held an `active | retired` string that mapped read-only to retired and
- *  forced the legacy adapter to retired while its generation is active — review B4). */
+ *  forced the legacy adapter to retired while its generation is active). */
 export interface EmitterGeneration {
   label: string;
   status: GenerationStatus;
@@ -134,7 +134,7 @@ export interface AttributableLog {
   logIndex?: number | string | null;
 }
 
-/** Where a log came from, carried on every row — chain integers as decimal strings (F10). */
+/** Where a log came from, carried on every row — chain integers as decimal strings. */
 interface LogOrigin {
   address: string;
   txHash?: string;

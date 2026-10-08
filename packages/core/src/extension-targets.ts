@@ -1,5 +1,5 @@
 // Every CONTRACT a LOP v4 extension makes the protocol CALL during a fill, classified against the
-// chain's known deployments (owner requirement 2026-09-23: the user must be safe even when the
+// chain's known deployments (2026-09-23: the user must be safe even when the
 // venue returns an order whose extension names an address that matches no known generation).
 //
 // The threat, precisely. A resting order's extension is signed by the MAKER and passed verbatim
@@ -94,7 +94,7 @@ export function extensionTargets(extension: `0x${string}`, generations: readonly
 
 /** The targets a fill must NOT proceed against: the unknown HOOKS. Getters are deliberately not
  *  in this set — an unknown AMOUNT GETTER can only move the price, and the LOP enforces the
- *  taker's `maximumTakingAmount` on-chain (TakingAmountTooHigh), so the 2026-08-26 ruling stands:
+ *  taker's `maximumTakingAmount` on-chain (TakingAmountTooHigh), so the rule is:
  *  refuse the DERIVED cap, build under an EXPLICIT one, warn. No cap bounds what a HOOK does. */
 export function foreignExtensionTargets(targets: readonly ExtensionTarget[]): ExtensionTarget[] {
   return targets.filter((t) => t.classification === "unknown" && (t.slot === "preInteraction" || t.slot === "postInteraction"));

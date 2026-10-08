@@ -20,8 +20,8 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
   if (p.kind === "rollover-premium-floor") {
     // CEIL, not floor: parity with LibAtomicFill.computeRequiredPremium =
     // Math.mulDiv(produced, minPremiumPerShare, 1e18, Rounding.Ceil) — the amount the settler
-    // actually transfers. (Floor understated by 1 wei on any remainder; found in the 2026-08-10
-    // numeric audit — the original test vector was remainder-free, so floor==ceil hid it.)
+    // actually transfers. (Floor understated by 1 wei on any remainder; the original test
+    // vector was remainder-free, so floor==ceil hid it.)
     const floor = mulDiv(BigInt(p.dstCstProduced), BigInt(p.minPremiumPerShare), WAD, "ceil");
     const scales = {
       premiumFloor: "premium-token native base units — ceil(dstCstProduced * minPremiumPerShare / 1e18), the exact amount the settler charges",
@@ -54,11 +54,11 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
     const rpc = () => rpcProvenance(input.format, resolved);
     const addrs: CorkAddresses = { poolManager: poolDep.poolManager, constraintAdapter: poolDep.constraintAdapter, wire: poolDep.wire, ...(gen ? { generation: gen } : {}) };
     if (input.at?.timestamp !== undefined) {
-      // Accepted-but-reserved field (F12): validated, then ignored — say so instead of letting a
+      // Accepted-but-reserved field: validated, then ignored — say so instead of letting a
       // caller believe their replay was timestamp-pinned.
       w.push({ code: "reserved_field_ignored", message: "at.timestamp is accepted but NOT honored in this iteration — results are anchored to the block/clock; use at.block to pin chain reads" });
     }
-    // [C11] Only the RPC read lives in the chain try/catch; the local math below produces its own
+    // Only the RPC read lives in the chain try/catch; the local math below produces its own
     // envelope on a domain violation instead of masquerading as a chain failure.
     let s: Awaited<ReturnType<typeof readPoolState>>;
     try {
@@ -73,7 +73,7 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
 
       if (p.kind === "cst-swap-rate") {
         const r = previewSwap(BigInt(p.collateralAssetsOut), { swapRate, swapFeePercentage: s.swapFeePercentage, collateralDecimals: s.collateralDecimals, referenceDecimals: s.referenceDecimals });
-        // Unit disclosure (F7): this response mixes three decimal systems; label every field so
+        // Unit disclosure: this response mixes three decimal systems; label every field so
         // an integration built on an 18/18 pool doesn't break by 10^12 on a 6-dec asset.
         const scales = {
           swapRate: "1e18 = 1.0 (WAD)",
@@ -172,11 +172,10 @@ export async function handleCompute(input: ComputeInput, ctx: HandlerContext): P
 
 /**
  * dutch-auction-price: the CURRENT price of a 1inch Fusion (v3.1) dutch-auction order — pure
- * local math over the order's own extension bytes [K3]. Price = f(extension, taker, basefee,
+ * local math over the order's own extension bytes. Price = f(extension, taker, basefee,
  * timestamp); the port is proven wei-exact against the DEPLOYED settlement getters on mainnet +
- * Arbitrum (experiments/fusion-spike/probe.ts). at.timestamp pins the moment (the one compute
- * input that is clock-anchored, not block-anchored); baseFeeWei omitted = gas bump skipped =
- * upper-bound price.
+ * Arbitrum. at.timestamp pins the moment (the one compute input that is clock-anchored, not
+ * block-anchored); baseFeeWei omitted = gas bump skipped = upper-bound price.
  */
 function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams, { kind: "dutch-auction-price" }>, ctx: HandlerContext): Envelope {
   const chainId = input.chainId ?? 1;
@@ -196,7 +195,7 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
   } catch (err) {
     if (err instanceof NotAFusionOrder) {
       // A CLASSIFIED getter is consequential: the bytes name a contract we cannot price, so the
-      // classification rides in `data` for the caller (audit ARTIFACT-FUSION-003) — a legacy
+      // classification rides in `data` for the caller — a legacy
       // layout is phase-gated, an unrecognized contract is settler_not_recognized. Anything
       // else is simply not an auction order → the plain domain envelope.
       if (err.settlement !== undefined && err.classification !== undefined) {
@@ -245,7 +244,7 @@ function handleComputeDutchAuction(input: ComputeInput, p: Extract<ComputeParams
   // A requested makingAmount above the order's own makingAmount extrapolates the linear term past
   // what is fillable — 1inch clamps any fill to the remaining amount, so takerPays for m > M is a
   // number that corresponds to no real fill. Disclose it (build-and-warn, same posture as the
-  // taker-fill clamp which hard-errors on a SIGNABLE artifact; a quote stays a quote). [footgun N2]
+  // taker-fill clamp which hard-errors on a SIGNABLE artifact; a quote stays a quote).
   if (m > M) {
     warnings.push({ code: "makingamount_exceeds_order", message: `makingAmount ${m} exceeds the order's own makingAmount ${M}; the price is a LINEAR EXTRAPOLATION of no fillable amount (1inch clamps every fill to the remaining size). Quote at most ${M} for a realizable taker cost` });
   }

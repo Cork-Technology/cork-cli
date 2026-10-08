@@ -1,5 +1,5 @@
 // A Fusion order's price comes from the contract its extension NAMES, not from the bytes after
-// the address — those are caller-controlled data (audit ARTIFACT-FUSION-003, 2026-08-24). So a
+// the address — those are caller-controlled data. So a
 // getter that is not the release-pinned current deployment cannot be priced here, and the
 // consequences differ by surface:
 //   compute dutch-auction-price — unavailable, with the classification reported;

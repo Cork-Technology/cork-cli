@@ -6,14 +6,14 @@
 // fillable order hash, collapsed group rungs included) and the best order per side. A later read
 // diffs itself against it. Pure: a watermark and a rank result in, the changes out; no I/O.
 //
-// Verify before announce (owner ruling 2026-09-02, design §5): a row the venue lists OPEN can be
+// Verify before announce (2026-09-02): a row the venue lists OPEN can be
 // dead on chain (a filled sibling of its group, a cancel). The hybrid read already DROPS rows the
 // chain refutes before ranking sees them, so a surviving row with `verification:"confirmed"` has
 // had its invalidator bit read clear this call. Only such rows are announced under `appeared` and
 // `better`; a row nobody could confirm (no RPC, budget exhausted) rides under `unconfirmed` — the
 // set changed, but the caller must confirm it before acting.
 //
-// "Better" (ruling): a lower unit price for the taker on a SELL row (higher on a BUY row, where
+// "Better": a lower unit price for the taker on a SELL row (higher on a BUY row, where
 // the maker pays), or an improved REACH at the same price — an order reserved for this fill
 // sender beats an open one, because nobody can race it.
 import type { RankedRow, RankResult } from "./orders-rank.ts";

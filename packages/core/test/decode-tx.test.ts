@@ -1,6 +1,6 @@
 // cork_decode kind:"tx" — the validate-before-broadcast step: recover the signer from a SIGNED
 // raw transaction, name the target against known Cork deployments, and decode the inner calldata
-// to the same labeled legs as kind:"calldata" [K3]. The fixture is generated in-test with a
+// to the same labeled legs as kind:"calldata". The fixture is generated in-test with a
 // throwaway key (Anvil dev account #1), so the recovered-signer assertion is a real ECDSA
 // round-trip, not a pinned string.
 import { beforeAll, describe, expect, it } from "vitest";
@@ -190,7 +190,7 @@ describe("runTool: cork_decode kind:'tx'", () => {
   it("rejects unsigned or undecodable bytes as teachable invalid input", async () => {
     // Inner calldata alone is not a transaction envelope.
     await expect(runTool("cork_decode", { kind: "tx", data: DEMO_MULTICALL }, { nowSeconds: NOW })).rejects.toBeInstanceOf(ToolInputError);
-    // A structured record is not accepted — the parse is reconstructed from bytes only [K3].
+    // A structured record is not accepted — the parse is reconstructed from bytes only.
     await expect(runTool("cork_decode", { kind: "tx", data: { to: SUSDE } }, { nowSeconds: NOW })).rejects.toBeInstanceOf(ToolInputError);
   });
 });

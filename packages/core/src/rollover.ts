@@ -1,6 +1,6 @@
 // Cork rollover order construction: EIP-712 typed data for `OrderData` under the CorkSettler
-// domain, plus the zero-digest `RolloverIntent` commitment (`rolloverIntentHash`) [K3: recomputed
-// locally, never accepted from the caller].
+// domain, plus the zero-digest `RolloverIntent` commitment (`rolloverIntentHash`), recomputed
+// locally, never accepted from the caller.
 //
 // Structs, typehash preimages, and encoding order are ported from the DEPLOYED pin
 // `rollover v0.1.0-rc.2` (public tag v0.1.0-rc.2; src/libraries/{Typehashes,
@@ -497,7 +497,7 @@ const U64 = (1n << 64n) - 1n;
 
 // ── Admission pre-flight (venue parity) ────────────────────────────────────────────────────────
 // The deterministic subset of the venue's POST /rollover/v1/orders admission battery
-// (cork-api post-order route @ 0.3.16), replicated op-for-op so a refusal here lands
+// (cork-api rollover order POST route @ 0.3.16), replicated op-for-op so a refusal here lands
 // exactly where the venue's 400 would. Chain-dependent admission (hook-target getCode, the
 // settler resolveFor preflight) deliberately stays venue-side — this module is pure.
 
@@ -791,7 +791,7 @@ export interface RolloverVenuePost {
 
 const venueHook = (c: RolloverCall): RolloverVenueHook => ({ target: c.target.toLowerCase(), value: c.value.toString(), callData: c.callData, allowFailure: c.allowFailure, isDelegateCall: c.isDelegateCall });
 
-/** The two hook MODULES every production roll runs (rollover 0.2.0 `src/modules`, delegatecalled
+/** The two hook MODULES every production roll runs (rollover 0.2.0 hook modules, delegatecalled
  *  by the holder's clone; ERC-7484-attested on the factory's registry): OwnerTokenPullModule
  *  `execute(IERC20 token, uint256 amount, bool allowUnderfill)` as a PRE hook pulls the holder's
  *  src cPT into the clone (the holder approves the clone for it), and
@@ -824,7 +824,7 @@ export function standardRolloverHooks(a: StandardRolloverHooksArgs): Pick<Rollov
 }
 
 /** Build a signable rollover order: OrderData typed-data + the locally-recomputed zero-digest
- *  intent commitment [K3]. Deterministic for identical inputs [K2] — orderSalt derives from
+ *  intent commitment. Deterministic for identical inputs — orderSalt derives from
  *  clientRequestId unless the caller pins it. */
 export function buildRolloverIntent(a: RolloverIntentArgs): RolloverIntentResult {
   const orderSalt = a.orderSalt ?? BigInt(keccak256(stringToHex(`rollover-salt:${a.clientRequestId}`))) & U64;

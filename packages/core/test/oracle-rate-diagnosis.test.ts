@@ -55,7 +55,7 @@ const TRANSPORT = () => {
   throw Object.assign(new Error("HTTP request failed. URL: https://rpc.example/ Request body: {...}"), { name: "HttpRequestError" });
 };
 
-describe("a rate() read that fails in TRANSPORT is never attributed to the oracle or the recipe (audit DB-007)", () => {
+describe("a rate() read that fails in TRANSPORT is never attributed to the oracle or the recipe", () => {
   it("registry-oracle: rateReadable:false with rateReadFailure:'transport' and a chain_read_failed info — not oracle_rate_unreadable", async () => {
     const env = await runTool("cork_query", { chainId: 42161, resource: "registry-oracle", filters: { collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, ctx(revertingOracleStub({ rate: TRANSPORT })));
     expect(env.state).toBe("ok");

@@ -3,10 +3,10 @@
 Complements the always-on stubbed suite (`evals/run.ts`, Layer B): that grades an SDK
 agent against a stub chain; **this** spawns real `claude -p` sessions against the actual
 stdio MCP server of one or two checkouts, so schema/description changes can be A/B'd on
-the surface clients actually see. First used 2026-07-21 to validate the frontier-MCP
-schema pass (result: old 9/10 selection + 9/10 params → new 10/10 + 10/10, zero
+the surface clients actually see. First used 2026-07-21 to validate a schema revision
+(result: old 9/10 selection + 9/10 params → new 10/10 + 10/10, zero
 schema-invalid calls in ~40 runs; two TokenAmount teaching fixes fell out of observed
-misses, recorded in the private research notes).
+misses).
 
 ## Requirements
 
@@ -15,7 +15,7 @@ misses, recorded in the private research notes).
   vnet-only demo pool intentionally yields `chain_read_failed` on real mainnet — agents
   are graded on call shape, and recovery from honest errors is part of the signal).
 - Costs real tokens: 10 tasks × ~1–3 turns per labeled run. **sonnet-5 is the grader tier**
-  (owner ruling 2026-07-28: evals always run on sonnet, never haiku).
+  (evals always run on sonnet, never haiku).
 
 ## Usage
 
@@ -37,6 +37,6 @@ amounts fail), `inv` (invalid_input teaching errors seen), `c` (cork call count)
 `evals/live-ab/runs/<label>/` (gitignored).
 
 Single runs are noisy (n=1 per cell): treat a flip as a lead, re-run the task 2–3×, and
-read the transcript before concluding — the 2026-07 pass found one real schema defect
+read the transcript before concluding — a 2026-07 run found one real schema defect
 (base-unit rescaling) and one model-tier artifact (round-number ×1000 drops) this way.
 Never tune descriptions against these tasks and the held-out Layer B set at once.

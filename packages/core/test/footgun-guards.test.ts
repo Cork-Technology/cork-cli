@@ -1,5 +1,5 @@
-// Regression tests for the 2026-07-24 footgun-hardening pass (notes/footgun-investigation-*.md).
-// Each block names the finding it pins. These tests FAILED before the fixes: the old code
+// Regression tests for the 2026-07-24 footgun-hardening pass.
+// Each block names the guard it pins. These tests FAILED before the fixes: the old code
 // returned values (or clean `ok` envelopes) on every input below.
 import { describe, expect, it } from "vitest";
 import {
@@ -27,7 +27,7 @@ const B = "0x53E82ABbb12638F09d9e624578ccB666217a765e" as const;
 const TAKER = "0xc0ffee0000000000000000000000000000000001" as const;
 const SIG = `0x${"11".repeat(32)}${"22".repeat(32)}1b` as const;
 
-describe("T1/T2/T9 — math primitives enforce the Solidity revert domain (class item 9)", () => {
+describe("math primitives enforce the Solidity revert domain", () => {
   it("mulDiv rejects negative operands, zero/negative denominators, and uint256 quotient overflow", () => {
     const U256 = (1n << 256n) - 1n;
     expect(() => mulDiv(1n, 1n, 0n)).toThrow(/division by zero/);
@@ -58,7 +58,7 @@ describe("T1/T2/T9 — math primitives enforce the Solidity revert domain (class
   });
 });
 
-describe("T4 — impairment floor at worstRate=0 answers instead of crashing", () => {
+describe("impairment floor at worstRate=0 answers instead of crashing", () => {
   it("returns maxReferencePerCst null (unbounded) when the floor collapses to zero", () => {
     const market = { collateralAsset: A, referenceAsset: B, expiryTimestamp: 0n, rateMin: 0n, rateMax: 2n * WAD, rateChangePerDayMax: WAD, rateChangeCapacityMax: WAD, rateOracle: A } as never;
     const state = { lastAdjustedRate: WAD / 2n, remainingCredits: WAD, lastAdjustmentTimestamp: 0n } as never;
@@ -68,7 +68,7 @@ describe("T4 — impairment floor at worstRate=0 answers instead of crashing", (
   });
 });
 
-describe("F2 — buildMakerTraits range-checks before bit-packing (no silent 40-bit wrap)", () => {
+describe("buildMakerTraits range-checks before bit-packing (no silent 40-bit wrap)", () => {
   it("throws on an expiry/nonce that does not fit the 40-bit slot", () => {
     const U40 = (1n << 40n) - 1n;
     expect(() => buildMakerTraits({ allowPartialFills: true, allowMultipleFills: false, usePermit2: false, expiry: U40 + 1n, nonce: 0n })).toThrow(/40-bit/);
@@ -79,7 +79,7 @@ describe("F2 — buildMakerTraits range-checks before bit-packing (no silent 40-
   });
 });
 
-describe("T3 — taker-fill derives-and-clamps against the signed order (class item 10)", () => {
+describe("taker-fill derives-and-clamps against the signed order", () => {
   const order = { salt: 1n, maker: TAKER, receiver: "0x0000000000000000000000000000000000000000" as const, makerAsset: A, takerAsset: B, makingAmount: 100n, takingAmount: 7n, makerTraits: 0n };
 
   it("refuses an over-ask instead of reporting 10x-wrong amounts and a 10x-loose cap", () => {
@@ -104,7 +104,7 @@ describe("T3 — taker-fill derives-and-clamps against the signed order (class i
   });
 });
 
-describe("T7 — malformed caller extensions are refused at build time", () => {
+describe("malformed caller extensions are refused at build time", () => {
   const base = { chainId: 1, lop: A, maker: TAKER, makerAsset: A, takerAsset: B, makingAmount: 1n, takingAmount: 1n, clientRequestId: "ext-shape-01" };
   it("rejects an extension shorter than the 32-byte offsets header", () => {
     expect(() => buildMakerOrder({ ...base, extension: "0x01" })).toThrow(/32-byte offsets header/);
@@ -116,7 +116,7 @@ describe("T7 — malformed caller extensions are refused at build time", () => {
   });
 });
 
-describe("F17 — decode degrades bad legs instead of hiding the whole bundle", () => {
+describe("decode degrades bad legs instead of hiding the whole bundle", () => {
   it("a leg with a known selector but truncated body decodes to kind unknown with a note; siblings survive", () => {
     // erc20TransferFrom selector with a truncated body.
     const full = encodeFunctionData({ abi: parseAbi(["function erc20TransferFrom(address token, address receiver, uint256 amount)"]), args: [A, B, 1n], functionName: "erc20TransferFrom" });
@@ -134,7 +134,7 @@ describe("F17 — decode degrades bad legs instead of hiding the whole bundle", 
   });
 });
 
-describe("F16 — a transient refresh failure never rolls good cached defaults back to the bundle", () => {
+describe("a transient refresh failure never rolls good cached defaults back to the bundle", () => {
   const goodDefaults = () => JSON.parse(JSON.stringify(bundledDefaults));
 
   it("expired good cache + fetch error → serves the stale GOOD copy with a warning; cache keeps the defaults", async () => {
@@ -165,7 +165,7 @@ describe("F16 — a transient refresh failure never rolls good cached defaults b
   });
 });
 
-describe("F1/T6 — UnixSeconds plausibility bound (ms-detector) rides every absolute-time field", () => {
+describe("UnixSeconds plausibility bound (ms-detector) rides every absolute-time field", () => {
   it("rejects a Date.now() (milliseconds) paste with the divide-by-1000 teaching", () => {
     const r = UnixSeconds.safeParse("1753363200000");
     expect(r.success).toBe(false);

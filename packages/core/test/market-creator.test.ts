@@ -261,7 +261,7 @@ describe("cork_prepare_market create-pool (unsigned CorkMarketCreator.createNewP
     expect((env.data as { calldata?: string }).calldata).toBeUndefined();
   });
 
-  it("the creator's bound CONTROLLER contradicting config → conflict too (audit DB-005): roles and share prediction must run on ONE graph", async () => {
+  it("the creator's bound CONTROLLER contradicting config → conflict too: roles and share prediction must run on ONE graph", async () => {
     const env = await runTool("cork_prepare_market", { ...base, action: { ...ACTION, constraint: CONSTRAINT_WIRE } }, ctx(creatorStub({ CONTROLLER: PM })));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("adapter_binding_mismatch");

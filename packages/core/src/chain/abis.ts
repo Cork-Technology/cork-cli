@@ -245,7 +245,7 @@ export const whitelistManagerAbi = [
     ],
     outputs: [{ type: "bool" }],
   },
-  // Per-scope views (IWhitelistManager) — the [K7] verification legs for the event-derived
+  // Per-scope views (IWhitelistManager) — the chain-verification legs for the event-derived
   // whitelisted-addresses enumeration (the membership mappings themselves are not enumerable).
   {
     type: "function",

@@ -11,7 +11,7 @@
 // guard therefore resolves the implementation address from the EIP-1967 slot FIRST and hashes
 // that code — the proxy shell's own code never changes on an upgrade.
 //
-// Trust split (audit MCP-NET-001, 2026-08-24): the ADDRESSES come from the resolved config
+// Trust split: the ADDRESSES come from the resolved config
 // (remote-first, like every other address read), but the ALLOWLIST comes only from the copy
 // bundled into this build. A remote document may legitimately move an address; it must never be
 // the same document that admits the code behind that address, or a tampered config would

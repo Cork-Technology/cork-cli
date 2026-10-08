@@ -1,24 +1,14 @@
-// The bytes cork-cli encodes for the JIT adapter, frozen as a fixture the fork harness decodes
-// with a Solidity reference of the helper (experiments/fork-harness/test/JitExtraDataDecoder.t.sol).
-// This test is the drift gate on that fixture: the committed bytes must equal a fresh encoding of
-// the same params (regenerate deliberately with UPDATE_JIT_FIXTURE=1), and they must round-trip
-// through our own decoder — so the TS encoder, the TS decoder, and the EVM decoder are held to
-// one layout from two sides. ONE fixture PER WIRE since 0.6: the flat (0.3.x) document is
-// byte-identical to what it always was (its `expected.additionalData` key is the flat wire's
-// own member name; the TS side calls the same bytes extraData), the nested (0.5.0) document is
-// the wrapper layout with oracleSalt, decoded by JitExtraDataDecoderNested.
+// Frozen JIT extraData reference vectors for flat and nested adapter layouts.
+// Fresh encodings must match the committed bytes and decode field by field.
+// Regenerate deliberately with UPDATE_JIT_FIXTURE=1.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeJitExtraData, diffJitExtraData, encodeJitExtraData, type JITMarketParams, type PermitParams, permitSignatureOfVrs, splitPermitSignature } from "@cork/core";
 
-// The fixture lives in the PUBLIC test tree: a test that reads excluded content at runtime fails
-// the published suite (the port excludes the fork harness). The harness keeps its own copy for
-// forge, written by the same run whenever that directory exists; both must agree.
+// Fixtures live in this test tree; no excluded harness is required.
 const FIXTURE = resolve(import.meta.dirname, "./fixtures/jit-extra-data.json");
-const HARNESS_COPY = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data.json");
 const FIXTURE_NESTED = resolve(import.meta.dirname, "./fixtures/jit-extra-data-nested.json");
-const HARNESS_COPY_NESTED = resolve(import.meta.dirname, "../../../experiments/fork-harness/test/fixtures/jit-extra-data-nested.json");
 
 /** Fixed, non-degenerate params: every field non-zero and distinct, so a swapped or dropped
  *  field cannot hide behind an equal neighbour. */
@@ -58,7 +48,7 @@ function fixtureDocument(): Record<string, unknown> {
   const q = FIXTURE_PERMITS[0]!;
   const vrs = splitPermitSignature(q.signature)!;
   return {
-    note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol",
+    note: "Flat JIT extraData reference vector; regenerate with UPDATE_JIT_FIXTURE=1.",
     extraData: encodeJitExtraData("flat", p, FIXTURE_PERMITS),
     expected: {
       collateralAsset: p.collateralAsset, referenceAsset: p.referenceAsset, expiryTimestamp: str(p.expiryTimestamp), recipe: p.recipe, rateOverride: str(p.rateOverride),
@@ -74,7 +64,7 @@ function fixtureDocumentNested(): Record<string, unknown> {
   const p = FIXTURE_PARAMS_NESTED;
   const q = FIXTURE_PERMITS_NESTED[0]!;
   return {
-    note: "written by packages/core/test/jit-extra-data-fixture.test.ts (UPDATE_JIT_FIXTURE=1); decoded by test/JitExtraDataDecoder.t.sol (JitExtraDataDecoderNested — the CorkLimitOrderAdapter 0.5.0 layout, bytes permit signature)",
+    note: "Nested JIT extraData reference vector with oracleSalt and bytes permit signatures; regenerate with UPDATE_JIT_FIXTURE=1.",
     extraData: encodeJitExtraData("nested", p, FIXTURE_PERMITS_NESTED),
     expected: {
       collateralAsset: p.collateralAsset, referenceAsset: p.referenceAsset, expiryTimestamp: str(p.expiryTimestamp), recipe: p.recipe, rateOverride: str(p.rateOverride),
@@ -86,19 +76,16 @@ function fixtureDocumentNested(): Record<string, unknown> {
   };
 }
 
-describe("JIT extraData fixture — one layout, held from the TS and the EVM side", () => {
+describe("JIT extraData reference vectors", () => {
   it("the committed fixture equals a fresh encoding (UPDATE_JIT_FIXTURE=1 to regenerate deliberately)", () => {
     const fresh = fixtureDocument();
     const doc = `${JSON.stringify(fresh, null, 2)}\n`;
     if (process.env["UPDATE_JIT_FIXTURE"] === "1" || !existsSync(FIXTURE)) {
       writeFileSync(FIXTURE, doc);
-      if (existsSync(dirname(HARNESS_COPY))) writeFileSync(HARNESS_COPY, doc);
     }
     const committed = JSON.parse(readFileSync(FIXTURE, "utf8")) as { extraData: string; expected: unknown };
-    expect(committed.extraData, "extraData bytes drifted from the encoder — a layout change; regenerate on purpose and re-run the forge decoder test").toBe(fresh.extraData);
+    expect(committed.extraData, "flat extraData bytes drifted from the reference vector — regenerate deliberately").toBe(fresh.extraData);
     expect(committed.expected).toEqual(fresh.expected);
-    // The harness copy (private tree only) must be the same bytes the forge decoder test reads.
-    if (existsSync(HARNESS_COPY)) expect(readFileSync(HARNESS_COPY, "utf8")).toBe(readFileSync(FIXTURE, "utf8"));
   });
 
   it("the NESTED fixture equals a fresh nested encoding (same UPDATE_JIT_FIXTURE=1 regeneration) and round-trips", () => {
@@ -106,12 +93,10 @@ describe("JIT extraData fixture — one layout, held from the TS and the EVM sid
     const doc = `${JSON.stringify(fresh, null, 2)}\n`;
     if (process.env["UPDATE_JIT_FIXTURE"] === "1" || !existsSync(FIXTURE_NESTED)) {
       writeFileSync(FIXTURE_NESTED, doc);
-      if (existsSync(dirname(HARNESS_COPY_NESTED))) writeFileSync(HARNESS_COPY_NESTED, doc);
     }
     const committed = JSON.parse(readFileSync(FIXTURE_NESTED, "utf8")) as { extraData: `0x${string}`; expected: unknown };
-    expect(committed.extraData, "nested extraData bytes drifted from the encoder — regenerate on purpose and re-run the forge decoder test").toBe(fresh.extraData);
+    expect(committed.extraData, "nested extraData bytes drifted from the reference vector — regenerate deliberately").toBe(fresh.extraData);
     expect(committed.expected).toEqual(fresh.expected);
-    if (existsSync(HARNESS_COPY_NESTED)) expect(readFileSync(HARNESS_COPY_NESTED, "utf8")).toBe(readFileSync(FIXTURE_NESTED, "utf8"));
     const back = decodeJitExtraData("nested", committed.extraData);
     expect(diffJitExtraData({ params: FIXTURE_PARAMS_NESTED, permits: FIXTURE_PERMITS_NESTED }, back)).toEqual([]);
     expect(back.permits[0]!.signature).toBe(FIXTURE_PERMITS_NESTED[0]!.signature);

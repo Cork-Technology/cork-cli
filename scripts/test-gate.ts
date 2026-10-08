@@ -4,8 +4,8 @@
 //   bun scripts/test-gate.ts [vitest filters…]      # what CI's "Tests" step runs (`bun run test:ci`)
 //
 // Why not `vitest run` and its exit code (the previous step): on 2026-10-07 vitest on Bun printed
-// one file and exited 0 after 3 s with no summary (cork-cli-private run 37622917869); 105 files
-// never ran and the step passed. Two things change here, each sufficient on its own:
+// one file and exited 0 after 3 s with no summary; 105 files never ran and the step passed.
+// Two things change here, each sufficient on its own:
 //   1. the verdict (scripts/suite-verdict.ts) requires EVERY discovered file to carry a result,
 //      so a run that stops early is red whatever the exit code;
 //   2. the run is driven through `createVitest` → `globTestSpecifications` → `start` → `close`,

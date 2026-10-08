@@ -1,4 +1,4 @@
-// [K7] chain-verification legs for track reconcile, fully offline: injected venue stub + injected
+// Chain-verification legs for track reconcile, fully offline: injected venue stub + injected
 // RPC client (orderStatus view) + injected logs endpoint (HyperRPC-shaped eth_getLogs).
 import { describe, expect, it } from "vitest";
 import { toEventSelector } from "viem";
@@ -33,7 +33,7 @@ function stubCtx(args: {
   chainStatus?: number; // orderStatus() return; undefined = no RPC resolves
   logs?: Array<{ topic0: string }>; // undefined = no logs endpoint
   logsError?: string;
-  /** The settler the VENUE row names — untrusted discovery data (audit STATE-003). */
+  /** The settler the VENUE row names — untrusted discovery data. */
   settler?: string;
   onOrderStatus?: (address: string) => void;
   onLogsRequest?: () => void;
@@ -75,7 +75,7 @@ function stubCtx(args: {
 const track = (ctx: HandlerContext) =>
   runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: DIGEST }, format: "concise" }, ctx);
 
-describe("settler provenance gate [STATE-003]: only a configured generation may be read or believed", () => {
+describe("settler provenance gate: only a configured generation may be read or believed", () => {
   const ACTIVE = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"; // configured ExactSettler (rc.2)
   const ATTACKER = "0x4444444444444444444444444444444444444444";
 
@@ -145,7 +145,7 @@ describe("status leg (settler orderStatus view)", () => {
     expect((env.data as { chainVerification: { consistent: boolean } }).chainVerification.consistent).toBe(true);
   });
 
-  it("venue SETTLED + chain Opened → CONFLICT, chain outranks [K7]", async () => {
+  it("venue SETTLED + chain Opened → CONFLICT, chain outranks", async () => {
     const env = await track(stubCtx({ venueStatus: "SETTLED", chainStatus: 1 }));
     expect(env.state).toBe("conflict");
     expect(env.warnings[0]?.code).toBe("status_mismatch");
@@ -443,7 +443,7 @@ describe("reconcile event-history leg — a digest binds to ONE settler, and the
   });
 });
 
-describe("reconcile venue-miss sweep [K7] — venue absence must not silence the chain", () => {
+describe("reconcile venue-miss sweep — venue absence must not silence the chain", () => {
   const RC2_EXACT = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f";
   const missCtx = (orderStatusBySettler: Record<string, number>): HandlerContext => ({
     nowSeconds: 1_790_000_000n,

@@ -16,7 +16,7 @@ import { resolveGenerations } from "../config-remote.ts";
 import { classifyForSelfAdapter } from "./forself.ts";
 import { collectVenuePages } from "./query.ts";
 
-/** [K7] chain-verification payload on rollover-order reconcile results: the settler's live
+/** Chain-verification payload on rollover-order reconcile results: the settler's live
  *  orderStatus view, plus (when a logs endpoint resolves) the digest's labeled event history —
  *  either leg can ride alone; every gap is disclosed as a warning, never faked. */
 type RolloverChainVerification = {
@@ -25,12 +25,12 @@ type RolloverChainVerification = {
   /** Which configured ROLLOVER generation the settler belongs to — its chain-generation label and
    *  the rollover block's standing (`retired` = venue-inadmissible, wire-incompatible). Chain
    *  provenance is only ever attached to a settler this build recognizes. ONE object since
-   *  2026-09-22 (review B4): a status string plus a `*Label` twin described one fact twice. */
+   *  2026-09-22: a status string plus a `*Label` twin described one fact twice. */
   settlerGeneration?: { label: string; status: "active" | "retired" };
   chainStatus?: ReturnType<typeof chainStatusName>;
   venueStatus?: string;
   consistent?: boolean;
-  /** Emitter-authenticated lifecycle events for this digest (audit STATE-007). */
+  /** Emitter-authenticated lifecycle events for this digest. */
   events?: AttributedLogs["corkEvents"];
   /** Recognized topics from an emitter NOT configured for them — reported, never evidence. */
   unattributedEvents?: AttributedLogs["unattributedEvents"];
@@ -45,7 +45,7 @@ const attributionFields = (a: AttributedLogs): Pick<RolloverChainVerification, "
   ...(a.otherLogs.length ? { otherLogs: a.otherLogs } : {}),
 });
 
-/** [K7] chain-verification payload on lop-order reconcile results: the live LOP invalidator. */
+/** Chain-verification payload on lop-order reconcile results: the live LOP invalidator. */
 type LopChainVerification = {
   leg: string;
   lop: `0x${string}`;
@@ -69,7 +69,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   const chainId = input.chainId ?? 1;
   const subj = input.subject;
 
-  // simulate: dry-run FROZEN bytes via eth_call — executes nothing, signs nothing [K1]. Accepts
+  // simulate: dry-run FROZEN bytes via eth_call — executes nothing, signs nothing. Accepts
   // the artifact shapes our own prepare tools emit (bundler3+multicall, to+calldata/data) plus a
   // caller `from`/`account` (defaults to the artifact's own account field when present). A revert
   // is a SUCCESSFUL simulation whose answer is "this would revert" — ok + wouldRevert, never a
@@ -165,8 +165,8 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   }
 
   // forSelfAdapter: classify an adapter by its own bindings against every configured generation
-  // (the 2026-10-01 integration triage, item 2, 2026-10-01). The decode handler labels a generation's REFERENCE
-  // adapter chain-free; an integrator's own adapter (Zyfai's) has no config entry anywhere, and
+  // (2026-10-01). The decode handler labels a generation's REFERENCE adapter chain-free; an
+  // integrator's own adapter (Zyfai's) has no config entry anywhere, and
   // only its CORK()/LOP()/WHITELIST() views can say which generation it serves — that is a chain
   // read, so it lives here, not in decode.
   if (subj.kind === "forSelfAdapter") {
@@ -228,7 +228,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           marketIdRecomputed: recomputed,
           swapRate: s.onChainSwapRate,
           market: s.market,
-          // Same labels as the cork-pool read (audit R1.6): this result carries the same raw
+          // Same labels as the cork-pool read: this result carries the same raw
           // WAD rates and constraint bounds, and a verifier reads them under the same collision.
           scales: {
             swapRate: "1e18 = 1.0 (WAD)",
@@ -265,7 +265,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
       // count — attributed by EMITTER, not by topic alone: any contract can emit
       // `OrderSettled(bytes32)`, and a receipt names every contract the tx touched. A recognized
       // topic from the wrong emitter rides as `unattributedEvents`; unknown logs ride byte-exact
-      // as `otherLogs`. Neither is lifecycle evidence (audit STATE-007).
+      // as `otherLogs`. Neither is lifecycle evidence.
       const a = attributeLogs(r.logs, emitters);
       return envelope({
         state: "ok",
@@ -296,12 +296,12 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
   }
 
   // orderHash / submissionRef: reconcile against the venue's lifecycle rows. Venue-reported
-  // state — the independent chain-log verification leg [K7] lands in the next iteration; until
+  // state — the independent chain-log verification leg lands in the next iteration; until
   // then a warning discloses that provenance honestly.
   if (subj.kind === "orderHash" || subj.kind === "submissionRef") {
     const ref = subj.kind === "orderHash" ? subj.orderHash : subj.submissionRef;
     const deps = venueDepsOf(ctx);
-    const venueNote = { code: "venue_reported", message: "state is venue-reported (centralized) and was NOT independently chain-verified for this call — configure an RPC (status leg) and ENVIO_API_TOKEN or CORK_LOGS_RPC_URL (event-history leg) to enable [K7] verification" };
+    const venueNote = { code: "venue_reported", message: "state is venue-reported (centralized) and was NOT independently chain-verified for this call — configure an RPC (status leg) and ENVIO_API_TOKEN or CORK_LOGS_RPC_URL (event-history leg) to enable chain verification" };
     try {
       if (/^0x[0-9a-fA-F]{64}$/.test(ref)) {
         // A 32-byte ref is a rollover orderDigest or a LOP orderHash — try both surfaces.
@@ -311,14 +311,14 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           const venueStatus = String(order.status ?? "");
           const digest = ref.toLowerCase() as `0x${string}`;
 
-          // ── [K7] chain verification legs (best-effort; every gap is disclosed, never faked) ──
+          // ── chain verification legs (best-effort; every gap is disclosed, never faked) ──
           const warnings: Array<{ code: string; message: string }> = [];
           let chainVerification: RolloverChainVerification | undefined;
           const { rollover } = await resolveRollover(chainId);
           const settlerAddr = typeof order.settler === "string" ? (order.settler as `0x${string}`) : undefined;
           // The venue row CHOSE this address. Reading `orderStatus` from an unrecognized contract
           // would let it answer a lifecycle question we then treat as chain truth, and scanning
-          // its logs would let it author "chain evidence" (audit STATE-003). Only a configured
+          // its logs would let it author "chain evidence". Only a configured
           // active or retired generation is called.
           const classification = settlerAddr && rollover ? classifyRolloverSettler(rollover, settlerAddr) : undefined;
           const configuredSettler = classification?.status === "active" || classification?.status === "retired" ? classification.status : undefined;
@@ -355,7 +355,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   data: { kind: "rollover-order", orderDigest: digest, venueStatus, chainStatus, order, chainVerification },
                   chainId,
                   source: "chain",
-                  warnings: [{ code: "status_mismatch", message: `the venue reports '${venueStatus}' but the settler's orderStatus() returns '${chainStatus}' — chain outranks indexer [K7]; if the venue row updated within the indexer finality lag (~75s on Arbitrum) retry shortly` }],
+                  warnings: [{ code: "status_mismatch", message: `the venue reports '${venueStatus}' but the settler's orderStatus() returns '${chainStatus}' — chain outranks indexer; if the venue row updated within the indexer finality lag (~75s on Arbitrum) retry shortly` }],
                   ctx,
                 });
               }
@@ -416,9 +416,9 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             ctx,
           });
         }
-        // ── LOP surface: fills + resting-book row, then the on-chain invalidator leg [K7] ──
+        // ── LOP surface: fills + resting-book row, then the on-chain invalidator leg ──
         const hash = ref.toLowerCase();
-        // Bounded traversals (F19): a single-page scan could falsely report "no fills" /
+        // Bounded traversals: a single-page scan could falsely report "no fills" /
         // "not resting" / "not found" for anything beyond page 1.
         const fillsScan = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopFills(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
         const fills = { items: fillsScan.items };
@@ -446,7 +446,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // A venue row is loosely typed here (best-effort leg, no zod gate): makerTraits as a
           // JSON NUMBER would already be float-rounded (traits carry flag bits ≥ 2^250), and a
           // rounded traits value plans the WRONG invalidator slot/mask — a wrong live/dead
-          // verdict, worse than no verdict [K7]. Degrade to "unverified" instead.
+          // verdict, worse than no verdict. Degrade to "unverified" instead.
           const traitsStr0 = src?.makerTraits ?? src?.maker_traits;
           const traitsStr = typeof traitsStr0 === "number" && !Number.isSafeInteger(traitsStr0) ? undefined : traitsStr0;
           const lop = LOP_ADDRESSES[chainId];
@@ -470,7 +470,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                   data: { kind: "lop-order", orderHash: hash, venueStatus: "resting (orderbook row present)", chainStatus: onChain.status, order: bookRow, fills: fills.items, chainVerification },
                   chainId,
                   source: "chain",
-                  warnings: [{ code: "status_mismatch", message: "the venue orderbook still lists this order but the LOP invalidator says it is filled or cancelled — chain outranks indexer [K7]; do not attempt a fill, and a cancel would revert" }],
+                  warnings: [{ code: "status_mismatch", message: "the venue orderbook still lists this order but the LOP invalidator says it is filled or cancelled — chain outranks indexer; do not attempt a fill, and a cancel would revert" }],
                   ctx,
                 });
               }
@@ -516,7 +516,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             ctx,
           });
         }
-        // ── Venue-miss rollover sweep [K7]: the venue archives retired generations, so a
+        // ── Venue-miss rollover sweep: the venue archives retired generations, so a
         // digest it no longer serves may still have LIVE state on-chain — chain outranks the
         // indexer, and venue absence must not silence the chain legs. Ask every configured
         // settler's own orderStatus view (a digest binds to one settler; up to 4 cheap reads).
@@ -541,7 +541,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               const chainStatus = chainStatusName(statusNum);
               if (chainStatus === "None") continue;
               const warnings: Array<{ code: string; message: string }> = [
-                { code: "order_not_found", message: `the venue serves no row for this digest (normal once a generation is archived), but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer [K7]` },
+                { code: "order_not_found", message: `the venue serves no row for this digest (normal once a generation is archived), but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer` },
               ];
               let attribution: AttributedLogs | undefined;
               const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);

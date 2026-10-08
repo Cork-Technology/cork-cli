@@ -1,4 +1,4 @@
-// A venue row is DISCOVERY, not authority (audit DB-004, 2026-09-11): the maker signature and
+// A venue row is DISCOVERY, not authority: the maker signature and
 // the extension rule are checked on every path that acts on a signed order — the ranked book
 // (and so `firm`, watch announcements, ranking), the venue taker-fill branch, and refresh-order —
 // with the same functions the venue-free inline fill already ran. Real keys, real signatures,

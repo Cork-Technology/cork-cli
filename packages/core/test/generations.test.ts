@@ -61,7 +61,7 @@ const DEFAULTS = {
 const LIST = generationsOf(DEFAULTS, 7);
 
 describe("wire vocabularies are code enums the config is validated against", () => {
-  it("names exactly the wires the design contract declares (+ rc.1 for the retired July rollover set)", () => {
+  it("names exactly the declared wire vocabularies (+ rc.1 for the retired July rollover set)", () => {
     expect(PHOENIX_WIRES).toEqual(["8-field", "10-field"]);
     expect(MARKET_REGISTRY_WIRES).toEqual(["legacy", "flat", "nested"]);
     expect(ROLLOVER_WIRES).toEqual(["rc.1", "rc.2", "0.2"]);
@@ -95,7 +95,7 @@ describe("generationsOf — resolution order: primary, other active (config orde
     expect(primaryOf([])).toBeUndefined();
     expect(generationsOf({}, 7)).toEqual([]);
   });
-  it("the bundled document resolves the way the design pins it", () => {
+  it("the bundled document resolves to the pinned generation order", () => {
     expect(generationsOf(BUNDLED_DEFAULTS, 42161).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
     expect(generationsOf(BUNDLED_DEFAULTS, 8453).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]);
     expect(generationsOf(BUNDLED_DEFAULTS, 1).map((g) => g.label)).toEqual(["mainnet"]);

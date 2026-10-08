@@ -1,4 +1,4 @@
-// WHICH COVER an RFQ buys (the 2026-10-01 cover-kind finding; cork-api 0.4.4 fixed-rate mode): the recipe in
+// WHICH COVER an RFQ buys (cork-api 0.4.4 fixed-rate mode): the recipe in
 // the inline template decides it; the venue's `modes` name what the requester accepts. rfq-open
 // returns `data.cover`, names a request that works against itself, and — with an RPC — carries
 // the recipe's OWN answer (`recipe.resolve`) instead of a local restatement of its rules.
@@ -6,10 +6,9 @@
 // Where the numbers come from:
 //   - the band goldens: `recipe.resolve` on the deployed ApySpreadImpairmentRecipe 0xd5e8…0Ed9
 //     (Base, 2026-10-01) — the bands asserted here are the ones those windows were built from;
-//   - the constraint shapes: the three pools the fork experiment created
-//     (experiments/fork-harness/script/cover-types-rehearsal.ts, block 52038242);
+//   - the constraint shapes: the three pools a Base fork rehearsal created (block 52038242);
 //   - the rate-rule vectors: the venue's OWN test vectors for `rate_override` (cork-api 0.4.4),
-//     each also sent to the real venue by fixed-rate-rfq-rehearsal.ts;
+//     each also sent to the real venue;
 //   - the chain: the eval stub, whose fixed recipe behaves as the live one was read to behave
 //     (payload checked first, then the oracle; rate .. rate + 1; Panic at uint256's maximum).
 import { describe, expect, it } from "vitest";
@@ -897,7 +896,7 @@ describe("cork_submit rfq-open — the chain's side of the reading (best-effort,
     }
   });
 
-  it("Zyfai's mistake, reproduced: a nav liquidity recipe under an impairment mode is relayed (an RFQ binds nobody) and named", async () => {
+  it("a nav liquidity recipe under an impairment mode is relayed (an RFQ binds nobody) and named", async () => {
     const example = TOOL_EXAMPLES.cork_submit!.find((e) => e.title.includes("IMPAIRMENT"))!;
     const input = JSON.parse(JSON.stringify(example.input)) as { action: Record<string, unknown> };
     input.action["marketTemplate"] = { inline: { oracle_recipe: NAV, oracle_params: liqBlock({ expiry: "1796256000" }) } };

@@ -31,7 +31,7 @@ export function rfqKindOf(rfq: Record<string, unknown>): RfqKind {
 
 /**
  * The venue's write gates that a read can predict, in the venue's own order (cork-api 0.4.5
- * src/modules/rfq/v2/routes/post-answer.ts / post-counter.ts): unknown RFQ (404 — an RFQ opened
+ * RFQ v2 answer / counter POST routes): unknown RFQ (404 — an RFQ opened
  * on /rfqs/v1 is not served on v2 either), another kind (409), expired (410), and for a counter
  * a sender other than the requester (403). Refused here so a write never burns its request_id
  * on an answer the venue can only refuse. An open has no target.
@@ -75,7 +75,7 @@ export type RfqSignatureCheck =
   | { ok: false; message: string; recovered: `0x${string}` | null };
 
 /**
- * Who signed this write, decided before relay [K3]: ecrecover over the typed-data digest first
+ * Who signed this write, decided before relay: ecrecover over the typed-data digest first
  * (chain-free), then — when it does not recover to the signer — the ERC-1271 isValidSignature
  * read a contract wallet answers, the same ladder maker orders use. A signature nobody could
  * check (a possible contract signer with no RPC, a transport failure) is relayed with a warning:
@@ -108,7 +108,7 @@ export async function checkRfqWriteSignature(ctx: HandlerContext, plan: RfqWrite
   }
 }
 
-/** The venue's RFQ v2 quoted-answer rule (cork-api 0.4.5 post-answer.schema.ts): every option
+/** The venue's RFQ v2 quoted-answer rule (cork-api 0.4.5 RFQ v2 answer schema): every option
  *  carries the 1inch `order` the underwriter stands behind, made by that underwriter, with its
  *  `order_signature` (the proof the venue checks when no API key is sent), and no two options
  *  carry the same order — mirrored, registered in MIRRORED_VENUE_LOGIC. Chain-free; checkQuotedOptions then re-hashes
@@ -147,7 +147,8 @@ export type QuotedOptionsCheck =
  * ecrecover → ERC-1271 ladder a fill runs), and each option's terms agreeing with its order
  * (quotedOptionTermsViolation). The venue rejects the first two with a 400 and the third with
  * a 401; the terms check is ours — the venue checks them only through the top-level
- * signature, from cork-api PR #113 onward (older 0.4.5 builds did not).
+ * signature, in builds carrying the full-answer proof fix (production cork-api 0.4.6 does;
+ * older 0.4.5 builds did not).
  */
 export async function checkQuotedOptions(ctx: HandlerContext, chainId: number, rfq: Record<string, unknown> | undefined, underwriter: string, options: ReadonlyArray<Record<string, unknown>>): Promise<QuotedOptionsCheck> {
   const refuse = (message: string): QuotedOptionsCheck => ({ ok: false, envelope: unavailable(chainId as ChainId, "invalid_order_terms", message, ctx) });
@@ -260,7 +261,7 @@ export type RfqWriteProof =
     }
   | { ok: false; message: string };
 
-/** A signature is checked against the exact body before relay [K3]; a key is the venue's to check. */
+/** A signature is checked against the exact body before relay; a key is the venue's to check. */
 export async function proveRfqWrite(ctx: HandlerContext, plan: RfqWritePlan, auth: RfqAuthChoice): Promise<RfqWriteProof> {
   if (auth.method === "apiKey") return { ok: true, how: "api-key", warnings: [], bodyExtra: {}, venueAuth: { apiKey: auth.key }, disclosure: auth.disclosure };
   const check = await checkRfqWriteSignature(ctx, plan, auth.signature);
@@ -268,7 +269,7 @@ export async function proveRfqWrite(ctx: HandlerContext, plan: RfqWritePlan, aut
   return { ok: true, how: check.how, warnings: check.warnings, bodyExtra: { signature: auth.signature }, venueAuth: undefined, disclosure: { method: "signature" } };
 }
 
-/** cork_prepare_orders rfq-write: the typed data a write is signed with [K1]. */
+/** cork_prepare_orders rfq-write: the typed data a write is signed with (prepared, never signed here). */
 export async function handleRfqWrite(input: PrepareOrdersInput, action: Extract<PrepareOrdersInput["action"], { type: "rfq-write" }>, ctx: HandlerContext): Promise<Envelope> {
   const chainId = input.chainId;
   const request = action.request as RfqWriteRequest;

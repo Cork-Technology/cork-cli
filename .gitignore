@@ -19,8 +19,6 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-experiments/fork-harness/cache/
-experiments/fork-harness/out/
 
 # Node / TypeScript (cork-cli monorepo)
 node_modules/
@@ -48,12 +46,8 @@ dist/
 *.bun-build
 evals/.*.jsonl
 
-# Slack-thread drafts are working files, never repo content (owner rule 2026-08-11)
-notes/*slack*
-# Telegram drafts are outward messages like the Slack ones: working files, never committed
-notes/*telegram*
 
-# local demo workspace from notes/demo-rundown-cork-defi-mcp-base.md (holds RPC URLs + demo addresses)
+# local demo workspace (may hold RPC URLs and demo addresses)
 cork-demo/
 
 # local credential env files (bun auto-loads these into `bun run eval` — a key here must never reach git)

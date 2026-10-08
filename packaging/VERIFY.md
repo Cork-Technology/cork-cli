@@ -99,18 +99,16 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
 - Runtime secrets (`CORK_MCP_TOKEN`, `CORK_MCP_DIAGNOSTICS_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
 
-## One-time setup this channel is blocked on (owner ops)
+## One-time setup the release channel requires
 
-Nothing has ever been released — the whole channel first lights up on a `vX.Y.Z-rc.N` rehearsal
-tag. Before that can happen the owner must:
+Each step below must be in place before a `vX.Y.Z-rc.N` tag can publish:
 
 1. Enable **immutable releases** on the GitHub repo.
 2. Enable **GitHub Pages** (deploy from branch `gh-pages`, root).
 3. Create the melange keypair: store `MELANGE_SIGNING_KEY` as a secret in the `release`
    environment (v*-tag deployment rule + required reviewers) + commit `packaging/melange.rsa.pub`.
-   DONE 2026-08-12 for the secret; the committed public half is still missing — without it,
-   the `publish` job cannot serve the key from the Pages root, and its candidate-path
-   keyring swap fails.
+   Without the committed public half, the `publish` job cannot serve the key from the Pages
+   root, and its candidate-path keyring swap fails.
    The pub-key tripwire in `melange-build` covers both states: while the file is missing, the
    first approved run prints the public half derived from the environment key (commit it
    verbatim); once committed, every release fails loudly if the environment key stops matching

@@ -1,6 +1,6 @@
 // Known-event decoding for cork_decode event/receipt: label a raw log (topics + data) against
 // the Cork protocol's verified ABI set and return NAMED args. Reconstructs from the bytes;
-// never trusts a caller-supplied parse [K3]. Coverage is exactly the declarations verified
+// never trusts a caller-supplied parse. Coverage is exactly the declarations verified
 // verbatim against the pinned sources (phoenix, rollover v0.1.0-rc.2, 1inch
 // limit-order-protocol, market-registry tag 2.1.0) — events whose INDEXED layout is
 // not source-verified (the LEGACY pre-2.1.0 JITMarketCreated, ERC-7683 Open) are labeled
@@ -12,7 +12,7 @@ type Hex = `0x${string}`;
 
 /** The pool manager's MarketCreated on the 8-field wire (v1.1 … v1.3.0-rc.1): SEVEN args. ONE
  *  declaration — the HyperSync scanner (datasources/hypersync.ts) and the receipt decoder below
- *  both parse this string (a second copy lived in the scanner until 2026-09-22, review D). */
+ *  both parse this string (a second copy lived in the scanner until 2026-09-22). */
 export const MARKET_CREATED_8_EVENT = "event MarketCreated(bytes32 indexed id, address indexed referenceAsset, address indexed collateralAsset, uint256 expiry, address rateOracle, address principalToken, address swapToken)";
 /** phoenix v1.4.0-rc.1 (10-field wire): the same seven plus the two fee percentages (1e18 = 1%)
  *  — a different topic0, so scanners keyed on the 8-field form see nothing on the new manager. */
@@ -96,7 +96,7 @@ export function decodeKnownLog(log: RawLogLike): DecodedLogRow {
   }
   // Full source-verified decode first; the name-only path below catches only selectors whose
   // indexed layout is NOT pinned (the legacy pre-2.1.0 JITMarketCreated) — label + raw bytes,
-  // never a guessed arg decode [K3-honest].
+  // never a guessed arg decode.
   for (const abi of [KNOWN_EVENTS_ABI, LOP_CANCELLED_FALLBACK_ABI]) {
     try {
       const d = decodeEventLog({ abi, topics: topics as [Hex, ...Hex[]], data });

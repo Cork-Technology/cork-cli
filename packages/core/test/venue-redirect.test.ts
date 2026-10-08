@@ -1,4 +1,4 @@
-// Redirect policy for venue HTTP (audit MCP-NET-004, 2026-08-24). The default `fetch` follows
+// Redirect policy for venue HTTP. The default `fetch` follows
 // redirects itself, so the first the caller hears of a hop is AFTER the body has been delivered
 // to wherever the redirect pointed — and a relay body is a caller-SIGNED order. These tests run
 // REAL loopback HTTP servers (no fetch stub): the redirect has to actually be issued, and the

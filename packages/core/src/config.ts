@@ -10,14 +10,14 @@ import type { PhoenixBlock } from "./generations.ts";
 /** A deployment IS a generation's phoenix block (generations.ts `PhoenixBlockSchema`): pool
  *  manager + constraint adapter + wire required; corkAdapter / bundler3 / whitelistManager /
  *  controller / contractsVersion optional. ONE type — the structurally-identical interface this
- *  aliased until 2026-09-22 needed `as CorkDeployment` casts wherever a block was handed out
- *  (review D). `chain/reads.ts` `CorkAddresses` is satisfied by it. */
+ *  aliased until 2026-09-22 needed `as CorkDeployment` casts wherever a block was handed out.
+ *  `chain/reads.ts` `CorkAddresses` is satisfied by it. */
 export type CorkDeployment = PhoenixBlock;
 
 // Addresses live in the canonical `cork-defaults.v2.json` at the repo root — the runtime fetches
 // the latest copy from GitHub (config-remote.ts) and this bundled copy is the distribution
 // fallback. Source files carry NO address literals. Provenance of the chain-1 values: verified
-// via Sourcify + CREATE2 (C10). (`cork-defaults.json`, schema 1, is frozen for the 0.5 line and
+// via Sourcify + CREATE2. (`cork-defaults.json`, schema 1, is frozen for the 0.5 line and
 // not read by this build.)
 import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
 
@@ -36,7 +36,7 @@ export const CREATE2_DEPLOYER = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as 
  * CREATE2 attestations: (deployer, salt, initCodeHash) → the deployed address. Verified
  * empirically: local keccak reproduces `expected` from these exact inputs (see create2 verify
  * test). Lets any caller independently re-derive the address instead of trusting a hardcoded
- * value [C10]. `deployer` defaults to the Safe Singleton Factory; the market-registry 0.3.2 set
+ * value. `deployer` defaults to the Safe Singleton Factory; the market-registry 0.3.2 set
  * was deployed by the AtomicDeployer in ONE guarded-CREATE2 batch — for those entries `salt` is
  * the EFFECTIVE CREATE2 salt keccak256(abi.encodePacked(guardSender, rawSalt)), and the guard
  * inputs are recorded so the derivation is reproducible from the deploy calldata alone.

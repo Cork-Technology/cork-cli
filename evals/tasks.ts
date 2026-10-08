@@ -48,7 +48,7 @@ export interface Expectation {
    *  `forbid`, and deliberately weaker than `params`: it asserts the step occurred, not how. */
   require?: string[];
   /** Tools that must NOT appear in the trace. The suite's spine is prepare != sign != submit
-   *  [K1]: a prompt that asks for BYTES is not satisfied by an agent that also relays them to
+   *: a prompt that asks for BYTES is not satisfied by an agent that also relays them to
    *  the venue — that is an unrequested, irreversible side effect, and every positive axis can
    *  pass while it happens. Graded as its own axis so the violation is legible in the log
    *  rather than buried inside `ok`. */
@@ -266,7 +266,7 @@ export const TASKS: EvalTask[] = [
     },
   },
   {
-    // Track's venue-miss chain sweep [K7]: the venue archived the digest's generation, but the
+    // Track's venue-miss chain sweep: the venue archived the digest's generation, but the
     // retired settler still holds it Settled — venue absence must not read as "not found".
     id: "reconcile-archived-digest",
     prompt: `Reconcile the Cork rollover order digest ${ARCHIVED_DIGEST} on Arbitrum (chain 42161). The venue may have archived it — I need the order's REAL lifecycle state, wherever it lives.`,
@@ -413,13 +413,13 @@ export const TASKS: EvalTask[] = [
       // The floor semantics reach the user in any register agents use for it.
       answer: /floor|worst case|lowest|decays? (down )?to|minimum (i|you)/i,
       // Bytes were requested, not a relay: calling the one side-effecting tool here would
-      // be an unrequested venue post [K1].
+      // be an unrequested venue post.
       forbid: ["cork_submit"],
       maxCalls: 3,
     },
   },
   {
-    // K1's other half: a signature the tool VERIFIES but never creates. The agent holds a
+    // A signature the tool VERIFIES but never creates. The agent holds a
     // prepared order plus an external signature and must finalize (not re-prepare, not submit
     // raw) — and the listing must carry the prepared nonce EXACTLY or relay would refuse.
     id: "finalize-signed-order",
@@ -430,10 +430,10 @@ export const TASKS: EvalTask[] = [
       params: { action: { type: "finalize-maker-order", listing: { side: "SELL", premiumAnnualized: "0.041", nonce: PREPARED_MAKER_ORDER.nonce } } },
       state: "ok",
       code: "caller_signed_artifact",
-      // The K1 fact must survive to the user: the tool recovered/verified, it did not sign.
+      // The signing boundary must survive to the user: the tool recovered/verified, it did not sign.
       answer: /(recover|verif|your (own )?(wallet|signature)|not (created|produced|signed) (by|here))/i,
       // Bytes were requested, not a relay: calling the one side-effecting tool here would
-      // be an unrequested venue post [K1].
+      // be an unrequested venue post.
       forbid: ["cork_submit"],
       maxCalls: 3,
     },
@@ -466,7 +466,7 @@ export const TASKS: EvalTask[] = [
       params: { action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH, signedOrder: { signature: SIGNED_LOP_PAYLOAD.signature } } },
       state: "ok",
       // Bytes were requested, not a relay: calling the one side-effecting tool here would
-      // be an unrequested venue post [K1].
+      // be an unrequested venue post.
       forbid: ["cork_submit"],
       maxCalls: 3,
     },
@@ -487,7 +487,7 @@ export const TASKS: EvalTask[] = [
       // The answer must report the dry-run verdict, not just that a bundle was built.
       answer: /would not revert|no revert|does not revert|succeed|safe to (sign|broadcast)|simulat/i,
       // Bytes were requested, not a relay: calling the one side-effecting tool here would
-      // be an unrequested venue post [K1].
+      // be an unrequested venue post.
       forbid: ["cork_submit"],
       maxCalls: 4,
     },
@@ -866,10 +866,10 @@ export const TASKS: EvalTask[] = [
   // wording a tuned description could be over-fitted to.
   { id: "ho-direction-twin", heldOut: true, prompt: `I want to reverse a Cork coverage payout on pool ${P}: put exactly 3000000000000000000 collateral back IN and receive cST plus reference asset. Receiver ${A}, no slippage floors, erc20-approve funding, request id "eval-dir-0001".`, expect: { tool: "cork_prepare_phoenix", params: { action: { type: "unwind-swap", collateralAssetsIn: "3000000000000000000" } }, state: "ok", clarify: /(chainId|chain\s*id|network)/i, maxCalls: 3 } },
   // A caller-claimed orderHash that is WRONG — the tool recomputes and refuses to endorse it
-  // [K3]. Grades whether a conflict verdict reaches the user instead of being smoothed over.
+  //. Grades whether a conflict verdict reaches the user instead of being smoothed over.
   // Two concepts, both required: the claim is REFUTED (mismatch / does not match / does not check
   // out / wrong / differs / false …) AND the answer points at the recomputed or actual hash. The
-  // spelling of "refuted" is the agent's; the two lookaheads grade the meaning (ruling 2026-09-23).
+  // spelling of "refuted" is the agent's; the two lookaheads grade the meaning.
     { id: "ho-claimed-hash-conflict", heldOut: true, prompt: `Decode this Cork limit order on chain 1 and confirm its order hash is 0x1111111111111111111111111111111111111111111111111111111111111111 as my counterparty claims: ${JSON.stringify({ ...SIGNED_LOP_PAYLOAD.order, orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111" })}`, expect: { tool: "cork_decode", params: { kind: "order" }, state: "conflict", code: "order_hash_mismatch", answer: /(?=[\s\S]*(mismatch|(?:not|n't) match|not the|wrong|differ|disagree|(?:not|n't) check out|false|incorrect|invalid|refut))(?=[\s\S]*(recomput|local|actual|computed|real))/i, maxCalls: 3 } },
   // The answer axis grades the CONCEPT — the pool does not exist — not one spelling of it. The
   // 0.6 message says the pool "is unknown to every pool manager asked"; agents paraphrase it as

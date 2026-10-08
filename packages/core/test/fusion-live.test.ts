@@ -2,8 +2,8 @@
 // the CURRENT Arbitrum block and require wei-exact agreement with the deployed settlement
 // getter's own answer over the same bytes (contract-as-oracle). Self-skips unless CORK_RPC_LIVE=1
 // (same convention as rpc-live.test.ts). Note: eth_call runs with block.basefee = 0 on public
-// nodes (empirical, experiments/fusion-spike/basefee-check.ts), so the local side prices with
-// baseFeeWei omitted — which is exactly the getter's environment.
+// nodes (empirical), so the local side prices with baseFeeWei omitted — which is exactly the
+// getter's environment.
 import { describe, expect, it } from "vitest";
 import { parseAbi, sliceHex } from "viem";
 import { resolveRpc, runTool } from "@cork/core";

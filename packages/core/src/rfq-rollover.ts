@@ -28,7 +28,7 @@ export function premiumTokenAllowed(spec: unknown, token: string): boolean {
   return Array.isArray(s.one_of) && s.one_of.some((t) => same(t, token));
 }
 
-/** The fields an RFQ open carries depend on its kind (venue post-rfq.schema.ts: the two kinds
+/** The fields an RFQ open carries depend on its kind (venue RFQ v2 open schema: the two kinds
  *  are separate strict schemas, so a field of the other kind is a 400). Returns the refusal
  *  text, or null. */
 export function rfqOpenKindFieldsViolation(a: {
@@ -57,7 +57,7 @@ export function rfqOpenKindFieldsViolation(a: {
   return null;
 }
 
-/** A counter is priced in its RFQ kind's own unit (venue post-counter.schema.ts): an annualized
+/** A counter is priced in its RFQ kind's own unit (venue RFQ v2 counter schema): an annualized
  *  fraction on new_position; a premium per share in one of the requester's premium tokens on
  *  rollover. Returns the refusal text, or null. */
 export function rfqCounterKindFieldsViolation(kind: "new_position" | "rollover", a: { premiumAnnualized?: unknown; premiumPerShare?: unknown; premiumToken?: unknown }): string | null {
@@ -105,7 +105,7 @@ export function rolloverJitMarketWire(jm: Record<string, unknown>): { ok: true; 
   return problem === null ? { ok: true, wire } : { ok: false, reason: problem };
 }
 
-/** The venue's JitMarketSchema, field for field (post-answer.schema.ts). */
+/** The venue's JitMarketSchema, field for field (RFQ v2 answer schema). */
 function jitMarketWireViolation(w: Record<string, unknown>): string | null {
   for (const k of ["collateralAsset", "referenceAsset", "recipe"] as const) {
     if (typeof w[k] !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(w[k] as string)) return `${k} must be an address`;
@@ -171,8 +171,8 @@ function requestViewOf(rfq: Record<string, unknown>): RolloverRequestView {
 }
 
 /**
- * The venue's chain-free rules for one rollover answer option (post-answer.schema.ts
- * RolloverAnswerOptionSchema + routes/post-answer.ts checkRolloverOptions): on the RFQ's chain,
+ * The venue's chain-free rules for one rollover answer option (RFQ v2 answer schema
+ * RolloverAnswerOptionSchema + answer POST route checkRolloverOptions): on the RFQ's chain,
  * paid in a token the requester accepts, for no more shares than it holds, into exactly one
  * destination that is not the source pool. Whether that destination pool exists and is live is
  * a chain question (handlers/rfq-rollover.ts). Takes the WIRE option. Returns the refusal, or null.
@@ -229,7 +229,7 @@ export type RolloverQuoteLookup =
   | { found: false; reason: string; unresolved: boolean };
 
 /** The cited option on a rollover RFQ record, with the venue's citation rules on the RFQ and
- *  answer (venue src/modules/rollover/v1/quote-ref.ts): a v2 rollover RFQ on this chain, an answer
+ *  answer (the venue's rollover v1 quote-ref rule): a v2 rollover RFQ on this chain, an answer
  *  on it that is a quote and holds the option. A TRUNCATED answers embed cannot prove an answer
  *  absent, so that miss is `unresolved` — the venue checks its full store. */
 export function findRolloverQuote(chainId: number, rfq: Record<string, unknown>, quoteRef: { answerId: string; optionId: string }): RolloverQuoteLookup {
@@ -249,8 +249,8 @@ export function findRolloverQuote(chainId: number, rfq: Record<string, unknown>,
 }
 
 /**
- * Whether a rollover order matches the quote it cites — the venue's quoteRefMismatch rule for
- * rule (src/modules/rollover/v1/quote-ref.ts), mirrored: the order's user is the RFQ's requester,
+ * Whether a rollover order matches the quote it cites — the venue's quoteRefMismatch rule
+ * (rollover v1 quote-ref), mirrored: the order's user is the RFQ's requester,
  * its source pool the RFQ's source, its destination the quoted one (an existing pool with a ZERO
  * jitMarketHash, or a just-in-time market whose hash equals the stored jit_market_hash), the
  * quoted premium token, a premium per share at least the quoted one, and no more shares than

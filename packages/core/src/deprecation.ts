@@ -1,4 +1,4 @@
-// General deprecation gate (owner ruling 2026-08-03): deprecated features/tools stay available
+// General deprecation gate (2026-08-03): deprecated features/tools stay available
 // behind an explicit opt-in — the CORK_ENABLE_DEPRECATED=1 environment variable (the CLI's
 // --enable-deprecated flag sets the same variable before dispatch) — and every use is labelled.
 // The warning-code contract, uniform across every deprecated surface:

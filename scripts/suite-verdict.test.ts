@@ -13,7 +13,7 @@ const results = (files: readonly string[], status = "passed"): VitestJsonReport[
 const rep = (o: Partial<VitestJsonReport>): VitestJsonReport => ({ numTotalTests: 0, numFailedTests: 0, numFailedTestSuites: 0, testResults: [], ...o, numPassedTests: o.numPassedTests ?? (o.numTotalTests ?? 0) - (o.numFailedTests ?? 0) });
 
 describe("suiteVerdict", () => {
-  it("RED: the 2026-10-07 run — one file of 106 reported, 100 tests green, exit 0 (run 37622917869)", () => {
+  it("RED: the 2026-10-07 run — one file of 106 reported, 100 tests green, exit 0", () => {
     const v = suiteVerdict(rep({ numTotalTests: 100, testResults: results([FILES[0]!]) }), 0, FILES);
     expect(v.ok).toBe(false);
     expect(v.reason).toContain("105 of 106 discovered test file(s) have NO result");

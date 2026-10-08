@@ -18,7 +18,7 @@ import type { MarketRegistryWire, ResolvedGeneration } from "../generations.ts";
 import { rolloverGenerations } from "../rollover.ts";
 import { envelope, firstLine, getDep, type HandlerContext, ToolInputError, ZERO_ADDR } from "./shared.ts";
 
-// ── cork_decode order/event/receipt: pure LOCAL reconstruction [K3] ──────────────────────────
+// ── cork_decode order/event/receipt: pure LOCAL reconstruction ──────────────────────────
 
 /** Best-effort Fusion label on decoded orders: the auction summary, or the legacy classification. */
 type FusionLabel =
@@ -40,7 +40,7 @@ export interface JitTrustTargets {
 
 /** The hook target's verdict: the extension's adapter IS a configured Cork JIT adapter
  *  (trusted — the generation label and wire ride along), or nothing is configured under that
- *  address (unverified). A shape is decoded either way [K3]; the verdict says how far to
+ *  address (unverified). A shape is decoded either way; the verdict says how far to
  *  believe its meaning. `mismatch` is reserved for a hook at an address that is configured in
  *  ANOTHER role — bytes claiming JIT semantics at a contract that is Cork's but not an adapter. */
 type JitVerification =
@@ -56,7 +56,7 @@ type JitLabel = JitVerification & (
       /** A preInteraction hook at an address NO generation configures as a JIT adapter: the
        *  verdict is reported (mismatch on a chain that has Cork adapters, unverified elsewhere)
        *  but the payload is NOT decoded — no wire is known for it, and a trial decode across
-       *  wires would present a plausible market that nobody signed (review A3, 2026-09-22). */
+       *  wires would present a plausible market that nobody signed. */
       generation: "unconfigured";
       wire: null;
       adapter: `0x${string}`;
@@ -99,7 +99,7 @@ type JitLabel = JitVerification & (
     }
 );
 
-/** The fee/override labels a decoded JIT payload carries (audit R1.3): the same C1 collision as
+/** The fee/override labels a decoded JIT payload carries: the same fee-vs-WAD collision as
  *  everywhere else — a carried fee at 1e18 = 1% is byte-identical to a WAD rate, and a signer
  *  reading the decode must not have to guess which family a raw value is in. */
 const JIT_FEE_SCALES = (wire: "flat" | "nested") => ({
@@ -120,7 +120,7 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
     // An unsafe-integer JSON number has ALREADY been rounded by the JSON parse before this code
     // runs — String() would launder a plausible-but-wrong value into the hash/price math with no
     // warning (observed: 123456789012345678901 → "123456789012345680000", state ok). The CLI's
-    // raw-text guard (F22) cannot protect MCP callers, whose frames are parsed by the SDK — so
+    // raw-text guard cannot protect MCP callers, whose frames are parsed by the SDK — so
     // the boundary must refuse here. Safe integers stay accepted: they are exact.
     if (typeof raw === "number" && !Number.isSafeInteger(raw)) {
       fail(key, `arrived as a JSON number outside JavaScript's safe-integer range — its low digits were ALREADY rounded away during JSON parsing and the original value cannot be recovered; resend it as a decimal STRING (all uint fields accept arbitrary-precision decimal strings)`);
@@ -148,7 +148,7 @@ export function parseOrderRecord(rec: Record<string, unknown>, tool: "cork_decod
 
 
 /** Best-effort labels for an order's extension bytes — what filling the order DOES beyond the
- *  plain swap. Decode only, never a guess [K3]: a non-Fusion / non-JIT / malformed extension
+ *  plain swap. Decode only, never a guess: a non-Fusion / non-JIT / malformed extension
  *  simply yields no label while the raw fields still decode. The two labels are NOT exclusive —
  *  a Cork-native auction order composes both (amount getters + JIT preInteraction in one blob)
  *  and a taker needs to see both commitments. Shared by kind:"order" and by the fill legs of
@@ -243,7 +243,7 @@ export function labelOrderExtension(order: LopOrder, extension: `0x${string}` | 
       // not. On a chain that configures JIT adapters, a preInteraction at some OTHER address is
       // bytes at a contract that is not Cork's — `mismatch`, naming the primary's adapter (the
       // one a genuine order would call); on a chain with no JIT generation at all there is
-      // nothing to compare against — `unverified`. No trial decode (review A3): a shape read
+      // nothing to compare against — `unverified`. No trial decode: a shape read
       // across wires could only present a plausible market for bytes nobody can vouch for.
       const primaryAdapter = jitTrust.adapters?.[0]?.address;
       const verdict: JitVerification = primaryAdapter !== undefined ? { verification: "mismatch", expectedAdapter: primaryAdapter } : { verification: "unverified" };
@@ -340,7 +340,7 @@ async function resolveDecodeTrust(ctx: HandlerContext, chainId: ChainId): Promis
   const corkAdapters = generations.flatMap((g) => (g.phoenix?.corkAdapter ? [{ address: g.phoenix.corkAdapter as `0x${string}`, label: g.label }] : []));
   // The REFERENCE ForSelf adapter of each generation (the Distribution record's forSelf block) is
   // Cork's own deployment and may be called trusted, labeled with its generation; an integrator's
-  // adapter is not in any config and stays unverified (the 2026-10-01 integration triage, item 2, 2026-10-01).
+  // adapter is not in any config and stays unverified.
   const forSelfAdapters = generations.flatMap((g) => (g.forSelf?.adapter ? [{ address: g.forSelf.adapter as `0x${string}`, label: g.label }] : []));
   // The registry and the creator are PER GENERATION like the adapters: cork_prepare_market
   // builds for any active generation, and its own bytes must decode as trusted.
@@ -397,7 +397,7 @@ function verificationWarnings(legs: DecodedLeg[], opts: { unverifiedHint?: strin
   // The outer multicall target is not a leg: raw Bundler3.multicall bytes name no contract of
   // their own, so when the caller claimed none, the address these bytes will be SENT to is
   // unverified even if every inner leg checked out — said in the same warning, first, so a
-  // warning-free result can never mean "the executor is verified" (audit DB-003, 2026-09-11).
+  // warning-free result can never mean "the executor is verified".
   const names = [...(opts.outerUnverified ? [opts.outerUnverified] : []), ...unverified.map((l) => `${describeTarget(l)} at ${l.to}`), ...jitUnverified];
   if (names.length) {
     warnings.push({ code: "target_unverified", message: `${names.length} labeled leg(s)/target(s) could not be checked against a configured contract: ${names.join("; ")}. ${opts.unverifiedHint ?? "The label describes the calldata's SHAPE only; confirm the target address yourself before signing"}` });
@@ -445,7 +445,7 @@ function outerEnvelopeOf(legs: DecodedLeg[] | undefined): OuterEnvelope | undefi
 
 /** decode kind:"order" — label a 1inch LOP v4 order (hex tuple or JSON fields): full makerTraits
  *  breakdown + locally recomputed orderHash; any caller-claimed hash is cross-checked, never
- *  trusted [K3]. */
+ *  trusted. */
 export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
   let order: LopOrder;
   let claimedOrderHash: `0x${string}` | undefined;
@@ -516,7 +516,7 @@ export async function handleDecodeOrder(input: DecodeInput, chainId: ChainId, ct
     }
     saltBinding = { saltBoundToExtension: true };
   }
-  // Cross-check a caller-claimed hash against the local reconstruction [K3].
+  // Cross-check a caller-claimed hash against the local reconstruction.
   if (claimedOrderHash !== undefined && orderHash !== null && claimedOrderHash.toLowerCase() !== orderHash.toLowerCase()) {
     return envelope({
       state: "conflict",
@@ -554,7 +554,7 @@ function asRawLog(rec: Record<string, unknown>, pathPrefix: string[]): RawLogLik
  *  Cork/rollover/LOP/ERC-20 ABI set; unknown or unverified layouts come back labeled raw. */
 export function handleDecodeEvent(input: DecodeInput, chainId: ChainId, ctx: HandlerContext): Envelope {
   if (typeof input.data === "string") {
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "event decode takes a log OBJECT {address?, topics: string[], data: hex} — raw topics+data are what gets decoded [K3]; for transaction bytes use kind 'calldata'" }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "event decode takes a log OBJECT {address?, topics: string[], data: hex} — raw topics+data are what gets decoded; for transaction bytes use kind 'calldata'" }]);
   }
   const row = decodeKnownLog(asRawLog(input.data, []));
   return envelope({ state: "ok", data: { kind: "event", ...row }, chainId, source: "config", ctx });
@@ -568,7 +568,7 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
   }
   const logsRaw = input.data.logs;
   if (!Array.isArray(logsRaw)) {
-    throw new ToolInputError("cork_decode", [{ path: ["data", "logs"], message: "expected logs: an array of log objects ({address?, topics[], data}) — the logs are what a receipt decode reconstructs from [K3]" }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data", "logs"], message: "expected logs: an array of log objects ({address?, topics[], data}) — the logs are what a receipt decode reconstructs from" }]);
   }
   const rows = logsRaw.map((l, i) => {
     if (!l || typeof l !== "object" || Array.isArray(l)) {
@@ -584,7 +584,7 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
     state: "ok",
     data: {
       kind: "receipt",
-      ...(status !== undefined ? { status, statusNote: "status/blockNumber/gasUsed are the receipt's own claims (echoed, not verifiable locally); the decoded logs below are reconstructed from their raw topics/data [K3]" } : {}),
+      ...(status !== undefined ? { status, statusNote: "status/blockNumber/gasUsed are the receipt's own claims (echoed, not verifiable locally); the decoded logs below are reconstructed from their raw topics/data" } : {}),
       ...(typeof input.data.transactionHash === "string" ? { transactionHash: input.data.transactionHash } : {}),
       logCount: rows.length,
       knownCount: known,
@@ -599,11 +599,11 @@ export function handleDecodeReceipt(input: DecodeInput, chainId: ChainId, ctx: H
 /** decode kind:"tx" — a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04): recover
  *  the signer from the signature, name the target against the chain's known Cork deployment
  *  addresses (warn plainly when unknown), and decode the inner calldata to the same labeled legs
- *  + summary as kind:"calldata". This is the validate-before-broadcast step [K3]: everything is
+ *  + summary as kind:"calldata". This is the validate-before-broadcast step: everything is
  *  reconstructed from the bytes; a supplied chainId that contradicts the tx's own is a conflict. */
 export async function handleDecodeTx(input: DecodeInput, ctx: HandlerContext): Promise<Envelope> {
   if (typeof input.data !== "string") {
-    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "tx decode takes the SIGNED raw transaction bytes as 0x hex (legacy RLP or typed envelope 0x01–0x04) — the parse is reconstructed from the bytes, never supplied [K3]" }]);
+    throw new ToolInputError("cork_decode", [{ path: ["data"], message: "tx decode takes the SIGNED raw transaction bytes as 0x hex (legacy RLP or typed envelope 0x01–0x04) — the parse is reconstructed from the bytes, never supplied" }]);
   }
   const raw = input.data as `0x${string}`;
   let parsed: ReturnType<typeof parseTransaction>;

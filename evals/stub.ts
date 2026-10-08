@@ -162,7 +162,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // the approval_missing tasks grade.
       return String(args.args?.[0]).toLowerCase() === RESTING_MAKER.address.toLowerCase() ? 10n ** 24n : 0n;
     case "bitInvalidatorForOrder":
-      return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight [K7]
+      return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight
     case "orderStatus":
       // The venue-miss sweep fixture: ONE digest the venue archived but the RETIRED July exact
       // settler still holds as Settled (enum 2); every other (settler, digest) answers None.
@@ -759,7 +759,7 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     const row = { rfq_id: RFQ_OPEN_ID, kind: "new_position", state: "open", received_at: 1789000000, version: 3, request };
     // GET /rfqs/v2/{rfq_id} — the single-record read. Without this the feed lists an RFQ that
     // then reads back as rfq_not_found, and an agent that verifies before it submits is told
-    // the work does not exist. That punishes the exact caution [K3] asks for, so serve it.
+    // the work does not exist. That punishes the exact caution asks for, so serve it.
     // Answers embed only when asked (with_answers, or the single-record read): one FIRM answer
     // (the resting row cites it) and one SOFT answer nobody backed — the offers view's two cases.
     const answers = [
@@ -881,7 +881,7 @@ export function stubContext(): HandlerContext {
 // duplicate-value rot class), then signed by a throwaway key that IS the order's maker. The
 // finalize handler ecrecovers it against its own reconstruction for real; the exported nonce is
 // the prepared result's own derived value (the listing must carry it exactly).
-/** The prepare AND finalize request id: finalization is the SAME request as its prepare [K2],
+/** The prepare AND finalize request id: finalization is the SAME request as its prepare,
  *  so the handler refuses a prepared context whose clientRequestId differs (prepared_context_
  *  mismatch). Exported so the task prompt cannot drift from the fixture it hands the agent. */
 export const FINALIZE_REQUEST_ID = "eval-fin-0001";
@@ -900,7 +900,7 @@ if (preparedEnv.state !== "ok") throw new Error(`finalize fixture: maker-order p
 /** The exact `data` object maker-order returned (finalize takes it verbatim; the wire schema
  *  strips the round-tripped extras itself). */
 export const PREPARED_MAKER_ORDER = preparedEnv.data as { orderHash: string; nonce: string };
-/** The maker's REAL signature over the prepared order hash — external to the tools [K1]. */
+/** The maker's REAL signature over the prepared order hash — external to the tools. */
 export const FINALIZE_SIGNATURE = await FINALIZE_MAKER.sign({ hash: PREPARED_MAKER_ORDER.orderHash as `0x${string}` });
 
 /** The same signature with ONE byte of `r` flipped: recovers to a stranger, never the maker. The

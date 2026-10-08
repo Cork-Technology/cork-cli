@@ -574,10 +574,7 @@ new-position modes are invalid input, while duplicate modes within the size limi
 domain refusal. Successful results may carry warnings and still exit 0; read the envelope
 state and warning evidence before proceeding. See the failure table above.
 
-This is preparation, not evidence of removal-notice compliance or human compatibility
-approval. Those decisions, independent review of the signing exposure, and private-release
-platform/signing prerequisites must be recorded before an actual cut. Publishing a release
-does not deploy the hosted MCP service.
+Publishing a release does not deploy the hosted MCP service.
 
 
 ### Reference: terminology

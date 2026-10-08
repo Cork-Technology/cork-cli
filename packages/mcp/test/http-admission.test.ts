@@ -1,4 +1,4 @@
-// HTTP ingress admission (audit MCP-NET-003, 2026-08-24). The deployed endpoint is public by
+// HTTP ingress admission. The deployed endpoint is public by
 // design, so "open" has to mean "bounded", not "unbounded": an ingress can count requests and
 // bytes, but only the application can see a 10,000-deep JSON body, a 5,000-message batch, or a
 // tool call waiting on a slow upstream. These tests drive the REAL fetch handler (and, for the
@@ -169,7 +169,7 @@ describe("the deadline cancels the request's own work", () => {
     expect(dispatchFinished).toBe(true); // the work ran to its own end; the caller simply did not wait for it
   });
 
-  it("ends the CALLER's wait at once (504) while the slot stays held until the admitted work settles (audit DB-001)", async () => {
+  it("ends the CALLER's wait at once (504) while the slot stays held until the admitted work settles", async () => {
     let fired: (() => void) | undefined;
     const controller = new AdmissionController(1_000, (onDeadline) => {
       fired = onDeadline;
@@ -255,7 +255,7 @@ describe("principalOf: a principal must not be mintable by the caller", () => {
 // A real listening socket is exercised by http-e2e.test.ts, which spawns the actual `ch mcp
 // --http` process — vitest's workers run under Node, where Bun.serve does not exist.
 
-describe("trustForwardedFor is EXPLICIT (audit DB-002): a non-loopback bind alone never trusts the header", () => {
+describe("trustForwardedFor is EXPLICIT: a non-loopback bind alone never trusts the header", () => {
   // Real requests through the REAL handler whose admitted WORK blocks: a cork_query orderbook
   // call whose venue fetch never resolves holds its admission slot open, so a saturation from ONE
   // socket peer carrying DIFFERENT X-Forwarded-For hops shows which principal the handler
@@ -294,7 +294,7 @@ describe("trustForwardedFor is EXPLICIT (audit DB-002): a non-loopback bind alon
   });
 
   it("/readyz discloses the trust posture to the OPERATOR (full view, by bearer) so they can see which way the deployment counts clients", async () => {
-    // The posture is part of the full view (cork-cli-private#6): a caller with no bearer learns
+    // The posture is part of the full view: a caller with no bearer learns
     // only the degraded flags, never how clients are keyed.
     const authed = new Request("http://mcp.test/readyz", { headers: { authorization: "Bearer diag" } });
     const off = await createHttpHandler({ host: "0.0.0.0", diagnosticsToken: "diag" })(authed);

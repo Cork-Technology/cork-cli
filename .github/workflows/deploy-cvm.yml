@@ -2,7 +2,7 @@
 # MCP machine.
 #
 # Called by release.yml AFTER the GitHub Release is published. The hosted deployment is an
-# EXCLUDED channel of a release (the Release body says so, policy G18): the Release's claims
+# EXCLUDED channel of a release (as stated in the Release body): the Release's claims
 # cover the binaries, the SDK tarballs, the image and the apk channel, and all of those exist
 # before the Release is public. So this job comes last, and its failure leaves a complete,
 # published release — re-run THIS job alone to retry. (Until 2026-10-02 it was the last job

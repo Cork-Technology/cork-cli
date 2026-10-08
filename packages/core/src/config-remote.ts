@@ -1,4 +1,4 @@
-// Remote-first config sourcing [R6/§8]: deployment addresses are fetched from this repo's
+// Remote-first config sourcing: deployment addresses are fetched from this repo's
 // canonical GitHub `cork-defaults.v2.json` (TTL-cached in memory + on disk), with the committed
 // copy bundled in the distribution as the fallback. Never bare hardcodes: the single source of
 // truth is the JSON file, remote copy preferred, and every result can say which one served it.
@@ -56,7 +56,7 @@ export function releaseLineOf(version: string): string | undefined {
   return m ? `${m[1]}.${m[2]}` : undefined;
 }
 
-/** The defaults file a binary reads (policy R5c): `cork-defaults.v2.json` on ITS LINE'S CONFIG
+/** The defaults file a binary reads: `cork-defaults.v2.json` on ITS LINE'S CONFIG
  *  BRANCH, `config/<major>.<minor>`. The branch holds only that file, so its history is the
  *  address change log of the line. It is the escape hatch: a compatible address change pushed
  *  there reaches every binary of the line without an upgrade, while the release tag stays
@@ -204,7 +204,7 @@ export type RemoteFetchResult = { kind: "ok"; data: unknown } | { kind: "absent"
 
 /** On-disk cache entry: a successful fetch (`defaults`) or a recent negative outcome (`failure`).
  *  `failedAt` marks a refresh attempt that failed TRANSIENTLY while good `defaults` were already
- *  stored — the good copy is kept (never overwritten by a failure marker, F16) and served stale
+ *  stored — the good copy is kept (never overwritten by a failure marker) and served stale
  *  until the failure back-off elapses. */
 export interface StoredCache {
   fetchedAt: number;
@@ -218,7 +218,7 @@ export interface ConfigDeps {
   fetchRemote: () => Promise<RemoteFetchResult>;
   /** The local override layer (config-override.ts). Omitted = the real file search; tests inject
    *  a fixed document. `CORK_CONFIG_NO_OVERRIDE=1` disables the file search (the hermetic suite sets
-   *  it: the private tree carries its own config.json at the repo root). */
+   *  it: a source checkout may carry its own config.json at the repo root). */
   loadOverride?: () => LoadedOverride;
   loadCache: () => StoredCache | null;
   saveCache: (entry: StoredCache) => void;
@@ -326,7 +326,7 @@ export function applyOverride(layer: DefaultLayer, loaded: LoadedOverride): Reso
     // the effective document, and the override schema refuses the key; the merge below carries
     // the default layer's block through untouched either way.
     const { merged, summary } = mergeConfig(layer.defaults, loaded.override);
-    // A file that changes nothing (the private tree's empty placeholder) is disclosed in
+    // A file that changes nothing (an empty placeholder) is disclosed in
     // provenance but does not warn: the warning marks results a local file actually shaped.
     const effective = summary.sets.length + summary.primaryMoved.length + summary.filtered.length + summary.chainEntries.length > 0;
     return { ...layer, defaults: merged, override: { path: loaded.path, ...summary }, warnings: effective ? [...warnings, { code: "config_override_active", message: describeOverride(loaded.path, summary) }] : warnings };
@@ -359,7 +359,7 @@ export async function resolveConfig(deps: ConfigDeps = realConfigDeps()): Promis
 
   const cached = deps.loadCache();
   // Parse any stored GOOD defaults up front: they are the fallback of record for transient
-  // refresh failures (F16 — a 10-minute network blip must never roll addresses back to the
+  // refresh failures (a 10-minute network blip must never roll addresses back to the
   // bundled copy when a fresher fetched copy is on disk).
   let staleGood: CorkDefaults | null = null;
   if (cached?.defaults !== undefined) {

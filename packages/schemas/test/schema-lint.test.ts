@@ -1,11 +1,11 @@
-// Schema lint (footgun class-elimination item 7): the dialect taxonomy as CI.
+// Schema lint: the dialect taxonomy as CI.
 //
 // Every numeric leaf on the tool input surface must be EXPLICITLY allowlisted with a reason.
 // The default for any field carrying money/time/rate semantics is a protected string primitive
 // (UnixSeconds/TokenAmount/UintStr/Uint64Str) — those primitives carry the unit teaching, the
 // uint bounds, and the milliseconds detector, so every new field that uses them starts life
 // protected. A bare z.number() bypasses all of that (floats, silent JSON precision loss ≥ 2^53,
-// no unit teaching), which is exactly how the F1/F2/F5/F6/F22 class was born one field at a time.
+// no unit teaching), which is exactly how a whole class of unit bugs is born one field at a time.
 //
 // If this test fails on a NEW field: prefer the protected primitives; only extend the allowlist
 // for genuinely small/bounded numerics (enum-like modes, page sizes, bounded relative durations,

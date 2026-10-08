@@ -1,4 +1,4 @@
-# Publish cork-defaults.v2.json to the line's config branch (policy R5c, 2026-09-25).
+# Publish cork-defaults.v2.json to the line's config branch.
 #
 # A released binary fetches `cork-defaults.v2.json` from `config/<major>.<minor>` — a branch that
 # holds ONLY that file, so its history is the address change log for every binary of the line.
@@ -84,7 +84,7 @@ jobs:
             lost=$(jq -r --slurpfile new cork-defaults.v2.json '
               .generations | to_entries[] | .key as $c | .value.sets | keys[] as $k | select(($new[0].generations[$c].sets // {}) | has($k) | not) | "\($c)/\($k)"' current.json)
             if [ -n "$lost" ]; then
-              echo "::error::config/${{ steps.line.outputs.line }} would lose set key(s) a released binary resolves against: $(echo "$lost" | tr '\n' ' ') — a key change is a new minor (policy R5c)"; exit 1
+              echo "::error::config/${{ steps.line.outputs.line }} would lose set key(s) a released binary resolves against: $(echo "$lost" | tr '\n' ' ') — a key change is a new minor"; exit 1
             fi
           else
             echo "branch ${BRANCH} is confirmed absent — it is created"
@@ -103,7 +103,7 @@ jobs:
         run: |
           set -e
           headline="config/${{ steps.line.outputs.line }}: cork-defaults.v2.json from ${SRC} ($(git rev-parse --short HEAD))"
-          body="Published by the config-branch workflow (run ${GITHUB_RUN_ID}). This branch holds only cork-defaults.v2.json; every ${{ steps.line.outputs.line }}.x binary from 0.6.1 on reads it. Policy R5c."
+          body="Published by the config-branch workflow (run ${GITHUB_RUN_ID}). This branch holds only cork-defaults.v2.json; every ${{ steps.line.outputs.line }}.x binary from 0.6.1 on reads it."
           msg="$(printf '%s\n\n%s' "$headline" "$body")"
           if [ "$EXISTS" = "true" ]; then
             # An existing branch: the REST contents update, conditioned on the blob the check step

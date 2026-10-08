@@ -1,7 +1,7 @@
 // Layer-A eval gate: the advertised tool surface (names, descriptions incl. inline examples,
 // FULL input/output schemas, annotations) is snapshotted to a committed fixture. Any diff fails
 // CI until the fixture is regenerated deliberately. The gate is TIERED mechanically
-// (surface-tier.ts, owner-approved 2026-08-11): a sentence-preserving rewording of existing
+// (surface-tier.ts, 2026-08-11): a sentence-preserving rewording of existing
 // description strings is prose tier (regenerate, no eval); anything structural — keys, names,
 // types, enums, x-units, sentence counts — is semantic tier (run Layer B, then regenerate).
 // Schemas are stored as FULL JSON, not hashes (since 2026-08-11): a hash flip is detectable but

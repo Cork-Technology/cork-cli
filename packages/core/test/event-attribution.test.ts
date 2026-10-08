@@ -1,4 +1,4 @@
-// Emitter-authenticated event attribution (audit STATE-007).
+// Emitter-authenticated event attribution.
 //
 // A topic0 names an ABI shape, not a contract. Before this module, cork_track labeled receipt
 // and history logs by topic alone — so ANY contract in the transaction that emitted
@@ -47,14 +47,14 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
     expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
     // The July settlers: their ROLLOVER block is retired (venue-inadmissible, `retired` date), while
-    // the chain generation arbitrum-v1.1 they belong to is ACTIVE — two facts, two fields (review B4).
+    // the chain generation arbitrum-v1.1 they belong to is ACTIVE — two facts, two fields.
     expect(byAddress[RETIRED_EXACT.toLowerCase()]).toMatchObject({ role: "exactSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" });
     expect(byAddress[RETIRED_PARTIAL.toLowerCase()]).toMatchObject({ role: "partialSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" });
     expect(byAddress[ACTIVE_EXACT.toLowerCase()]).not.toHaveProperty("retired");
     expect(byAddress[JIT_ADAPTER.toLowerCase()]).toEqual({ address: JIT_ADAPTER, role: "jitAdapter", generation: { label: "phoenix/v0.3-rc.1", status: "active" }, wire: "flat" });
     expect(byAddress[NESTED_JIT_ADAPTER.toLowerCase()]).toEqual({ address: NESTED_JIT_ADAPTER, role: "jitAdapter", generation: { label: "phoenix/v0.4-rc.1", status: "active" }, wire: "nested" });
     // The pre-2.1.0 adapter is a `jitAdapter` of an ACTIVE generation on the `legacy` wire — the
-    // signature difference is a wire fact, gated at attribution, not a role of its own (review B4).
+    // signature difference is a wire fact, gated at attribution, not a role of its own.
     expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toEqual({ address: LEGACY_JIT_ADAPTER, role: "jitAdapter", generation: { label: "arbitrum-v1.1", status: "active" }, wire: "legacy" });
     // The nested wire's creation emitters: the 0.5.0 creator and the 10-field pool manager of
     // phoenix/v0.4-rc.1 — and ONLY that generation's (a periphery creator / 8-field manager never
@@ -153,7 +153,7 @@ describe("attributeLogs — evidence only from the configured emitter for that e
     );
     expect(a.corkEvents).toEqual([]);
     expect(a.unattributedEvents).toEqual([]);
-    // chain integers ride as decimal strings (F10), from either source shape
+    // chain integers ride as decimal strings, from either source shape
     expect(a.otherLogs).toEqual([
       { address: ACTIVE_EXACT, txHash: TX_HASH, blockNumber: "494104800", logIndex: "3", topics: [UNKNOWN_TOPIC, DIGEST], data: "0xcafebabe" },
       { address: ATTACKER, topics: [], data: "0x" },

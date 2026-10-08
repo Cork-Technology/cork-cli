@@ -48,7 +48,7 @@ describe("per-resource filter applicability", () => {
   });
 });
 
-describe("variant-scoped applicability (audit DB-006): a key the READ SHAPE never applies is refused", () => {
+describe("variant-scoped applicability: a key the READ SHAPE never applies is refused", () => {
   const issueOf = async (resource: string, filters: Record<string, unknown>) => {
     const err = await q(resource, filters).catch((e: ToolInputError) => e);
     expect(err).toBeInstanceOf(ToolInputError);

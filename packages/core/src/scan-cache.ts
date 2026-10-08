@@ -64,7 +64,7 @@ function loadFile(): ScanCacheFile {
  *  2 (0.6, 2026-09-22): MarketCreated rows gained `wire` / `generation` / the 10-field fees and the
  *  scan asks for both MarketCreated topics; every 0.5.x entry (schema 1, 7-arg only) is ignored —
  *  and DROPPED at load (`loadFile`), so a stale cursor's ≤20k decoded rows do not sit in the file
- *  forever (review C6). */
+ *  forever. */
 export const SCAN_CACHE_SCHEMA = 2;
 
 /** Stable identity for one scan: the row-shape schema plus the spec fields that define WHAT is

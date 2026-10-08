@@ -1,4 +1,4 @@
-// rollover-intent HOOKS (2026-10-01, the 2026-10-01 integration triage, item 4, found by the fork rehearsal): a
+// rollover-intent HOOKS (2026-10-01, found by a fork rehearsal): a
 // roll order's intent must carry the pre-hook that pulls the holder's src cPT into the clone and
 // the post-hook that returns the minted dst cPT, and both are hashed into the signed commitment.
 // The builder never carried hooks, so no order it built could complete on chain. `standardHooks`
@@ -32,7 +32,7 @@ describe("standardRolloverHooks — the two canonical modules, encoded from thei
     const post = h.postRolloverHooks[0]!;
     expect(post).toMatchObject({ target: MODULES.postRolloverDstCptTransfer, value: 0n, allowFailure: false, isDelegateCall: true });
     expect(decodeFunctionData({ abi: postRolloverDstCptTransferModuleAbi, data: post.callData })).toEqual({ functionName: "execute", args: [DST_CPT, HOLDER] });
-    // The live intents on Base (underwriter-one, 2026-09-30) use exactly these selectors.
+    // The live intents on Base (2026-09-30) use exactly these selectors.
     expect(pre.callData.slice(0, 10)).toBe("0x7ea72f84");
     expect(post.callData.slice(0, 10)).toBe("0xd80aea15");
   });

@@ -1,8 +1,8 @@
 // Fusion dutch-auction pricing: offline, but every golden number here is CHAIN-VERIFIED — the
 // synthetic vectors were proven wei-exact against the DEPLOYED settlement getters on mainnet AND
-// Arbitrum via eth_call (experiments/fusion-spike/probe.ts, 2026-07-28), and the fixture order is
-// a REAL production fill captured from Arbitrum calldata whose price the live getter reproduced
-// wei-exactly (validate-real-order.ts). If these constants ever need "fixing", suspect the port.
+// Arbitrum via eth_call (2026-07-28), and the fixture order is a REAL production fill captured
+// from Arbitrum calldata whose price the live getter reproduced wei-exactly. If these constants
+// ever need "fixing", suspect the port.
 import { describe, expect, it } from "vitest";
 import {
   buildAuctionAmountData,
@@ -102,7 +102,7 @@ describe("fusion pricing math — chain-verified goldens (probe.ts, 2026-07-28, 
   });
 });
 
-describe("fusion extension decode [K3]", () => {
+describe("fusion extension decode", () => {
   it("decodeExtensionFields splits the example extension into its fields", () => {
     const f = decodeExtensionFields(EXAMPLE_EXT);
     expect(f.makingAmountData.toLowerCase()).toBe(f.takingAmountData.toLowerCase());
@@ -154,7 +154,7 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     expect(d.at.source).toContain("pinned");
     expect(d.fillability.gated).toBe(false);
     expect(d.scales.rateBump).toContain("1e7");
-    // Audit R1.4: the three previously-unlabeled Fusion bases. Each label must state ITS base
+    // The three previously-unlabeled Fusion bases. Each label must state ITS base
     // and not a neighbor's — these uint8/uint16/uint32 fields are shape-indistinguishable.
     expect(d.scales.gasBumpEstimate).toContain("1e7");
     expect(d.scales.gasPriceEstimate).toContain("1000 = 1 gwei");
@@ -213,7 +213,7 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     const salt = ((1n << 200n) | (BigInt(keccak256(unknownSettlement)) & ((1n << 160n) - 1n))).toString();
     // An unrecognized getter is no longer priced as if it were the v3.1 one: the tail bytes are
     // caller-controlled data, not proof of what the contract charges. The classification is
-    // reported so a caller can act on it (audit ARTIFACT-FUSION-003).
+    // reported so a caller can act on it.
     const env = await runTool("cork_compute", { params: { kind: "dutch-auction-price", order: { ...EXAMPLE_ORDER, salt, extension: unknownSettlement } }, at: { timestamp: NOW.toString() } }, { nowSeconds: NOW });
     expect(env.state).toBe("unavailable");
     expect(env.warnings.some((w) => w.code === "settler_not_recognized")).toBe(true);
@@ -245,12 +245,12 @@ describe("runTool: cork_compute dutch-auction-price", () => {
     expect(f?.classification).toBe("current");
     expect(f?.postInteractionGated).toBe(true);
     expect(f?.auction.points).toBe(1);
-    // Audit R1.3 (fusion half): the raw initialRateBump is base-1e7 — labeled on the label.
+    // Fusion half: the raw initialRateBump is base-1e7 — labeled on the label.
     expect(f?.scales.initialRateBump).toContain("1e7");
   });
 });
 
-// ── F2: the BUILD side (Cork-native decaying-premium orders) ─────────────────────────────────
+// ── the BUILD side (Cork-native decaying-premium orders) ─────────────────────────────────
 
 describe("encodeAuctionGetterData: exact inverse of the parser", () => {
   it("round-trips the pinned probe auction (points included) with a ZEROED fee section", () => {

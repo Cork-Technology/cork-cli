@@ -1,11 +1,11 @@
-// Smart-account ENVELOPE unwrapping in cork_decode (2026-10-01, the 2026-10-01 integration triage + the owner's
-// ask): a contract wallet's transaction wraps the call it means — a Safe execTransaction, an
+// Smart-account ENVELOPE unwrapping in cork_decode (2026-10-01): a contract wallet's
+// transaction wraps the call it means — a Safe execTransaction, an
 // ERC-4337 handleOps bundle, an ERC-7579 execute, a Rhinestone intent, a MultiSend batch, often
 // nested — and before this the decoder called the whole thing an unknown target and read nothing.
 //
 // Real bytes throughout: every envelope is encoded with the contracts' own pinned ABIs, the inner
-// legs are real Cork/ERC-20/ForSelf calls, and one case replays the live Zyfai fill captured from
-// Base (`fixtures/zyfai-rhinestone-fill-base.json`) through both decode kinds.
+// legs are real Cork/ERC-20/ForSelf calls, and one case replays a live integrator fill captured
+// from Base (`fixtures/zyfai-rhinestone-fill-base.json`) through both decode kinds.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeFunctionData, encodePacked, getAddress, parseAbi, toFunctionSelector, type Hex } from "viem";
@@ -236,7 +236,7 @@ describe("cork_decode through envelopes — the inner Cork legs are verified lik
   });
 });
 
-describe("the reference ForSelf adapter of a generation is Cork's own deployment (the 2026-10-01 integration triage, item 2)", () => {
+describe("the reference ForSelf adapter of a generation is Cork's own deployment", () => {
   it("a ForSelf call at a generation's reference adapter is trusted and labeled with the generation; an integrator's adapter stays unverified", async () => {
     const ref = await runTool("cork_decode", { kind: "calldata", chainId: 8453, data: exerciseForSelf, to: BASE_PRIMARY_FORSELF }, ctx);
     expect(ref.state).toBe("ok");
@@ -270,17 +270,17 @@ describe("the reference ForSelf adapter of a generation is Cork's own deployment
   });
 });
 
-describe("the live Zyfai fill (Base, 2026-09-30) — Rhinestone intent around approve + fillOrderForSelf", () => {
+describe("a live integrator fill (Base, 2026-09-30) — Rhinestone intent around approve + fillOrderForSelf", () => {
   const raw = JSON.parse(readFileSync(new URL("./fixtures/zyfai-rhinestone-fill-base.json", import.meta.url), "utf8")) as { chainId: number; to: `0x${string}`; input: Hex; account: `0x${string}`; forSelfAdapter: `0x${string}` };
   const fx = { ...raw, to: getAddress(raw.to), account: getAddress(raw.account), forSelfAdapter: getAddress(raw.forSelfAdapter) };
 
-  it("kind:calldata with the IntentExecutor as `to`: the envelope is the trusted singleton, the account is Zyfai's Safe, the inner legs are the approve and the ForSelf fill", async () => {
+  it("kind:calldata with the IntentExecutor as `to`: the envelope is the trusted singleton, the account is the integrator's Safe, the inner legs are the approve and the ForSelf fill", async () => {
     const env = await runTool("cork_decode", { kind: "calldata", chainId: fx.chainId, data: fx.input, to: fx.to }, ctx);
     expect(env.state).toBe("ok");
     const d = env.data as { legs: Leg[]; summary: string[] };
     const outer = d.legs[0]!;
     expect(outer).toMatchObject({ kind: "envelope", scheme: "rhinestone-intent-executor", version: "executeSinglechainOps:erc7579", to: fx.to, verification: "trusted", account: fx.account });
-    // Inside the intent: ONE execution, to Zyfai's own ERC-7579 executor module (GuardedExecModuleUpgradeable
+    // Inside the intent: ONE execution, to the integrator's own ERC-7579 executor module (GuardedExecModuleUpgradeable
     // 2.2.0, integrator-deployed → unverified), whose batch is the approve and the ForSelf fill.
     expect(outer.legs).toHaveLength(1);
     const module = outer.legs![0]!;

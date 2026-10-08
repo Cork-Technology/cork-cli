@@ -1,6 +1,5 @@
-// RFQ v2 write signing, held byte for byte to the venue's published vectors
-// (cork-indexing-api 0.4.5, docs/rfq-v2-signing.md "Worked example", pinned there by
-// test/rfq-v2-signing.test.ts). A drift here means every signed RFQ write is refused with 401.
+// RFQ v2 write signing, held byte for byte to the venue's published vectors (cork-api 0.4.5
+// worked example). A drift here means every signed RFQ write is refused with 401.
 // Also pins the rollover JIT-market commitment the venue serves as `jit_market_hash`.
 import { describe, expect, it } from "vitest";
 import { concat, encodeAbiParameters, hashTypedData, keccak256, recoverTypedDataAddress, sha256, stringToBytes, toHex, type Hex } from "viem";
@@ -13,7 +12,7 @@ const ANVIL_0_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf
 const ANVIL_0_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
-describe("fixed new_position open vector (docs/rfq-v2-signing.md)", () => {
+describe("fixed new_position open vector (the venue's published worked example)", () => {
   const body = {
     schema_version: "2",
     kind: "new_position",
@@ -72,7 +71,7 @@ describe("fixed new_position open vector (docs/rfq-v2-signing.md)", () => {
   });
 });
 
-describe("fixed rollover open vector (docs/rfq-v2-signing.md)", () => {
+describe("fixed rollover open vector (the venue's published worked example)", () => {
   const body = {
     schema_version: "2",
     kind: "rollover",
@@ -128,8 +127,8 @@ describe("answer bodies drop every order_signature, keep the order", () => {
   });
 });
 
-// The venue's own vector (cork-indexing-api test/jit-market-hash.test.ts, computed there with
-// Foundry): its `jit_market_hash` is BaseFiller 0.2's commitment — our `0.2` wire, not rc.2.
+// The venue's own vector (computed with Foundry): its `jit_market_hash` is BaseFiller 0.2's
+// commitment — our `0.2` wire, not rc.2.
 describe("venue jit_market_hash = our 0.2 rollover wire", () => {
   const sample = {
     collateralAsset: USDC_BASE,

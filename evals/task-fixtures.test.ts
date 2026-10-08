@@ -126,7 +126,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     expect((env.data as { accepted: boolean }).accepted).toBe(true);
   });
 
-  it("reconcile-archived-digest: venue miss, but the retired settler's live state reconstructs Settled [K7]", async () => {
+  it("reconcile-archived-digest: venue miss, but the retired settler's live state reconstructs Settled", async () => {
     const env = await runTool("cork_track", { mode: "reconcile", chainId: 42161, subject: { kind: "orderHash", orderHash: ARCHIVED_DIGEST } }, stubContext());
     expect(env.state).toBe("ok");
     expect(env.provenance.source).toBe("chain");
@@ -250,13 +250,13 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     expect(expectedBump).toBe("500000");
   });
 
-  it("finalize-signed-order: the REAL external signature verifies and the artifact is caller-signed [K1]", async () => {
+  it("finalize-signed-order: the REAL external signature verifies and the artifact is caller-signed", async () => {
     const env = await runTool(
       "cork_prepare_orders",
       {
         chainId: 1,
         account: DEMO_ACCOUNT,
-        // Finalization is the SAME request as its prepare [K2] — a different id is refused
+        // Finalization is the SAME request as its prepare — a different id is refused
         // prepared_context_mismatch, so the fixture and the task prompt share ONE constant.
         clientRequestId: FINALIZE_REQUEST_ID,
         action: { type: "finalize-maker-order", prepared: PREPARED_MAKER_ORDER, signature: FINALIZE_SIGNATURE, listing: { side: "SELL", premiumAnnualized: "0.041", expiry: 0, nonce: PREPARED_MAKER_ORDER.nonce, allowsPartialFills: true } },
@@ -316,7 +316,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     // The note is what the task's answer regex grades the agent for relaying.
     expect((env.data as { note?: string }).note ?? "").toMatch(/off-chain|venue-claimed/i);
     // The stub mirrors the venue's SERVER-SIDE state filter: a non-open state answers empty,
-    // never the unfiltered row (the parameter-ignored green no-op, class C13).
+    // never the unfiltered row (the parameter-ignored green no-op).
     const closed = await runTool("cork_query", { resource: "rfqs", chainId: 42161, filters: { state: "expired" } }, stubContext());
     expect((closed.data as { count: number }).count).toBe(0);
   });
@@ -333,7 +333,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     expect(TASKS.find((t) => t.id === "warnings-topic")!.expect.answer!.test(JSON.stringify(env.data))).toBe(true);
   });
 
-  it("ho-claimed-hash-conflict [held-out]: a wrong caller-claimed orderHash is refused, not endorsed [K3]", async () => {
+  it("ho-claimed-hash-conflict [held-out]: a wrong caller-claimed orderHash is refused, not endorsed", async () => {
     const env = await runTool("cork_decode", { chainId: 1, kind: "order", data: { ...SIGNED_LOP_PAYLOAD.order, orderHash: `0x${"11".repeat(32)}` } }, stubContext());
     expect(env.state).toBe("conflict");
     expect(env.warnings.some((w) => w.code === "order_hash_mismatch")).toBe(true);

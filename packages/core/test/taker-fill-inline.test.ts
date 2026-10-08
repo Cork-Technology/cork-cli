@@ -2,9 +2,9 @@
 // order (finalize-maker-order's submitInput carries the exact shape), so the venue must not be
 // contacted at all — every inline test here proves that with a venueFetch that THROWS on any
 // call. The verification bar mirrors the venue path and adds the checks the venue used to do
-// at post time: local re-hash against the claimed orderHash [K3], the salt↔extension binding
+// at post time: local re-hash against the claimed orderHash, the salt↔extension binding
 // OrderLib enforces at fill, and the maker signature verified the way the fill verifies it
-// (EOA ecrecover / the ERC-1271 isValidSignature staticcall). The shared tail (liveness [K7],
+// (EOA ecrecover / the ERC-1271 isValidSignature staticcall). The shared tail (liveness,
 // auction, JIT, forSelf) is the same code object for both paths — the parity test pins that.
 import { describe, expect, it } from "vitest";
 import { keccak256, zeroAddress } from "viem";
@@ -196,7 +196,7 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     expect(env.warnings[0]?.code).toBe("invalid_order_terms");
   });
 
-  it("still runs the on-chain liveness pre-flight [K7]: a dead order yields no bytes", async () => {
+  it("still runs the on-chain liveness pre-flight: a dead order yields no bytes", async () => {
     const { order, orderHash, signature } = await signedInline();
     const deadChain = stubRpc((c) => {
       if (c.functionName === "bitInvalidatorForOrder") return (1n << 42n) | 1n; // every low slot bit spent

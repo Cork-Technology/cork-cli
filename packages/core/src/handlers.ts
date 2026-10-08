@@ -1,7 +1,7 @@
-// One typed dispatch shared by the MCP server and the CLI (RFC: "MCP + CLI over one core").
+// One typed dispatch shared by the MCP server and the CLI.
 // Pure/offline tools are fully implemented; chain-backed compute runs when an RPC + addresses
 // are supplied, else returns an honest `unavailable` envelope; unimplemented phases return
-// `unavailable` with a reason rather than a fabricated result [K1/K3].
+// `unavailable` with a reason rather than a fabricated result.
 // Split 2026-08-05: per-tool handler modules live in ./handlers/; this file keeps the runTool
 // dispatch and re-exports the original public surface (external interface unchanged).
 import { buildTeaching, type ChainId, ComputeInput, DecodeInput, Envelope, PrepareOrdersInput, PreparePhoenixInput, QueryInput, SubmitInput, toolByName, type ToolName, TrackInput } from "@cork/schemas";

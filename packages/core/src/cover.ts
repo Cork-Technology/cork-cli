@@ -18,18 +18,16 @@
 //               the rate never moves. Every loss below it is paid; the reference's yield after
 //               creation is not tracked; and it reads no price feed at all.
 //
-// Measured on a Base fork against the phoenix/v0.4-rc.1 contracts
-// (experiments/fork-harness/script/cover-types-rehearsal.ts): pools over USDC / baseUSD, same
-// expiry; the reference vault takes a real 10% loss; 100 cST exercised on each — see the
-// script's RESULT header for the payouts.
+// Measured on a Base fork against the phoenix/v0.4-rc.1 contracts: pools over USDC / baseUSD,
+// same expiry; the reference vault takes a real 10% loss; 100 cST exercised on each.
 //
 // The venue's RFQ `modes` name the alternatives a requester accepts (cork-api 0.4.4:
 // liquidity_only | liquidity_impairment | fixed_rate). Nothing on chain reads them. A request
 // carries ONE market template, so it describes ONE alternative; an answer for another mode must
 // bring its own. A mode that names a cover the template's recipe does not give is the mismatch
 // this module names before relay: an underwriter that builds the pool from the request's
-// template would sell one cover priced as another (Zyfai's first trade asked for downside cover
-// and created an exit-only pool).
+// template would sell one cover priced as another (a request for downside cover whose template
+// names a liquidity recipe creates an exit-only pool).
 import type { RfqMode } from "@cork/schemas";
 import type { referenceLossReading } from "./chain/nav-loss.ts";
 import { fixedRateOverrideOfTemplate, INLINE_FIXED_SCHEMA, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA, type InlineTemplateParams, type InlineTemplateSchema, inlineParamsOfTemplate, oracleParamsOf, YEAR_SECONDS } from "./orders-answer.ts";

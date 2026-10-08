@@ -1,7 +1,6 @@
-// What an RFQ v2 writer signs. Ported byte for byte from the venue's
-// `src/modules/rfq/v2/signing.ts` + `src/lib/canonical-json.ts` (cork-indexing-api 0.4.5) and
-// held to its published test vectors (docs/rfq-v2-signing.md): one wrong byte here and the
-// venue refuses every signed write with 401.
+// What an RFQ v2 writer signs. Ported byte for byte from the venue's RFQ v2 signing and
+// canonical-JSON rules (cork-api 0.4.5) and held to its published test vectors: one wrong byte
+// here and the venue refuses every signed write with 401.
 //
 // The venue hashes the body AFTER its own validation, which lowercases every address and
 // bytes32 value (a `market_template_id` and the `oracle_params` values keep their case). A

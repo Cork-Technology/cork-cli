@@ -1,5 +1,5 @@
 // account-state WITHOUT filters.poolId — the account's positions across EVERY generation of the
-// chain (migration, 2026-09-22; owner requirement: v0.6.0 supports the previous and the current
+// chain (migration, 2026-09-22: v0.6.0 supports the previous and the current
 // generation at once so users can move funds). A fund migration starts from "what do I hold
 // where": the venue's existing pools live on the older managers (453 on Arbitrum across three
 // managers, 466 on Base, 2026-09-22), the new set's pools on the 10-field primary, and nobody

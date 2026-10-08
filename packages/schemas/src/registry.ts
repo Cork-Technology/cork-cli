@@ -45,7 +45,7 @@ export const REGISTRY = [
     cliPath: ["query"],
     phase: 1,
     description:
-      "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped [K7]. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
+      "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
     input: QueryInput,
     output: Envelope,
@@ -67,7 +67,7 @@ export const REGISTRY = [
     cliPath: ["decode"],
     phase: 1,
     description:
-      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse [K3].",
+      "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse.",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: DecodeInput,
     output: Envelope,
@@ -78,7 +78,7 @@ export const REGISTRY = [
     cliPath: ["capabilities"],
     phase: 1,
     description:
-      "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure [C13].",
+      "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure.",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: CapabilitiesInput,
     output: Envelope,
@@ -90,7 +90,7 @@ export const REGISTRY = [
     cliAliases: ["phoenix"],
     phase: 2,
     description:
-      "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing [K1]. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry [K2]. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities.",
+      "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities.",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: PreparePhoenixInput,
     output: Envelope,
@@ -124,7 +124,7 @@ export const REGISTRY = [
     cliPath: ["track"],
     phase: 2,
     description:
-      "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict' [K7].",
+      "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict'.",
     annotations: { readOnlyHint: true, idempotentHint: true },
     input: TrackInput,
     output: Envelope,
@@ -135,7 +135,7 @@ export const REGISTRY = [
     cliPath: ["submit"],
     phase: 3,
     description:
-      "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay [K3]), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs [K1]; idempotent by clientRequestId [K2].",
+      "Relay a CALLER-signed/authored payload to the Cork venue — the only side-effecting tool. Actions: rollover-order, lop-order (both fully signed; commitments recomputed locally before relay), rfq-open, rfq-answer, rfq-counter (the RFQ negotiation loop: buyer counters, underwriters revise — all non-committal; commitment is the signed order). Never signs; idempotent by clientRequestId.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

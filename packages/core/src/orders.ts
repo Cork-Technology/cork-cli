@@ -366,7 +366,7 @@ function nonceFromSeed(seed: string): bigint {
  *  prefix (the schema refuses it; buildMakerOrder refuses it for SDK callers), so a group seed
  *  and an id seed are never the same string and sharing only ever happens on purpose. What
  *  remains is the 40-bit truncation any two seeds share, birthday-rare — disclosed on
- *  buildMakerOrder, never promised away (audit RC1-NONCE-001). */
+ *  buildMakerOrder, never promised away. */
 export function ocoGroupNonce(ocoGroup: string): bigint {
   return nonceFromSeed(`${OCO_GROUP_NONCE_NAMESPACE}${ocoGroup}`);
 }
@@ -375,7 +375,7 @@ export function ocoGroupNonce(ocoGroup: string): bigint {
 export const LADDER_ID_MAX = 124;
 
 /** The idempotency key of rung `index` of the ladder `ladderId`: `<ladderId>:<index>`. Deterministic,
- *  so a retried ladder re-derives the same rung ids (and bytes [K2]); distinct across rungs, so
+ *  so a retried ladder re-derives the same rung ids (and bytes); distinct across rungs, so
  *  the venue's per-id idempotency never 409s a sibling. Exported so an integrator can address a
  *  rung (finalize, submit, cancel) without the ladder result in hand. */
 export function ladderRungClientRequestId(ladderId: string, index: number): string {
@@ -407,7 +407,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   // one-fill-consumes-everything behaviour ("post several smaller orders"), since those orders
   // would collide with each other.
   //
-  // Derived from the idempotency key so retries stay byte-identical [K2] while genuinely
+  // Derived from the idempotency key so retries stay byte-identical while genuinely
   // different requests land on different bits (a 40-bit slot: collisions are birthday-rare, not
   // impossible — two live orders on one bit invalidate together). 40 bits of space, from a range
   // of the hash the plain-order salt does not use.
@@ -447,7 +447,7 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
 // ── Finalize a caller-signed maker order ─────────────────────────────────────
 // Signing happens out-of-process (an external signer). Finalize reconstructs the exact order,
 // re-derives its hash, checks the salt↔extension binding OrderLib enforces at fill, and recovers
-// the signer — proving the signature is the maker's over THIS order — WITHOUT ever signing [K1].
+// the signer — proving the signature is the maker's over THIS order — WITHOUT ever signing.
 export interface FinalizeMakerOrderArgs {
   chainId: number;
   lop: `0x${string}`;
@@ -600,8 +600,8 @@ export function maskBits(mask: bigint): number[] {
 // 1inch v6 declares Order with `type Address is uint256`, so the router derives the fill selector
 // from the underlying uint256 tuple: fillOrderArgs = 0xf497df75 (NOT 0x5d9dbf53, the address-tuple
 // selector, which hits the fallback and reverts). The ABI-encoded bytes are identical to the
-// address form (addresses left-pad to 32 bytes) — ONLY the 4-byte selector differs. Proven by the
-// Arbitrum fork round-trip (experiments/fork-harness/test/JitOrderRoundTrip.t.sol).
+// address form (addresses left-pad to 32 bytes) — ONLY the 4-byte selector differs. Proven by an
+// Arbitrum fork round-trip.
 const ORDER_TUPLE_UINT = "(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)";
 export const lopFillAbi = parseAbi([
   `function fillOrderArgs(${ORDER_TUPLE_UINT} order, bytes32 r, bytes32 vs, uint256 amount, uint256 takerTraits, bytes args) returns (uint256 makingAmount, uint256 takingAmount, bytes32 orderHash)`,

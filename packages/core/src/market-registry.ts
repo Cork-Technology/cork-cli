@@ -1,7 +1,7 @@
 // MarketRegistry + CorkLimitOrderAdapter integration — contracts release 2.1.0 (Arbitrum One,
-// deployed at block 489540043; ABI pinned against market-registry tag 2.1.0 commit
-// 70c2cf8, cross-checked on-chain 2026-08-03: adapter immutables, recipe membership, factory
-// bindings, predictFixedRateOracle parity with the read API).
+// deployed at block 489540043; ABI pinned against market-registry tag 2.1.0, cross-checked
+// on-chain 2026-08-03: adapter immutables, recipe membership, factory bindings,
+// predictFixedRateOracle parity with the read API).
 //
 // The 2.1.0 model (everything the legacy module did differently):
 //  - A recipe is an approved CONTRACT ADDRESS (isRecipe is the only membership gate), not a mode
@@ -427,8 +427,8 @@ export const RECIPE_CATALOG: Record<string, RecipeCatalogEntry> = {
   },
   // ApySpreadImpairmentRecipe (market-registry 0.4.0, deployed 2026-08-31; identical address on
   // 42161 + 8453; approved on the 0.3.3-generation registry — isRecipe read live on both chains
-  // 2026-09-21). The 0.4.0 release moved NO registry/adapter address (owner statement
-  // 2026-09-03), so this entry deliberately adopts the recipe alone, not the later 0.4-rc.1
+  // 2026-09-21). The 0.4.0 release moved NO registry/adapter address, so this entry
+  // deliberately adopts the recipe alone, not the later 0.4-rc.1
   // shadow deployment set.
   "0x7340bfbedf3657a7bbce0dd2b4ab205754cc9eca": {
     constants: ["SECONDS_PER_YEAR", "CAPACITY_DAYS"],
@@ -805,10 +805,10 @@ export function decodeJitExtension(wire: MarketRegistryWire, extension: `0x${str
 // ── Market derivation (what the fill will compute) ──────────────────────────────────────────
 /** Build the Market struct + poolId a fill carrying `constraint` would produce — the ONE
  *  derivation of a JIT pool's identity (the rollover branch had a twin, `deriveRolloverJitPool`,
- *  deleted 2026-09-22, review B6). The constraint comes IN (resolved off-chain at signing), so
+ *  deleted 2026-09-22). The constraint comes IN (resolved off-chain at signing), so
  *  the identity is a pure function of the order — no rate read, no drift. The width is the
  *  PHOENIX wire of the generation the fill creates on and is REQUIRED (the pre-0.6 8-field
- *  default let a caller that forgot it hash the wrong width silently — review D): 8-field keeps
+ *  default let a caller that forgot it hash the wrong width silently): 8-field keeps
  *  the fees outside the id; 10-field makes the two fee percentages the Market's last two
  *  members AND part of the id (they default to zero there — a pool with a different fee is a
  *  different pool). The id is computeMarketId on that wire, bit-identical to poolManager.getId
@@ -1148,8 +1148,8 @@ export async function predictShares(
     poolManager: `0x${string}`;
     market: Market;
     poolId: `0x${string}`;
-    /** The controller's wire — REQUIRED (the pre-0.6 8-field default was removed 2026-09-22,
-     *  review D); a 10-field market must be derived on the 10-field wire — buildCreatePoolCall
+    /** The controller's wire — REQUIRED (the pre-0.6 8-field default was removed 2026-09-22);
+     *  a 10-field market must be derived on the 10-field wire — buildCreatePoolCall
      *  refuses a mixed pair. */
     wire: PhoenixWire;
     unwindSwapFeePercentage?: bigint;

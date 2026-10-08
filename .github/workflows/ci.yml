@@ -1,4 +1,4 @@
-# CI for the offline-deterministic gates [RFC 011 §14]. Network-gated suites (fork-parity,
+# CI for the offline-deterministic gates. Network-gated suites (fork-parity,
 # bundle-sim, rpc-live) self-skip without their env vars; the agent-eval runner (Layer B)
 # self-skips without an Anthropic key — wire ANTHROPIC_API_KEY as a repo secret to enable it.
 # Never put RPC endpoints in this file: CORK_TEST_RPC/CORK_RPC_URL are environment-only.
@@ -39,8 +39,8 @@ jobs:
 
       # test:ci drives vitest through its programmatic API and judges the run from the JSON
       # report against the files vitest discovered — every file must report, none may fail.
-      # `bun run test` judged by exit code, and on 2026-10-07 (run 37622917869) vitest on Bun
-      # exited 0 after ONE file in 3 s with no summary; the step passed. Never again by exit code.
+      # Judge the complete discovered suite, not process exit code alone: an incomplete
+      # Vitest run can exit successfully without reporting every test file.
       - name: Tests (offline gates — examples, teaching, maturity, surface drift, venue/rollover/hypersync stubs)
         env:
           # Deterministic: never fetch cork-defaults.json from GitHub in CI.
@@ -52,20 +52,9 @@ jobs:
           CORK_CONFIG_NO_FETCH: "1"
         run: bun run test:mutation
 
-      # Pinned-seed fast-check harnesses (numeric revert-parity + Fusion pricing invariants).
-      # The public cork-cli tree deliberately carries no experiments/ — skip LOUDLY there, never
-      # silently (bun test exits 0 on a no-match filter, which is exactly the failure mode this
-      # step exists to prevent; test:prop asserts the harness files exist before running).
-      - name: Property harnesses (test:prop)
-        run: |
-          if [ -d experiments/proptest ]; then
-            bun run test:prop
-          else
-            echo "SKIP test:prop — experiments/ tree absent (public port); harnesses run in the private repo's CI"
-          fi
 
       # The npm dist layout has its own gate script (scripts/verify-package-layout.mjs) that was
-      # wired into no trigger — class C13: the published-package layout could rot while CI stayed
+      # wired into no trigger: the published-package layout could rot while CI stayed
       # green. Image builds do not validate this SDK layout. This step runs build/layout
       # scripts under pinned Bun; emitted SDK remains ESM-only and is checked against the
       # supported Node consumer type contract.
@@ -73,9 +62,8 @@ jobs:
         run: bun run build && bun run verify:package
 
       - name: Lint — no machine-absolute paths in committed sources
-        # /Users/<name> paths break every other checkout and the private→public port. notes/ is
-        # private-tree prose and exempt. The character-class pattern keeps this step from
-        # matching its own definition.
+        # Machine-local paths break other checkouts. Nonshipping source notes are exempt.
+        # The character-class pattern prevents matching this definition.
         run: |
           if git grep -n "/Users/[a-z]" -- ':!notes'; then
             echo "::error::machine-absolute path committed — use relative paths"
@@ -119,7 +107,7 @@ jobs:
           CORK_RPC_LIVE: "1"
         run: bunx --bun vitest run packages/cli/test/compiled-binding-live.test.ts
 
-  # Layer B agent evals (RFC §13/§14): runs the trace-graded task set when credentials resolve;
+  # Layer B agent evals: runs the trace-graded task set when credentials resolve;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   # Preferred auth is Claude Platform on AWS via GitHub OIDC → SigV4 (no stored secret, nothing
   # to expire): set the CORK_EVALS_AWS_* repo VARIABLES below. ANTHROPIC_API_KEY stays as the

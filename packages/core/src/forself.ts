@@ -4,7 +4,7 @@
 // structurally forces the destination to msg.sender, so a (contract, selector) whitelist that
 // cannot see call parameters stays safe. This module builds calldata FOR those adapters — it
 // deploys nothing, signs nothing, and treats the adapter address as caller-supplied
-// integrator config, never a Cork deployment [K1].
+// integrator config, never a Cork deployment.
 //
 // Byte-critical facts frozen here (verified against the compiled adapters, forge inspect
 // methodIdentifiers — the unit suite pins every selector):

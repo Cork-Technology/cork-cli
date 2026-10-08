@@ -1,4 +1,4 @@
-// Migration (0.6, 2026-09-22; owner requirement: v0.6.0 supports the previous AND the current
+// Migration (0.6, 2026-09-22: v0.6.0 supports the previous AND the current
 // generation at once so users can move funds). Three surfaces: the `generation` ALIASES
 // (`primary` / `previous` / the refused `all`) resolved in ONE place to a label; account-state
 // WITHOUT a poolId = the account's positions across every generation (pool enumeration under the
@@ -427,7 +427,7 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
   });
 });
 
-describe("an endpoint that refuses eth_getLogs at the floor (owner ruling 2026-09-23)", () => {
+describe("an endpoint that refuses eth_getLogs at the floor (2026-09-23)", () => {
   /** An RPC whose eth_getLogs refuses EVERY range; getBlockNumber works. */
   const refusingClient = () => ({
     getBlockNumber: async () => 1_000n,

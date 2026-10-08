@@ -1,15 +1,13 @@
 // 1inch Fusion dutch-auction decode + pricing (v3.1 layout), pure and offline. The price of a
 // Fusion order is a deterministic function of (extension bytes, taker, basefee, timestamp) — this
-// module reconstructs everything from the ORDER'S OWN BYTES [K3] and reimplements the deployed
+// module reconstructs everything from the ORDER'S OWN BYTES and reimplements the deployed
 // SimpleSettlement pricing chain bit-exactly.
 //
 // Ground truth: fusion-protocol @ v3.1.2 (SimpleSettlement.sol) + LOP 4.3.2 extensions
-// (AmountGetterWithFee/AmountGetterBase), byte layouts documented in
-// notes/research/fusion-dutch-auction.md §3. Empirically proven 10/10 WEI-EXACT against the
-// DEPLOYED getters on mainnet + Arbitrum via eth_call (experiments/fusion-spike/probe.ts,
-// 2026-07-28) — both rounding directions, interpolation, fee/whitelist-discount, boundaries.
-// Known deployed-getter gotchas carried from the spike: the on-chain selectors use the
-// all-uint256 Order tuple, and public-node eth_call runs with block.basefee = 0.
+// (AmountGetterWithFee/AmountGetterBase). Empirically proven 10/10 WEI-EXACT against the
+// DEPLOYED getters on mainnet + Arbitrum via eth_call (2026-07-28) — both rounding directions,
+// interpolation, fee/whitelist-discount, boundaries. Known deployed-getter gotchas: the on-chain
+// selectors use the all-uint256 Order tuple, and public-node eth_call runs with block.basefee = 0.
 import { concatHex, size, sliceHex, toHex } from "viem";
 import bundledDefaults from "../../../cork-defaults.v2.json" with { type: "json" };
 import { decodeExtensionFields, saltExtensionBinding, type LopExtensionFields, type LopOrder } from "./orders.ts";
@@ -137,7 +135,7 @@ export function parseAuctionGetterData(extraData: Hex): { auction: FusionAuction
   };
 }
 
-// ── auction ENCODE (the build side of F2: Cork-native decaying-premium orders) ───────────────
+// ── auction ENCODE (the build side: Cork-native decaying-premium orders) ───────────────
 
 function fit(value: bigint, bytes: number, what: string): Hex {
   if (value < 0n) throw new Error(`Fusion ${what}: negative values cannot be encoded`);
@@ -148,8 +146,8 @@ function fit(value: bigint, bytes: number, what: string): Hex {
 
 /** Encode the amount-getter extraData — the exact inverse of parseAuctionGetterData, with the
  *  fee section ZEROED and the getter whitelist EMPTY (the Cork-native shape: L1+L2 only, any
- *  taker fills at the decayed price through the plain LOP fill path; §2.4 of the fusion plan
- *  proved the deployed getters answer standalone with exactly this shape). Field widths are the
+ *  taker fills at the decayed price through the plain LOP fill path; the deployed getters were
+ *  shown to answer standalone with exactly this shape). Field widths are the
  *  v3.1 layout's — over-wide values throw with the width named, never truncate. */
 export function encodeAuctionGetterData(a: FusionAuction): Hex {
   if (a.points.length > 255) throw new Error(`Fusion auction: ${a.points.length} points do not fit the 1-byte count (max 255)`);
@@ -168,7 +166,7 @@ export function encodeAuctionGetterData(a: FusionAuction): Hex {
   // the price RISE across that segment — the opposite of a decaying-premium auction, and a
   // violation of every doc/warning that promises "decays down to the floor". Checking each point
   // against the PRECEDING bump (starting at initialRateBump) is what actually enforces decay; the
-  // old `> initialRateBump` check accepted a down-then-up curve (e.g. 100→10→90). [footgun N1]
+  // old `> initialRateBump` check accepted a down-then-up curve (e.g. 100→10→90).
   let prevBump = a.initialRateBump;
   for (const [i, p] of a.points.entries()) {
     if (p.rateBump > prevBump) throw new Error(`Fusion auction point ${i}: rateBump ${p.rateBump} exceeds the preceding bump ${prevBump} — a dutch auction's curve must be non-increasing; the getters interpolate linearly, so a higher point makes the price RISE across that segment instead of decaying. Order the points by non-increasing rateBump (each <= the one before, <= initialRateBump).`);
@@ -193,7 +191,7 @@ export function buildAuctionAmountData(chainId: number, auction: FusionAuction):
 }
 
 /** Parse the post-interaction extraData (after the 20-byte settlement address): fee recipients,
- *  resolving window, whitelist time cascade, surplus baseline (research note §3.5 / FeeTaker +
+ *  resolving window, whitelist time cascade, surplus baseline (FeeTaker +
  *  SimpleSettlement sources). */
 export function parsePostInteractionData(data: Hex): FusionPostInteraction {
   need(data, 1, "post-interaction flags");
@@ -314,7 +312,7 @@ export function isGetterWhitelisted(fees: FusionGetterFees, taker: string): bool
   return fees.whitelist.some((w) => w.toLowerCase().slice(2) === half);
 }
 
-// ── whole-order decode [K3] ──────────────────────────────────────────────────────────────────
+// ── whole-order decode ──────────────────────────────────────────────────────────────────
 
 export interface DecodedFusionOrder {
   settlement: Hex;
@@ -363,7 +361,7 @@ export function decodeFusionOrder(order: LopOrder, extension: Hex, chainId: numb
   // what the taker pays. Classify it BEFORE the equality invariant: otherwise an order with a
   // recognized making getter and a foreign taking getter fails the equality check, degrades to
   // "not a Fusion order", and the taker path falls through to the plain signed-ratio cap —
-  // silently trusting the very getter we could not recognize (audit ARTIFACT-FUSION-003).
+  // silently trusting the very getter we could not recognize.
   if (size(fields.takingAmountData) >= 20) {
     const takingGetter = sliceHex(fields.takingAmountData, 0, 20);
     const takingClass = classifySettlement(takingGetter, chainId);

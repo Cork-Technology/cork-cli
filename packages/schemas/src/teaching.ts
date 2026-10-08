@@ -1,4 +1,4 @@
-// Errors that teach [v2 §5.4 / RFC §6]: map raw zod issues into a payload an agent can act on in
+// Errors that teach: map raw zod issues into a payload an agent can act on in
 // one step — per-issue path/expected/received, a nearest-value suggestion for enum typos, one
 // remediation line, and a corrected example invocation that itself validates. Returned IN-BAND
 // (envelope/stderr), never as a bare protocol error, so the model actually sees it.
@@ -165,7 +165,7 @@ export function buildTeaching(tool: ToolName, rawIssues: unknown, rawInput?: unk
     issues,
     remediation:
       `Fix the listed field(s) and retry${sawClosedEnum ? " — all enums are closed (no free-form values)" : ""}. ` +
-      `Adapt the example below to your case; reuse your clientRequestId when retrying the same request [K2].`,
+      `Adapt the example below to your case; reuse your clientRequestId when retrying the same request.`,
     ...(example ? { example } : {}),
   };
 }

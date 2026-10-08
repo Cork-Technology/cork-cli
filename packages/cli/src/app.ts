@@ -549,7 +549,7 @@ export async function runCli(
     const cmd = baseOptions(parent.command(leafName(tool)).description(`[phase ${tool.phase}] ${tool.description}`));
     for (const alias of tool.cliAliases ?? []) cmd.alias(alias);
     // CLI-only: sign an RFQ write with a keystore before relaying it. Not a schema field — the
-    // MCP surface never signs [K1].
+    // MCP surface never signs.
     const accountOption = (c: Command): void => {
       if (tool.name === "cork_submit") c.option("--account <keystore>", "rfq-open/rfq-answer/rfq-counter: prepare the write, sign it with this keystore (password typed at a prompt), then submit");
     };

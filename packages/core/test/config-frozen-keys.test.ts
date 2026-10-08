@@ -1,4 +1,4 @@
-// The frozen-keys tripwire (policy R5c). A released 0.6 binary fetches cork-defaults.v2.json and
+// The frozen-keys tripwire. A released 0.6 binary fetches cork-defaults.v2.json and
 // resolves `generation` against the document's set KEYS, so a key a released line knows may never
 // disappear from the file that line reads. 0.6.0 reads the file from main; 0.6.1 and later read it
 // from the config-only branch config/0.6. This test holds the tree's file to the keys, and, when

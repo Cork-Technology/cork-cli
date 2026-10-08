@@ -69,7 +69,7 @@ describe("ch mcp --http (real Bun.serve socket)", () => {
     expect(ready.status).toBe(200);
     const snapshot = (await ready.json()) as { status: string; detail: string; subsystems: Record<string, Record<string, unknown>> };
     expect(snapshot.status).toBe("ok");
-    // No bearer on the wire → the SUMMARY (cork-cli-private#6): every subsystem, flags only.
+    // No bearer on the wire → the SUMMARY: every subsystem, flags only.
     expect(snapshot.detail).toBe("summary");
     expect(Object.keys(snapshot.subsystems).sort()).toEqual(["admission", "config", "rpc", "venue"]);
     expect(snapshot.subsystems.admission).toEqual({ degraded: false });
@@ -86,7 +86,7 @@ describe("ch mcp --http (real Bun.serve socket)", () => {
     const full = await fetch(`http://127.0.0.1:${port}/readyz`, { headers: { authorization: "Bearer e2e-diag" } });
     const snapshot = (await full.json()) as { detail: string; subsystems: Record<string, Record<string, unknown>> };
     expect(snapshot.detail).toBe("full");
-    // `admission` carries the ingress bounds (MCP-NET-003): an operator reading /readyz can see
+    // `admission` carries the ingress bounds: an operator reading /readyz can see
     // how loaded the server is, not just whether its upstreams are healthy.
     expect(snapshot.subsystems.admission).toMatchObject({ global: expect.any(Number), limits: { bodyBytes: 1_048_576 }, trustForwardedFor: false });
     const open = await fetch(`http://127.0.0.1:${port}/mcp`, { method: "POST", headers: MCP_HEADERS, body: INIT_BODY });

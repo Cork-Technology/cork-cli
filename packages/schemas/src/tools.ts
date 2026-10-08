@@ -17,7 +17,7 @@ import {
 } from "./primitives.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
-// Common envelope (RFC §6). Version lives here, never in the tool name.
+// Common envelope. Version lives here, never in the tool name.
 // ────────────────────────────────────────────────────────────────────────────
 export const Provenance = z.object({
   source: z.enum(["chain", "indexer", "service", "config"]),
@@ -60,7 +60,7 @@ export const GENERATION_DESCRIPTION = "a contract GENERATION: a label ('phoenix/
 const GenerationWire = z.string().optional().describe(GENERATION_DESCRIPTION);
 
 // ────────────────────────────────────────────────────────────────────────────
-// 1. cork_query (R1)
+// 1. cork_query
 // ────────────────────────────────────────────────────────────────────────────
 export const QueryInput = z.object({
   resource: z
@@ -110,18 +110,18 @@ export const QueryInput = z.object({
 });
 export type QueryInput = z.infer<typeof QueryInput>;
 
-// The rollover premium floor is a RATE, not an amount — describing it as a plain TokenAmount was
-// a measured footgun (F9): with a 6-decimals premium asset the correct value is 1e12x smaller
-// than the TokenAmount examples suggest. One shared $defs entry teaches this at every use site.
+// The rollover premium floor is a RATE, not an amount — describing it as a plain TokenAmount
+// misleads: with a 6-decimals premium asset the correct value is 1e12x smaller than the
+// TokenAmount examples suggest. One shared $defs entry teaches this at every use site.
 const PremiumPerShareRate = TokenAmount.describe(
   "premium floor RATE, not a plain amount: base units of the premium asset per 1e18 (one whole) dstCst share — premium floor = dstCstProduced * this / 1e18. Example: 0.012 per share is '12000000000000000' when the premium asset has 18 decimals but '12000' when it has 6",
 ).meta({ id: "PremiumPerShareRate", "x-units": X_UNITS.premiumPerShare });
 
-// ── shared JIT sub-schemas (audit R2): the constraint bounds carry PER-FIELD scale — the parent
+// ── shared JIT sub-schemas: the constraint bounds carry PER-FIELD scale — the parent
 // object's description is out of frame in a rendered per-flag help, and these four are the
 // headline fields of the 1e18=1.0 vs 1e18=1% collision. One const, two use sites (maker + taker
 // jitMarket), so the two paths cannot drift. Same for the ERC-2612 permit rows: `value` is a
-// TOKEN AMOUNT (the predicted cST), not a bare integer — R2's first finding.
+// TOKEN AMOUNT (the predicted cST), not a bare integer.
 // The two 1e18=1% FEE fields are shared the same way: they are exactly the other half of that
 // collision, and the taker copy once silently lost its x-units marker (the parity test cannot
 // see an omission — it checks that emitted values agree, and a site emitting nothing is
@@ -178,7 +178,7 @@ const Erc2612PermitWire = z.strictObject({
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// 2. cork_compute (R2) — closed per-kind params
+// 2. cork_compute — closed per-kind params
 // ────────────────────────────────────────────────────────────────────────────
 const AtPin = z.strictObject({
   block: UintStr.optional().describe("pin the read to this block number for bit-identical replay"),
@@ -200,7 +200,7 @@ export const ComputeParams = z.discriminatedUnion("kind", [
       kind: z.literal("dutch-auction-price"),
       order: z
         .record(z.string(), z.unknown())
-        .describe("the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes [K3]"),
+        .describe("the LOP v4 order: the 8 struct fields (decimal strings + addresses) PLUS `extension` (hex) — the auction curve lives in the extension and is reconstructed from those bytes"),
       baseFeeWei: UintStr.optional().describe("block base fee in WEI for the gas-bump term; omitted = gas bump skipped = the UPPER-BOUND price (public-node eth_call cannot verify this term — it runs with basefee 0)"),
       taker: Address.optional().describe("price for THIS taker (getter-whitelist discount applies); omitted = both whitelisted and non-whitelisted prices are returned"),
       makingAmount: TokenAmount.optional().describe("price this making amount (the fillable range is 0..the order's own makingAmount; a larger value is extrapolated past what any fill can consume and warns makingamount_exceeds_order); omitted = the full order"),
@@ -250,13 +250,13 @@ export const ComputeInput = z.object({
 export type ComputeInput = z.infer<typeof ComputeInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 3. cork_decode (R3)
+// 3. cork_decode
 // ────────────────────────────────────────────────────────────────────────────
 export const DecodeInput = z.object({
   kind: z
     .enum(["calldata", "tx", "order", "event", "receipt"])
     .describe(
-      "all local reconstruction [K3]. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
+      "all local reconstruction. calldata=Cork/Bundler3 tx bytes → labeled legs (recursively unwraps multicall); tx=a SIGNED raw transaction (legacy RLP or typed envelope 0x01–0x04) → recovered signer + to/value/chainId/nonce/gas, the target named against known Cork deployment addresses (plain warning when unknown), and the inner calldata decoded to the same labeled legs + summary — the validate-before-broadcast step (a supplied chainId that contradicts the tx's own is a conflict); order=1inch LOP v4 order (hex 8-word tuple, or the JSON struct fields) → full makerTraits breakdown + locally recomputed EIP-712 orderHash (a supplied orderHash/extension is cross-checked, mismatch → conflict); event=ONE log object {address?, topics[], data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set (unverified layouts labeled raw, never guessed); receipt=a tx receipt object {logs:[…]} → every log labeled the same way",
     ),
   data: z.union([
     Hex.describe("raw bytes to decode — tx calldata for kind 'calldata', the SIGNED raw transaction bytes for kind 'tx', or the 8-word order tuple for kind 'order'"),
@@ -273,7 +273,7 @@ export const DecodeInput = z.object({
 export type DecodeInput = z.infer<typeof DecodeInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 4. cork_prepare_phoenix (R4) — 13 adapter actions + 2 authority variants
+// 4. cork_prepare_phoenix — 13 adapter actions + 2 authority variants
 // ────────────────────────────────────────────────────────────────────────────
 const A = <T extends string, S extends z.ZodRawShape>(t: T, shape: S) =>
   z.strictObject({ type: z.literal(t), ...shape });
@@ -401,8 +401,7 @@ export const PreparePhoenixInput = z.object({
     .default(1800)
     .describe("RELATIVE deadline, seconds from now — re-anchors to the clock on every call, so a retry produces different bytes; pass deadlineAt instead for byte-stable retries"),
   // Absolute deadline override (unix seconds). deadlineSeconds re-anchors to the clock on every
-  // call, so a retry produces different bytes; pin deadlineAt to make same-id retries BYTE-STABLE
-  // [K2 §9 deadline-basis].
+  // call, so a retry produces different bytes; pin deadlineAt to make same-id retries BYTE-STABLE.
   deadlineAt: UnixSeconds.optional(),
   forSelf: z
     .strictObject({
@@ -416,7 +415,7 @@ export const PreparePhoenixInput = z.object({
 export type PreparePhoenixInput = z.infer<typeof PreparePhoenixInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 5. cork_prepare_orders (R4, Phase 3)
+// 5. cork_prepare_orders
 // ────────────────────────────────────────────────────────────────────────────
 /** The venue's RFQ cover modes (cork-api 0.4.4 `ModeSchema`): ONE list for the request, the
  *  answer option, and the mode → cover table in @cork/core (`RFQ_MODE_COVER`, which must map
@@ -434,7 +433,7 @@ const RfqWriteAuthWire = z
   .discriminatedUnion("method", [
     z.strictObject({
       method: z.literal("signature"),
-      signature: Hex.describe("the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here [K1]"),
+      signature: Hex.describe("the writer's EIP-712 signature over the CorkRfqWrite typed data cork_prepare_orders rfq-write returns (an EOA signature, or the bytes an ERC-1271 wallet validates) — checked here against the rebuilt body before relay, never produced here"),
     }),
     z.strictObject({ method: z.literal("apiKey") }).describe("prove the write with a partner API key (the x-cork-api-key header) instead of a signature — the key is never an input: it is read from the CORK_RFQ_API_KEY environment variable, else the profile's credential_process, else the key stored for this venue host (`ch auth set-key`), and a write with no key refuses api_key_missing before anything is sent"),
   ])
@@ -478,7 +477,7 @@ const RfqAnswerFields = {
   rfqId: z.string().min(1),
   underwriter: Address,
   status: z.enum(["quoted", "pass"]).describe("quoted=submitting priced options; pass=declining (give reasonCode)"),
-  options: z.array(z.record(z.string(), z.unknown())).max(16).optional().describe("priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent under R13), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"),
+  options: z.array(z.record(z.string(), z.unknown())).max(16).optional().describe("priced quote options, in the venue's own (snake_case) shape for the RFQ's kind. ROLLOVER option: {option_id, chain_id, destination, premium_token, premium_per_share, shares_max, fresh_until} — destination is {pool_id} (an existing pool, not the source, live) or {jitMarket} (a market the filler creates at fill time, written like every jitMarket input: collateralAsset, referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage, unwindSwapFeePercentage — sent as the venue's jit_market); premium_per_share = raw premium-token units per 1e18 destination shares, exactly the rollover order's minPremiumPerShare; shares_max ≤ the RFQ's source.shares; no order (the cPT holder signs the rollover order). NEW_POSITION option: premium fields inside are fraction STRINGS per the venue numbers contract (\"0.041\" = 4.1%). premium_annualized is pre-flight-gated LOCALLY against the venue's own write schema before relay — the fraction shape is structure (permanent: a field's unit never changes in place), the < 0.5 cap is relaxable venue policy; a violation is refused here with teaching instead of burning a venue round-trip. An option whose mode is fixed_rate must carry market_template.inline.oracle_params.rate_override (a decimal string, ABSOLUTE 1e18 = 1.0) — the venue's rule, checked here the same way; the rate may differ from the request's as a visible counter-proposal"),
   reasonCode: z.enum(["NO_CAPACITY", "PAIR_UNSUPPORTED", "TENOR_NOT_QUOTED", "PASS"]).optional(),
   supersedes: z.string().min(1).optional().describe("optional revision link: the answerId of YOUR prior answer on this SAME RFQ that this one replaces (venue-validated, 400 otherwise). Purely an audit trail — supersession is already implicit (an underwriter's newest answer is its current one), so omitting this loses nothing"),
   kind: z.enum(RFQ_KINDS).optional().describe("the RFQ's kind — read from the RFQ itself, so it may be omitted; when given it must match (the venue refuses an answer or counter of another kind)"),
@@ -486,7 +485,7 @@ const RfqAnswerFields = {
 const RfqCounterFields = {
   rfqId: z.string().min(1),
   requester: Address,
-  premiumAnnualized: z.string().min(1).optional().describe("new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by R13 (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)").meta({ "x-units": X_UNITS.percent }),
+  premiumAnnualized: z.string().min(1).optional().describe("new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by the versioning rule (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)").meta({ "x-units": X_UNITS.percent }),
   optionRef: z.strictObject({ answerId: z.string().min(1), optionId: z.string().min(1) }).optional().describe("optional: point the bid at a specific quoted option on THIS RFQ when it is about those terms rather than the envelope at large (venue-validated, 400 otherwise; pre-flighted here when an RPC-free venue read succeeds)"),
   freshUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).optional().describe("advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"),
   premiumPerShare: PremiumPerShareRate.optional().describe("rollover counters only, required there: the bid in a rollover answer's unit — raw premium-token units per 1e18 destination shares (the rollover order's minPremiumPerShare)"),
@@ -643,7 +642,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
   }).describe("signable 1inch LOP v4 maker order (typed-data to sign, then finalize-maker-order, then pass its submitInput verbatim to cork_submit); optional jitMarket block attaches just-in-time Cork market creation/minting to the fill"),
   A("finalize-maker-order", {
     prepared: PreparedMakerOrderWire.describe("the exact data object returned by cork_prepare_orders maker-order"),
-    signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here [K1]"),
+    signature: Hex.describe("the caller's EIP-712 signature over the prepared order — recovered against the locally reconstructed hash, never produced here"),
     listing: z.strictObject({
       side: z.enum(["BUY", "SELL"]),
       ...ListingPremiumFields,
@@ -652,17 +651,17 @@ export const OrdersAction = z.discriminatedUnion("type", [
       allowsPartialFills: z.boolean(),
       quoteRef: QuoteRef.optional().describe("the RFQ answer option this order executes, if any"),
     }),
-  }).describe("verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs [K1]"),
+  }).describe("verify a caller-signed maker order (recover signer, reconstruct exact bytes, check salt↔extension binding) and emit a ready cork_submit lop-order artifact — never signs"),
   A("taker-fill", {
     orderHash: Bytes32,
     signedOrder: z
       .strictObject({
         order: LopOrderStructWire,
-        signature: Hex.describe("the maker's signature over the order — verified locally before any bytes are built [K3]: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs"),
+        signature: Hex.describe("the maker's signature over the order — verified locally before any bytes are built: EOA makers by ecrecover, contract makers by the SAME ERC-1271 isValidSignature staticcall the fill performs"),
         extension: Hex.default("0x").describe("the order's own extension bytes, verbatim (the salt commits to them; a wrong extension is refused before building)"),
       })
       .optional()
-      .describe("fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs [K7]. Omit to discover the order on the venue book by `orderHash`"),
+      .describe("fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs. Omit to discover the order on the venue book by `orderHash`"),
     fillMakingAmount: TokenAmount.optional().describe("making amount to receive; omit for the full remaining order"),
     maximumTakingAmount: TokenAmount.optional().describe("hard cap on taking amount paid (slippage guard); omit to use the exact rounded-up signed ratio"),
     receiver: Address.optional().describe("recipient of the maker asset; defaults to account"),
@@ -699,7 +698,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         adapter: Address.describe("the INTEGRATOR-DEPLOYED Cork ForSelf fill adapter (Cork-Technology/cork-periphery shape) — not a Cork deployment; its CORK()/LOP() bindings are verified on-chain best-effort and a mismatch is a conflict, because the caller will be granting this address an allowance"),
         poolId: MarketId.describe("the Cork market this fill must belong to — the wrapper binds the order's asset pair to this pool ON-CHAIN (checked after the fill, so a just-in-time order whose market is created during the fill still passes) and reverts OrderAssetsNotInMarket otherwise"),
         deadlineSeconds: z.number().int().min(1).max(86400).default(1800).describe("RELATIVE deadline for the wrapper's own deadline check, seconds from now — re-anchors to the clock on every call; pass deadlineAt for byte-stable retries"),
-        deadlineAt: UnixSeconds.optional().describe("absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes [K2]"),
+        deadlineAt: UnixSeconds.optional().describe("absolute wrapper deadline (unix seconds) — pins same-clientRequestId retries to identical bytes"),
       })
       .optional()
       .describe("emit the unsigned fill as a call to a Cork ForSelf ADAPTER (fillOrderForSelf) instead of raw LOP calldata — for accounts behind a parameter-blind (contract, selector) session-key policy (the Zyfai shape). The wrapper structurally forces the bought asset to the CALLER, disables taker interactions and Permit2 sourcing, pulls the taker asset from the caller up to the slippage cap and sweeps back the unspent remainder, and binds the fill to `poolId`. Approve the ORDER's taker asset to the ADAPTER (not the LOP). Mutually exclusive with receiver, interaction, and jitMarket — lifting a BUY-cover order with a taker-side JIT mint is the underwriter's raw-LOP path, not a caged-wallet path"),
@@ -730,10 +729,10 @@ export const OrdersAction = z.discriminatedUnion("type", [
     fillDeadline: UnixSeconds,
     minCaReceived: RolloverMinCaWire.optional(),
     minSharesOut: RolloverMinSharesWire.optional(),
-    jitMarketHash: RolloverJitMarketHashWire.optional().describe("pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally [K3]; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket"),
+    jitMarketHash: RolloverJitMarketHashWire.optional().describe("pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket"),
     jitMarket: RolloverJitMarketWire
       .optional()
-      .describe("negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash [K3] — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"),
+      .describe("negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
     allowUnderfill: z.boolean().default(false),
     premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
@@ -759,7 +758,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .describe("explicit intent hooks per phase (delegatecall-only, zero value, allowFailure false — the clone refuses anything else) for a holder composing its own modules; prefer `standardHooks`"),
   }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign"),
   A("rollover-fill", {
-    orderDigest: Bytes32.describe("the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it [K3]; a disagreement is a conflict, never filled"),
+    orderDigest: Bytes32.describe("the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it; a disagreement is a conflict, never filled"),
     signedOrder: z
       .object({
         order: z.record(z.string(), z.unknown()).describe("the OrderData fields as the venue serves them (decimal strings; `rolloverParams` nested)"),
@@ -825,7 +824,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     useRequestedRate: z.boolean().default(false).describe("FIXED recipe only: build at the frozen rate the RFQ itself asks for (its market_template.inline.oracle_params.rate_override) — the same as passing that rate as jitMarket.rateOverride, without retyping it. The way to cite an option that names no rate of its own; when the cited option names ANOTHER rate the difference is warned (the order then backs another pool than the quote it cites). Mutually exclusive with jitMarket.rateOverride; refused when the RFQ names no rate, or when the recipe reads an oracle. An uncited answer builds at the RFQ's rate already"),
     usePermit2: z.boolean().default(false).describe("source the cST through Permit2 at fill time (see maker-order.usePermit2)"),
     allowsPartialFills: z.boolean().default(false).describe("cover answers are all-or-nothing by default (the requester asked for one notional); true allows a smaller fill — which still spends the bit"),
-  }).describe("answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts exactly as the kernel does — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"),
+  }).describe("answer an RFQ with a FIRM cover offer in one call — reserved for the requester's LOP caller when that caller is known, OPEN otherwise: reads the RFQ (and the re-quoted option), derives the pool the cover creates on fill (derive-cork-pool: recipe → constraint → pool id → predicted cST), computes the amounts by the ACT/365 rule — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST — reserves the fill for the LOP caller when one is known (`fillSender`, else the RFQ's declared fill_sender; neither → an OPEN order + `fill_sender_unknown`, never a guessed reservation — inspect `answer.reach` before signing), applies the re-rest expiry rule, groups every rung answering the RFQ on one bit (ocoGroup 'rfq:<rfqId>'), and returns the SAME signable maker-order artifact maker-order returns, plus `answer` with the derivation and `answer.quotedOption` — the RFQ v2 answer option built from the same numbers, carrying the unsigned order (fresh_until = the order's expiry). Venue RFQ v2 order of steps: sign the order → finalize-maker-order → add order_signature to quotedOption → rfq-write answer → sign → cork_submit rfq-answer → cork_submit lop-order with quoteRef (the answer must come first: the venue refuses a quote whose order already rests on the book). Needs an RPC (decimals, derivation) and the venue (the RFQ record). This tool never picks a premium"),
   A("refresh-order", {
     orderHash: Bytes32.describe("the resting order to re-rest — located on the venue book, re-hashed, and read from the LOP invalidator before anything is built"),
     expirySeconds: z.number().int().min(1).max(315576000).default(600).describe("the NEW order's expiry, RELATIVE seconds (default 10 min — the venue's re-rest window)"),
@@ -839,7 +838,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         A("rfq-counter", RfqCounterFields).describe(RFQ_COUNTER_DESCRIPTION),
       ])
       .describe("the RFQ write to prove — the SAME fields cork_submit rfq-open / rfq-answer / rfq-counter takes, without `auth`; this call's clientRequestId becomes the write's request_id, so reuse it on the submit"),
-  }).describe("the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs [K1]"),
+  }).describe("the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs"),
 ]);
 export const PrepareOrdersInput = z.object({
   chainId: ChainId,
@@ -852,7 +851,7 @@ export const PrepareOrdersInput = z.object({
 export type PrepareOrdersInput = z.infer<typeof PrepareOrdersInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 6. cork_prepare_market (R4, Phase 4 — provisional, Q-REG)
+// 6. cork_prepare_market
 // ────────────────────────────────────────────────────────────────────────────
 export const PrepareMarketInput = z.object({
   chainId: ChainId,
@@ -893,15 +892,15 @@ export const PrepareMarketInput = z.object({
 export type PrepareMarketInput = z.infer<typeof PrepareMarketInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 7. cork_track (R5)
+// 7. cork_track
 // ────────────────────────────────────────────────────────────────────────────
 export const TrackSubject = z.discriminatedUnion("kind", [
   z.strictObject({
       kind: z.literal("artifact"),
       artifact: z.record(z.string(), z.unknown()),
-    }).describe("a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is [K3]"),
+    }).describe("a prepared artifact you were handed — digest-pinned and re-verified, never trusted as-is"),
   z.strictObject({ kind: z.literal("txHash"), txHash: Bytes32 }).describe("an on-chain transaction — reconcile its receipt to an outcome"),
-  z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }).describe("a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state [K7]"),
+  z.strictObject({ kind: z.literal("orderHash"), orderHash: Bytes32 }).describe("a rollover orderDigest or LOP orderHash — reconcile venue lifecycle vs on-chain settler state (chain outranks venue)"),
   z.strictObject({ kind: z.literal("marketRef"), poolId: MarketId }).describe("a pool — re-hash its MarketId against live chain state"),
   z.strictObject({ kind: z.literal("submissionRef"), submissionRef: z.string() }).describe("a prior cork_submit reference — resolve it to a lifecycle state"),
   z.strictObject({ kind: z.literal("forSelfAdapter"), adapter: Address }).describe("a ForSelf adapter address (an integrator's own, or a generation's reference one) — read its CORK()/LOP()/WHITELIST() bindings on chain and name the generation they belong to: the check cork_decode cannot run chain-free, so a decode's `unverified` ForSelf leg points here. mode verify only"),
@@ -921,7 +920,7 @@ export const TrackInput = z.object({
 export type TrackInput = z.infer<typeof TrackInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 8. cork_capabilities (R6)
+// 8. cork_capabilities
 // ────────────────────────────────────────────────────────────────────────────
 export const CapabilitiesInput = z.object({
   topic: z.string().optional(),
@@ -930,11 +929,11 @@ export const CapabilitiesInput = z.object({
 export type CapabilitiesInput = z.infer<typeof CapabilitiesInput>;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 9. cork_submit (R5 submission — the only side-effecting tool; all venue writes)
+// 9. cork_submit — the only side-effecting tool; all venue writes
 // ────────────────────────────────────────────────────────────────────────────
 // Every action is an off-chain HTTPS POST to the as-built venue relaying a CALLER-authored (and
-// where the venue verifies it, CALLER-signed) payload [K1]. Commitments in the payload are
-// recomputed locally before relaying [K3].
+// where the venue verifies it, CALLER-signed) payload; this tool never signs. Commitments in the
+// payload are recomputed locally before relaying.
 const RolloverParamsWire = z.strictObject({
   srcCstToken: Address,
   dstCstToken: Address,
@@ -966,7 +965,7 @@ const RolloverOrderWire = z.strictObject({
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
   premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).describe("0=upfront, 1=on-settle — must match what the signature covers"),
-  rolloverIntentHash: Bytes32.describe("EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed [K3]"),
+  rolloverIntentHash: Bytes32.describe("EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed"),
   rolloverParams: RolloverParamsWire,
 });
 const RolloverIntentWire = z.strictObject({
@@ -982,12 +981,12 @@ export const SubmitAction = z.discriminatedUnion("type", [
   A("rollover-order", {
     order: RolloverOrderWire,
     intent: RolloverIntentWire,
-    signature: Hex.describe("the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs [K1]"),
+    signature: Hex.describe("the maker's EIP-712 signature over the OrderData (CorkSettler domain) — this tool never signs"),
     quoteRef: QuoteRef.optional().describe("the rollover RFQ quote this order accepts — checked here against the RFQ before relay with the venue's rules (user = requester, source pool, quoted destination and jitMarketHash, premium token, minPremiumPerShare ≥ the quote's, orderSize ≤ shares_max) and recorded by the venue with the order"),
   }).describe("relay a caller-signed rollover ERC-7683 order to the venue (build it with cork_prepare_orders rollover-intent)"),
   A("lop-order", {
     order: LopOrderStructWire,
-    signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs [K1]"),
+    signature: Hex.describe("the maker's EIP-712 signature over the LOP v4 order — this tool never signs"),
     extension: Hex.default("0x"),
     side: z.enum(["BUY", "SELL"]),
     ...ListingPremiumFields,

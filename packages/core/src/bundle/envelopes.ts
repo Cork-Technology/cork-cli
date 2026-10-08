@@ -2,8 +2,8 @@
 // means. A contract wallet never sends `fillOrderForSelf` itself — it arrives inside a Safe
 // `execTransaction`, an ERC-4337 `handleOps` bundle, an ERC-7579 `execute`, a Rhinestone intent,
 // or a MultiSend batch, often several deep. Before 2026-10-01 the decoder stopped at the first
-// layer and called the whole transaction an unknown target; a Zyfai fill (Safe 1.4.1 through
-// Rhinestone's IntentExecutor, test fixture `zyfai-rhinestone-fill-base.json`) decoded as
+// layer and called the whole transaction an unknown target; an integrator's fill (Safe 1.4.1
+// through Rhinestone's IntentExecutor, test fixture `zyfai-rhinestone-fill-base.json`) decoded as
 // `unknown_target` with nothing inside it read.
 //
 // This module peels ONE layer: given a call's bytes it answers "what calls does this envelope

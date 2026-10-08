@@ -166,7 +166,7 @@ describe("cork_submit rfq-answer: a fixed_rate label on a NAV template is named 
     },
   };
   const STUB_EXPIRY = Number(RFQ_IMPAIRMENT_EXPIRY);
-  // The option's terms are held to its order: the premium IS the order's amounts (the kernel's math).
+  // The option's terms are held to its order: the premium IS the order's amounts (the ACT/365 amount math).
   const NOTIONAL = 1000n * 10n ** 18n;
   const order = (salt: number) => ({ salt: String(salt), maker: WRITER.address, receiver: "0x0000000000000000000000000000000000000000", makerAsset: "0x5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c", takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: NOTIONAL.toString(), takingAmount: premiumAmount("0.05", NOTIONAL, BigInt(STUB_EXPIRY) - NOW).toString(), makerTraits: "0" });
   const option = (over: Record<string, unknown>) => ({ option_id: "opt1", chain_id: CHAIN, collateral_asset: JIT_TASK_PAIR.collateralAsset, reference_asset: JIT_TASK_PAIR.referenceAsset, mode: "liquidity_only", package_id: "balanced-v1", expiry: STUB_EXPIRY, premium_annualized: "0.05", notional_max_assets: "1000000000000000000000", fresh_until: Number(NOW) + 600, order: order(1), ...over });

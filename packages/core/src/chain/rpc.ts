@@ -3,7 +3,7 @@
 //
 // Precedence: an explicit URL (CORK_RPC_URL / --rpc-url) always wins — no fallback — but it FAILS
 // CLOSED: one eth_chainId probe must prove it serves the requested chain before any client is
-// exposed (audit MCP-NET-002). Otherwise: a committed default for the chain →
+// exposed. Otherwise: a committed default for the chain →
 // retried with backoff; if it stays down (breaker opens), fall back to chainlist for eligible public
 // chains, latency-probing candidates and verifying each reports the right chainId before use.
 //
@@ -32,8 +32,8 @@ export interface ResolvedRpc {
 }
 
 // Committed defaults. NOTE: these Tenderly gateway URLs embed access tokens and are intentionally
-// committed (owner decision 2026-07-17; Base added 2026-08-12 — chainlist.org was previously the
-// ONLY automatic path for 8453, the #3 finding of the dependency SPOF audit) — unlike
+// committed (mainnet + Arbitrum 2026-07-17; Base added 2026-08-12 — chainlist.org was previously
+// the ONLY automatic path for 8453, a single point of failure) — unlike
 // CORK_RPC_URL/CORK_TEST_RPC, which stay env-only. All three are one provider: a Tenderly-wide
 // outage degrades every chain to the chainlist fallback at once (accepted; disclosed in /readyz).
 export const DEFAULT_RPCS: Readonly<Record<number, string>> = {
@@ -294,7 +294,7 @@ export function reportEndpointFailure(chainId: number, url: string, cfg: RpcConf
   deps.saveState(st);
 }
 
-/** An explicitly configured RPC that answers eth_chainId with the WRONG chain (F21): every read
+/** An explicitly configured RPC that answers eth_chainId with the WRONG chain: every read
  *  through it would be wrong-chain data stamped with the requested chainId. */
 export class RpcChainMismatchError extends Error {
   constructor(url: string, expected: number, got: number) {
@@ -358,7 +358,7 @@ export async function resolveRpc(
   deps: RpcDeps = realDeps(),
 ): Promise<ResolvedRpc | null> {
   // 1. explicit URL wins — no fallback — but it FAILS CLOSED: no client is exposed until one
-  //    eth_chainId probe proves equality with the requested chain (audit MCP-NET-002; F21 made
+  //    eth_chainId probe proves equality with the requested chain (an earlier version made
   //    the check best-effort, so an endpoint that simply did not answer was used verbatim and
   //    every read through it carried the requested chain's label whatever chain answered).
   //    Only the proven equality is memoized, so a blip does not become a sticky verdict.

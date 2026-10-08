@@ -1,4 +1,4 @@
-// Password-protected key files for CLI signing. The MCP server never signs [K1]: this module
+// Password-protected key files for CLI signing. The MCP server never signs: this module
 // lives in the CLI package, which the MCP package cannot depend on, and a test fails if any
 // MCP or core source reaches it (packages/cli/test/keystore.test.ts).
 //

@@ -298,7 +298,7 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
 
   it("rollover kind=orders: a settler this build does not recognize gets ZERO reads and cannot gain chain provenance", async () => {
     // The settler address comes from the venue row. Querying an arbitrary contract would let it
-    // answer a lifecycle question we then present as chain truth (audit STATE-003).
+    // answer a lifecycle question we then present as chain truth.
     const attacker = "0x4444444444444444444444444444444444444444";
     const active = "0xF4ffd4b3FAedb784b04d1883119840515f224C2f"; // configured ExactSettler
     const rows = [

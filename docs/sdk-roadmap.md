@@ -1,6 +1,6 @@
 # The SDK roadmap: why the binary comes first, and what comes next
 
-**Audience:** integrators who wrap Cork inside their own trust boundary. Zyfai first among them.
+**Audience:** integrators who wrap Cork inside their own trust boundary.
 
 This page answers three questions. Why is the signed binary the integration surface today? What
 is the path to a library? How does each stage keep the threat-model posture? The hands-on guides

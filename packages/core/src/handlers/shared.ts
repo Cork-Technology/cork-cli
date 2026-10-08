@@ -115,20 +115,20 @@ export function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext)
     // "not started" is definitive (no bytes left this process); "cancelled mid-flight" is not —
     // a relay may have reached the venue before the abort, and only the venue's own idempotency
     // (a replay on the same clientRequestId, a 409 on a different payload) can say.
-    return unavailable(chainId, "request_aborted", `${err.message} — the caller's deadline or cancellation ended this request, and no venue failure was recorded (the venue did nothing wrong). ${err.message.includes("not started") ? "Nothing was sent." : "A call cancelled mid-flight MAY have reached the venue."} Retry with the same clientRequestId if the work is still wanted [K2]: a relay the venue already took answers as a replay, never as a second order`, ctx);
+    return unavailable(chainId, "request_aborted", `${err.message} — the caller's deadline or cancellation ended this request, and no venue failure was recorded (the venue did nothing wrong). ${err.message.includes("not started") ? "Nothing was sent." : "A call cancelled mid-flight MAY have reached the venue."} Retry with the same clientRequestId if the work is still wanted: a relay the venue already took answers as a replay, never as a second order`, ctx);
   }
   throw err;
 }
 
 /** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver).
- *  A wrong-chain EXPLICIT endpoint (F21) surfaces as teachable invalid input, not a raw throw. */
+ *  A wrong-chain EXPLICIT endpoint surfaces as teachable invalid input, not a raw throw. */
 export async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<ResolvedRpc | null> {
   try {
     return await (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
   } catch (err) {
     // Both failures are about the endpoint the caller explicitly configured, so both surface as
     // teachable input errors naming `rpcUrl` rather than degrading to "no RPC resolved" — which
-    // would tell an operator who HAS set CORK_RPC_URL to go and set it (audit MCP-NET-002).
+    // would tell an operator who HAS set CORK_RPC_URL to go and set it.
     // A mismatch is proven wrong-chain; a verification failure is an absence of proof and the
     // message says so, so a retry after connectivity returns is the obvious next move.
     if (err instanceof RpcChainMismatchError || err instanceof RpcChainVerificationError) {
@@ -369,7 +369,7 @@ export function chainReadFailed(chainId: ChainId, err: unknown, extra: Array<{ c
 }
 
 /**
- * Map a LOCAL computation failure (math/domain/encoding throw) to its own honest envelope [C11].
+ * Map a LOCAL computation failure (math/domain/encoding throw) to its own honest envelope.
  * Never routed through chainReadFailed: a local port/domain throw relabeled as "chain read
  * failed — the pool probably doesn't exist" sends the caller chasing the wrong cause.
  */
@@ -440,7 +440,7 @@ export function envelope(args: {
     warnings: args.warnings ?? [],
     provenance: {
       source: args.source,
-      // Every backed result states its data mode [R1/§7]: chain reads go over RPC =
+      // Every backed result states its data mode: chain reads go over RPC =
       // lite-decentralized; venue-backed reads/writes (api-phoenix) = hybrid (venue-discovered,
       // chain-verified best-effort; renamed from "centralized" 2026-08-13).
       // full-decentralized (HyperSync) is passed explicitly by its handler.
@@ -469,7 +469,7 @@ export function unavailable(chainId: ChainId, code: string, message: string, ctx
  *  THROWS ToolInputError naming the `generation` field: the label is the caller's OWN input, so
  *  it is invalid-input-class (exit 2) on EVERY path — getPoolDep already threw it, and until
  *  2026-09-22 this helper answered the same typo with an `unavailable` envelope (exit 3): two
- *  exit codes for one fact (review B1). `generation_read_only` (and any other code) stays an
+ *  exit codes for one fact. `generation_read_only` (and any other code) stays an
  *  `unavailable` envelope PLUS `provenance.generation` naming the set the call resolved to, so a
  *  refused prepare and an accepted one describe the same generation in the same place — the
  *  caller never rebuilds this by hand (six handlers dropped the label before this helper
@@ -500,10 +500,10 @@ export function poolNotFound(chainId: ChainId, poolId: string, ctx: HandlerConte
   return unavailable(chainId, "pool_not_found", `pool ${poolId} does not exist on chainId ${chainId} (market returned a zeroed struct); check the poolId/chainId pairing`, ctx);
 }
 
-/** deadlineAt (absolute) pins the bytes across retries [K2]; deadlineSeconds (relative, the
+/** deadlineAt (absolute) pins the bytes across retries; deadlineSeconds (relative, the
  *  default) re-anchors to the clock on each call. deadlineAt is validated for FORMAT only by
  *  the schema — a past moment builds fine and can only revert on-chain, so it is disclosed as
- *  would_revert, naming the component that reverts [F19]. One resolver for the three surfaces
+ *  would_revert, naming the component that reverts. One resolver for the three surfaces
  *  that take the pair (phoenix bundles, forSelf pool calls, forSelf fills). */
 export function resolveDeadline(
   input: { deadlineAt?: string | undefined; deadlineSeconds: number },
@@ -607,7 +607,7 @@ export async function diagnoseOracleDeployFailure(
 export { isTransportError as isTransportFailure } from "../chain/rpc.ts";
 
 /** The underwriter of one RFQ answer row. The venue serves it at ROW level in the `current`
- *  view and INSIDE the stored answer payload in the `full` view (cork-api get-rfq.ts) — a reader
+ *  view and INSIDE the stored answer payload in the `full` view (the cork-api RFQ read) — a reader
  *  of one shape alone finds nothing in the other, and a check built on it silently never runs.
  *  Every reader goes through here. */
 export function rfqAnswerUnderwriter(row: unknown): string | undefined {

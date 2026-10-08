@@ -30,7 +30,7 @@ const lc = (a: string) => a.toLowerCase();
 
 // ── The maker-side context a signed extension carries ───────────────────────────────────────
 
-/** The maker-side JIT hook decoded from the order's own extension bytes [K3] — who creates the
+/** The maker-side JIT hook decoded from the order's own extension bytes — who creates the
  *  pool, what funds the mint, and which tokens the embedded ERC-2612 permits cover. */
 export interface MakerJitContext {
   adapter: `0x${string}`;
@@ -59,7 +59,7 @@ export interface MakerExtensionContext {
 /** Decode what the extension says about the MAKER side, never throwing: a non-JIT extension
  *  (auction-only, or foreign bytes) yields `jit: null`; unreadable fields yield null legs. The
  *  JIT hook is decoded by its adapter's CLASSIFICATION against `generations` (jit-extension.ts,
- *  2026-09-22, review A3) — an adapter no generation configures yields `jit: null`, so the
+ *  2026-09-22) — an adapter no generation configures yields `jit: null`, so the
  *  readiness verdict downstream reads `unknown` for that leg instead of judging a payload on a
  *  guessed wire (this context feeds `maker_not_ready`, which EXCLUDES rows from the ranked book). */
 export function decodeMakerExtensionContext(generations: readonly ResolvedGeneration[], extension: `0x${string}` | undefined): MakerExtensionContext {

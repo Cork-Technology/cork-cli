@@ -8,7 +8,7 @@ import type { Envelope } from "@cork/schemas";
 
 export async function handleCapabilities(input: { topic?: string; search?: string }, ctx: HandlerContext): Promise<Envelope> {
   if (input.topic === "verify") {
-    // Independently re-derive each deployed address from (deployer, salt, initCodeHash) [C10].
+    // Independently re-derive each deployed address from (deployer, salt, initCodeHash).
     // Entries carry their own deployer where it is not the Safe Singleton Factory — the
     // market-registry 0.3.2 set is guarded CREATE2 from the AtomicDeployer (guard provenance
     // included so the effective salt is itself re-derivable from the deploy calldata).

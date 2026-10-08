@@ -1,4 +1,4 @@
-// Tiered surface-change gating (owner-approved 2026-08-11): the drift gate used to demand a full
+// Tiered surface-change gating (2026-08-11): the drift gate used to demand a full
 // Layer-B eval run for ANY advertised-surface diff, pricing a typo fix the same as a tool
 // redesign — which quietly discourages fixing advertised doc-rot at all. The tier boundary is
 // MECHANICAL, never a judgment call ("it's just wording" is precisely how semantic drift ships):

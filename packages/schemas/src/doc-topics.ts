@@ -3,7 +3,7 @@
 // topic:"signing" (and aliases), (b) the MCP server `instructions` string (the summary,
 // verbatim), and (c) the HTTP `/docs/signing` page (the body, verbatim). The first topic exists
 // because a REMOTE deployment's clients receive UNSIGNED artifacts and must learn in-band how to
-// complete them: the server never signs and never holds keys [K1], and there is deliberately no
+// complete them: the server never signs and never holds keys, and there is deliberately no
 // broadcast/relay tool (a public relay would be farmed) — clients broadcast through their own
 // RPC endpoint after validating the signed bytes with cork_decode kind:"tx".
 
@@ -67,7 +67,7 @@ export const X_UNITS = {
 
 /** Which envelope state a family's codes ride: `ok` = informational on a served result;
  *  `unavailable` = the call was honestly not servable; `conflict` = the tool executed and found
- *  a disagreement (chain outranks indexer [K7]); `mixed` = the same code serves more than one
+ *  a disagreement (chain outranks indexer); `mixed` = the same code serves more than one
  *  state and its row says how. */
 export type WarningEnvelopeClass = "ok" | "unavailable" | "conflict" | "mixed";
 
@@ -112,7 +112,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "verification mismatch",
     envelope: "conflict",
     contract:
-      "a local recomputation disagreed with a supplied or venue-claimed value [K3/K7] — the payload was NOT relayed / the row was not trusted; the code names WHICH verification failed so callers can branch (two also ride ok as INFO on an orderbook read: order_hash_mismatch counts rows dropped for not hashing to their own claimed orderHash, listing_traits_mismatch counts rows whose venue allowedSender echo contradicted the signed makerTraits — the served value is the local decode)",
+      "a local recomputation disagreed with a supplied or venue-claimed value — the payload was NOT relayed / the row was not trusted; the code names WHICH verification failed so callers can branch (two also ride ok as INFO on an orderbook read: order_hash_mismatch counts rows dropped for not hashing to their own claimed orderHash, listing_traits_mismatch counts rows whose venue allowedSender echo contradicted the signed makerTraits — the served value is the local decode)",
     codes: [
       "artifact_digest_mismatch", "intent_hash_mismatch", "venue_digest_mismatch", "order_hash_mismatch",
       "marketid_mismatch", "create2_mismatch", "chainid_mismatch", "status_mismatch", "extension_salt_mismatch",
@@ -171,7 +171,7 @@ export const DOC_TOPICS: Record<string, DocTopic> = {
     body: `# Signing and executing prepared artifacts
 
 Every \`cork_prepare_*\` result is **UNSIGNED**. This server never signs, never holds keys, and
-never broadcasts on-chain transactions [K1]. Each prepare result carries a \`data.execution\`
+never broadcasts on-chain transactions. Each prepare result carries a \`data.execution\`
 block naming its exact completion path; the two artifact families are:
 
 ## Family A — unsigned Ethereum transactions
@@ -214,8 +214,8 @@ Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollove
   recovery + exact-bytes reconstruction check); its \`submitInput\` passes VERBATIM to
   \`cork_submit\` lop-order.
 - **Rollover intents** go straight to \`cork_submit\` rollover-order.
-- \`cork_submit\` relays only — it recomputes every commitment locally before relaying [K3] and
-  never signs [K1].
+- \`cork_submit\` relays only — it recomputes every commitment locally before relaying and
+  never signs.
 
 ## Signing from the \`ch\` CLI with a keystore
 
@@ -236,7 +236,7 @@ sign. Nothing is broadcast: send a signed transaction through your own RPC as in
   plain-English statement of what the bytes do, leg by leg.
 - Allowance prerequisites: every LOP-order prepare result (maker-order, finalize-maker-order,
   taker-fill) carries \`data.approvals\` — one entry per required grant with holder, token,
-  spender, stage, and the UNSIGNED approve tx payload [K1]; entries confirmed missing on-chain
+  spender, stage, and the UNSIGNED approve tx payload; entries confirmed missing on-chain
   raise \`approval_missing\`. The lifecycle in one line: the MAKER's grants (maker asset → the
   LOP; or, with Permit2 sourcing, BOTH layers: token → Permit2 AND the Permit2 internal
   allowance → the LOP with a live expiration) must exist BEFORE the order rests — a resting
@@ -262,7 +262,7 @@ sign. Nothing is broadcast: send a signed transaction through your own RPC as in
     name: "modes",
     aliases: ["data-modes", "backends", "hybrid", "data-mode"],
     summary:
-      "Three data modes, each a CONNECTIVITY PLEDGE about which external parties a call may contact, forming a trust ladder. hybrid (the default for list resources; renamed from 'centralized' 2026-08-13): the venue DISCOVERS rows and the chain CONFIRMS them best-effort — rows carry verification:'confirmed'|'unverified', rows the chain definitively refutes are DROPPED with a status_mismatch warning [K7], and with no RPC every row serves labeled 'unverified'. lite-decentralized (the default for chain-state resources): direct RPC point reads, YOUR RPC only, nothing else contacted. full-decentralized: chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue — the only mode that can make completeness/absence claims. Omit mode to get each resource's natural backend; hints prove presence, never absence.",
+      "Three data modes, each a CONNECTIVITY PLEDGE about which external parties a call may contact, forming a trust ladder. hybrid (the default for list resources; renamed from 'centralized' 2026-08-13): the venue DISCOVERS rows and the chain CONFIRMS them best-effort — rows carry verification:'confirmed'|'unverified', rows the chain definitively refutes are DROPPED with a status_mismatch warning, and with no RPC every row serves labeled 'unverified'. lite-decentralized (the default for chain-state resources): direct RPC point reads, YOUR RPC only, nothing else contacted. full-decentralized: chain event ENUMERATION over HyperSync (needs ENVIO_API_TOKEN), never the venue — the only mode that can make completeness/absence claims. Omit mode to get each resource's natural backend; hints prove presence, never absence.",
     body: `# Data modes — the side-by-side
 
 A mode name is a CONNECTIVITY PLEDGE: it states which external parties the call may contact.
@@ -289,7 +289,7 @@ implementation, two consumers. The split rule: a row the chain DEFINITIVELY refu
 (transport failure, page beyond the verification budget, unparseable row, vocabulary neither
 side knows) is KEPT, labeled verification:'unverified'.
 
-- orderbook — each row's order is re-hashed locally [K3], its extension checked against the
+- orderbook — each row's order is re-hashed locally, its extension checked against the
   salt/makerTraits the way OrderLib.isValidExtension does at fill, its signature ecrecovered
   (a contract maker's is put to its own isValidSignature staticcall), and its 1inch invalidator
   read: a filled-or-cancelled order is dropped (the venue has listed dead rows before — observed
@@ -319,7 +319,7 @@ Budget: pages up to 50 rows verify fully; larger pages verify the newest 50 and 
 Default (omit mode): state resources answer over your RPC alone; list resources answer hybrid.
 Reach for lite-decentralized as an explicit RPC-only pledge; reach for full-decentralized when
 you must NOT trust the venue's selection of rows (auditing what it omitted) or need absence
-claims. When indexer and chain disagree, chain wins — everywhere [K7].`,
+claims. When indexer and chain disagree, chain wins — everywhere.`,
     searchText:
       "data mode modes backend backends hybrid centralized lite-decentralized full-decentralized venue verified verification trust pledge which mode should i use rpc only hypersync envio token offline degradation unverified confirmed dropped rows chain outranks venue absence completeness",
   },
@@ -330,9 +330,9 @@ claims. When indexer and chain disagree, chain wins — everywhere [K7].`,
       "Ten scale conventions meet on this surface and only some are WAD, because the unit belongs to whoever owns the value: a token owns its decimals (amounts are NEVER rescaled), a deployed contract owns its fixed-point base (Cork fee fields are 1e18 = 1%, not 1.0), the venue owns its wire format (premiums are fraction strings like \"0.041\" on the RFQ and, since cork-api 0.3.3, the book's premiumAnnualized; the book's legacy percent-number `premium` was removed 2026-08-17), and 1inch owns the Fusion bases (rate bump 1e7, fees 1e5, discounts 1e2, gasPriceEstimate 1000-per-gwei). Every scaled field states its own scale in its schema description — read the label, never assume 18 decimals; money and rate OUTPUTS additionally carry a `scales` block plus the pair's collateralDecimals/referenceDecimals. Three collisions cause most real mistakes: 1e18 = 1.0 and 1e18 = 1% are identically shaped, `premium` means four different things across the book/RFQ/rollover/auction surfaces, and rateMin/rateMax are absolute rates under the 2.1.0 model but percentage bands on the gated legacy path. Compare and convert in exact integer arithmetic over the decimal strings — never floats — for your OWN conversions; guards that predict a venue verdict instead replicate the venue's own arithmetic exactly. Call cork_capabilities topic:\"units\" for the full table with a worked exemplar per scale.",
     body: `# Numeric units and scales
 
-Ten scale conventions live on this surface — the table below is exhaustive. (The footgun audit
-counted eight: it excluded the token-decimals baseline and the per-share hybrid, which this table
-includes.) Every row's scale is inherited from whoever owns the value — Cork's own deployed
+Ten scale conventions live on this surface — the table below is exhaustive, counting the
+token-decimals baseline and the per-share hybrid as scales of their own. Every row's scale is
+inherited from whoever owns the value — Cork's own deployed
 contracts included; this tool surface mints no scale of its own. The operating rule has two
 halves:
 
@@ -364,7 +364,7 @@ they are the same claim, so a field description and this table can be checked ag
 | \`D18{1}\` (WAD) | 1e18 = 1.0 | \`50000000000000000\` | rateMin, rateMax, rateChangePerDayMax, rateChangeCapacityMax (the four constraint values a JIT order carries and signs), rate, rateOverride, swapRate, worstRate | Cork contracts (MarketRegistry + recipes) |
 | \`D18{%}\` | 1e18 = 1% | \`5000000000000000000\` | swapFeePercentage, unwindSwapFeePercentage (the bound follows the pool manager's wire: cap 5e18 = 5% inclusive on an 8-field manager; strictly below 100e18 = 100% on a 10-field manager, where the two fees are also PART OF THE POOL ID — two markets that differ only in a fee are two pools), recipe constants named \`*_PERCENTAGE\` | Cork contracts (pool manager + recipes) |
 | \`{%}\` percent number | PERCENT number, not a fraction | \`5\` (JSON number, 0..1000) | \`premium\` on the orderbook listing (cork_submit lop-order and the finalize listing block) — REMOVED by the venue 2026-08-17; the field survives in this tool's schema only to refuse with teaching. Its successor is the fraction-string premiumAnnualized in the next row | cork-api ≤0.3.14 (the legacy book scale) |
-| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized — AND, since cork-api 0.3.3, the BOOK listing's premiumAnnualized (same name, same convention, per-surface bounds: RFQ pattern \`^(0\|0\\.[0-9]{1,18})$\` with the < 0.5 cap; book pattern \`^\\d{1,3}(\\.\\d{1,18})?$\` with a ≤ 100 cap mirroring the legacy 10000% ceiling — the patterns are structure, both caps are relaxable POLICY) | the venue — scale SCHEMA-GATED at write on every surface; quote ECONOMICS stored verbatim. PINNED forever by R13 — a WAD variant would be a NEW field name |
+| \`{%}\` fraction string | fraction STRINGS | \`"0.05"\` | RFQ answer \`options[].premium_annualized\`, the counter's premiumAnnualized — AND, since cork-api 0.3.3, the BOOK listing's premiumAnnualized (same name, same convention, per-surface bounds: RFQ pattern \`^(0\|0\\.[0-9]{1,18})$\` with the < 0.5 cap; book pattern \`^\\d{1,3}(\\.\\d{1,18})?$\` with a ≤ 100 cap mirroring the legacy 10000% ceiling — the patterns are structure, both caps are relaxable POLICY) | the venue — scale SCHEMA-GATED at write on every surface; quote ECONOMICS stored verbatim. PINNED forever by the versioning rule (a unit never changes in place) — a WAD variant would be a NEW field name |
 | \`D7{%}\` | base 1e7 = +100% | \`500000\` | initialRateBump, points[].rateBump — the decaying auction curve | 1inch Fusion v3.1 (signed into the extension bytes) |
 | \`D5{%}\` | 1e5 base | \`5000\` | integratorFee, resolverFee (uint16, decoded from Fusion extraData) | 1inch Fusion FeeTaker |
 | \`D2{%}\` | 1e2 base | \`5\` | whitelistDiscountNumerator, surplusFeePercent (uint8) | 1inch Fusion FeeTaker |
@@ -384,8 +384,8 @@ by the venue 2026-08-17; the schema field survives only to refuse with teaching)
 \`"0.041"\` (fraction string) · rollover \`minPremiumPerShare\` \`12000000000000000\` (base units
 per 1e18 share) · auction \`initialRateBump\` \`500000\` (1e7 above the signed floor). Confirm
 which surface you are on before writing the number. The book and the RFQ have CONVERGED: the
-book's field \`premiumAnnualized\` shares the RFQ's name and fraction convention — the R13
-mechanism working as designed, a new unit arriving as a new name — and with the percent field
+book's field \`premiumAnnualized\` shares the RFQ's name and fraction convention — the versioning
+rule working as designed, a new unit arriving as a new name — and with the percent field
 gone the live collision is down to three.
 
 **3 — rateMin/rateMax across generations.** Under the 2.1.0 model these four constraint values are
@@ -416,7 +416,7 @@ identity is a different market, not a parameter of the same one.
 - **Mind the silent laundering window.** Between 2^53 and 1e21 a JSON *number* parses to a rounded
   float that still stringifies without an exponent, so a corrupted value looks pristine downstream.
   That window covers roughly 0.01 to 1000 tokens at 18 decimals — most real trades.
-- **The field name IS the convention marker (versioning rule R13).** A field's unit never changes
+- **The field name IS the convention marker (the versioning rule).** A field's unit never changes
   in place — a new unit means a NEW field name. So a name, once learned, holds for every record
   that will ever exist under it (\`premium_annualized\` is a fraction-string in the first record
   and the last), and history reads never need per-record convention stamps. Corollary: when a
@@ -437,13 +437,13 @@ identity is a different market, not a parameter of the same one.
     name: "orders",
     aliases: ["order-lifecycle", "reservation", "oco", "one-cancels-the-other", "ladder", "liveness", "exclusivity"],
     summary:
-      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and the kernel, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so a rung is re-read from the invalidator before it is filled, and any view that ranks orders must do the same. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
+      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and trading agents, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so a rung is re-read from the invalidator before it is filled, and any view that ranks orders must do the same. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
     body: `# Orders — reach, fill regime, groups, price shape, provenance, liveness
 
-One vocabulary for a 1inch LOP v4 order as this surface, the venue, and the kernel use it. One term
+One vocabulary for a 1inch LOP v4 order as this surface, the venue, and trading agents use it. One term
 per concept; the synonyms table at the end maps every other word you will meet onto it. Everything
 below is read from the SIGNED order (makerTraits, extension, amounts), never from venue metadata —
-the venue discovers rows, the signature and the chain decide what they mean [K3, K7]. This page is the VOCABULARY; the tool that builds and fills orders is documented at topic:\"prepare order\".
+the venue discovers rows, the signature and the chain decide what they mean. This page is the VOCABULARY; the tool that builds and fills orders is documented at topic:\"prepare order\".
 
 ## The entities, in the order they happen
 
@@ -452,7 +452,7 @@ the venue discovers rows, the signature and the chain decide what they mean [K3,
 | **request** (RFQ) | a hedger asks for cover: pair, notional, expiry window, validity | venue (\`cork_query rfqs\`) |
 | **answer** | an underwriter's reply on a request: quoted options, or a pass with a reason code | venue |
 | **quote** | one priced option inside an answer; a price, not a commitment | venue |
-| **counter** | the requester's non-committal bid on the request; an **echo** is a counter at exactly a quoted price naming that option (a kernel convention, not a venue rule) | venue |
+| **counter** | the requester's non-committal bid on the request; an **echo** is a counter at exactly a quoted price naming that option (an agent convention, not a venue rule) | venue |
 | **order** | a signed 1inch LOP v4 maker order: the only authenticated statement of price on this surface | signed bytes; listed by the venue book |
 | **offer** | an order somebody can actually buy: a live order, or a quote a live order cites. A quote with no live order behind it is a price nobody can buy | derived |
 | **fill** | an on-chain execution of an order by a taker | chain (\`cork_query fills\`) |
@@ -490,11 +490,11 @@ retires all of them: a **group** (one-cancels-the-other). A **ladder** is a grou
 in price, reach, or expiry: a *revision ladder* re-quotes one request at better prices on one nonce
 (the taker takes the best, the rest die); an *exclusive-then-open* ladder pairs a reserved best rung
 with an open worse rung. A rung that dies because a sibling filled is **dead-by-sibling**: the chain
-knows, the venue does not — the row keeps reading OPEN until a status sync, so \`taker-fill\` re-reads the LOP invalidator before it builds (its liveness pre-flight), and any view that ranks or announces orders must do the same [K7].
+knows, the venue does not — the row keeps reading OPEN until a status sync, so \`taker-fill\` re-reads the LOP invalidator before it builds (its liveness pre-flight), and any view that ranks or announces orders must do the same.
 
 ## The underwriter's moves, as one call each (cork_prepare_orders)
 
-- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; your \`premiumAnnualized\` + \`expiryTimestamp\`, or an option of YOUR own earlier answer (\`answerId\` + \`optionId\`, re-quoted: the new answer supersedes it), supplies the price; the amounts are the kernel's — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for \`fillSender\` or the RFQ's declared fill_sender; when neither exists the order is OPEN and \`fill_sender_unknown\` says why (the requester account may not be the LOP caller — a reservation is never guessed); \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. Under the venue's RFQ v2 the quote CARRIES the signed order: \`answer.quotedOption\` is the answer option built from the same numbers (fresh_until = the order's expiry), so the answer is posted first (rfq-write → cork_submit rfq-answer, which hold each option to its order and prove the order signature) and the order goes to the book after it, citing it — the venue refuses a quote whose order already rests there. The tool never chooses a premium.
+- \`answer-rfq\` — answer an RFQ with a firm, reserved cover offer: the RFQ record supplies the pair, the notional, the requester and the expiry window; your \`premiumAnnualized\` + \`expiryTimestamp\`, or an option of YOUR own earlier answer (\`answerId\` + \`optionId\`, re-quoted: the new answer supersedes it), supplies the price; the amounts follow the ACT/365 rule — takingAmount = premium × notional × tenor / 365 days in collateral units, rounded toward the maker; makingAmount = notional as 18-decimal cST; the maker side is the cST of the pool the cover creates on fill (derive-cork-pool). \`reserve\` (default true) reserves the fill for \`fillSender\` or the RFQ's declared fill_sender; when neither exists the order is OPEN and \`fill_sender_unknown\` says why (the requester account may not be the LOP caller — a reservation is never guessed); \`ocoGroup\` defaults to 'rfq:<rfqId>', and passing ONE key across several RFQs answers them all with one capacity. The order expiry follows the venue's re-rest rule. Under the venue's RFQ v2 the quote CARRIES the signed order: \`answer.quotedOption\` is the answer option built from the same numbers (fresh_until = the order's expiry), so the answer is posted first (rfq-write → cork_submit rfq-answer, which hold each option to its order and prove the order signature) and the order goes to the book after it, citing it — the venue refuses a quote whose order already rests there. The tool never chooses a premium.
 - \`refresh-order\` — re-rest a resting order of yours before it expires: the same terms on the SAME nonce (one bit — the old order and the new one cannot both fill) with a new expiry; refused when the bit is already spent (a refresh of a dead order could never fill — post a maker-order).
 - Lifting the best offer is not a sugar: \`offers\` (or the ranked \`orderbook\`) names the order, and \`taker-fill\` with that \`orderHash\` sets the cap from the signed price (the ceiling for a decaying row) — two calls, no derived cap to trust.
 
@@ -505,7 +505,7 @@ The venue has no push and no \`updated_after\`, so monitoring is client-side pol
 - "Better" is a lower unit price on a SELL row (higher on a BUY row, where the maker pays), or the same price reserved for this fill sender instead of open — an order nobody can race.
 - \`wait\` long-polls: re-read the book every 2 s until \`changes.changed\` or the seconds run out (max 25, under the HTTP ingress deadline); \`waited\` says how it ended. The CLI's \`ch query orderbook --watch [--interval s] [--iterations n]\` loops this, printing the first read and then only the ticks that changed.
 - A watermark is per fill sender: reach and exclusion differ per sender, so a token taken for another account is refused.
-Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key under the \`oco-group:\` namespace, a prefix no clientRequestId may carry — so a group seed and an id seed are never the same string; what remains is the 40-bit truncation any two seeds share, birthday-rare, disclosed on every maker-order); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes [K2]).
+Sharing a nonce is a CHOICE made through \`ocoGroup\` on maker-order (the nonce derives from the group key under the \`oco-group:\` namespace, a prefix no clientRequestId may carry — so a group seed and an id seed are never the same string; what remains is the 40-bit truncation any two seeds share, birthday-rare, disclosed on every maker-order); without one, each request derives its own nonce from its idempotency key (distinct requests, distinct bits; retries, identical bytes).
 Because the rungs share one bit, cancelling ANY rung (\`cancel\`, scope \`order\`) retires the whole group. \`cancel\` with scope \`slot\` builds \`bitsInvalidateForOrder(makerTraits, mask)\` instead: one transaction that spends the rung's bit AND the bit of every other resting order of yours in the same 256-bit slot word (nonce >> 8), read from the venue book by maker; the result lists every order the sweep retires (\`retires.orders\`, relation \`shared-bit\` for a group sibling, \`same-slot\` for a different nonce in the word). Honest sizing: nonces here derive from keccak seeds, so two independent orders share a slot in about one pair in 2^32 — the sweep retires more than a plain cancel only when nonces were pinned to one slot (SDK \`nonce\`) or chosen by another tool, and the result says when it found no sibling. The venue does not index cancels: a swept row stays OPEN on the book until a chain read drops it.
 
 ## Series and epoch: mass cancel
@@ -544,13 +544,13 @@ order backs it, **indicative** otherwise — \`cork_query offers\` lists the liv
 | dead-by-sibling | a group sibling filled or was cancelled | chain only | invalidator; the venue row still says OPEN |
 | dead-by-epoch | the maker bumped the series epoch | chain only | epoch read; the venue row still says OPEN |
 
-The invalidator bit says only SPENT: filled, cancelled, and dead-by-sibling read the same on chain. \`cork_track reconcile\` reads the bit and the fills feed and reports \`filled-or-cancelled\` for a spent bit (with this order's fills, if any) while the venue still lists the row OPEN — that disagreement is \`status_mismatch\` (conflict), chain outranking venue [K7]. Telling cancelled from dead-by-sibling needs the sibling's own fill or cancel event.
+The invalidator bit says only SPENT: filled, cancelled, and dead-by-sibling read the same on chain. \`cork_track reconcile\` reads the bit and the fills feed and reports \`filled-or-cancelled\` for a spent bit (with this order's fills, if any) while the venue still lists the row OPEN — that disagreement is \`status_mismatch\` (conflict), chain outranking venue. Telling cancelled from dead-by-sibling needs the sibling's own fill or cancel event.
 
 ## Synonyms — say the left column
 
 | use this | you will also see | note |
 |---|---|---|
-| reserved | dedicated, private, single-taker, allowed-sender order, \`PrivateOrder\` | the board and the kernel say dedicated; 1inch says allowed sender |
+| reserved | dedicated, private, single-taker, allowed-sender order, \`PrivateOrder\` | trading agents say dedicated; 1inch says allowed sender |
 | open | public, unreserved, any-taker | |
 | fill sender | taker, \`msg.sender\`, caller | the beneficiary may differ (adapter fills) |
 | group | OCO, OCA, one-cancels-the-other, shared nonce, bracket | the mechanism is the nonce bit |
@@ -985,7 +985,7 @@ Every tool returns \`{ state, data, warnings[], provenance, schemaVersion }\`. *
 before trusting \`data\`:** \`ok\` = use data, and any warnings are LABELS on a served result;
 \`unavailable\` = honestly not servable (do not retry the same call unchanged — \`warnings[0].code\`
 says why); \`conflict\` = the tool executed and found a disagreement — surface it, never paper
-over it, chain outranks indexer [K7].
+over it, chain outranks indexer.
 
 \`warnings[].code\` is a BRANCHABLE CONTRACT: codes are stable identifiers, messages are teaching
 prose. Branch on the code; read the message for the fix (each message names concrete values and

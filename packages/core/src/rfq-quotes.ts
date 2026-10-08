@@ -1,8 +1,9 @@
-// RFQ v2 quotes carry their order (cork-api 0.4.5 post-answer.schema.ts): a quoted new_position
+// RFQ v2 quotes carry their order (cork-api 0.4.5 RFQ v2 answer schema): a quoted new_position
 // option is the exact signed 1inch order the underwriter stands behind, plus the terms a
 // requester reads. The order_signature proves only the ORDER; the option's own terms —
 // premium, capacity, freshness — are signed by the top-level CorkRfqWrite signature, which the
-// venue verifies from cork-api PR #113 onward (older 0.4.5 builds did not). These checks hold
+// venue verifies in builds carrying the full-answer proof fix (production cork-api 0.4.6 does;
+// older 0.4.5 builds did not). These checks hold
 // an option to the order it carries before anything is relayed, so a quote cannot show one
 // price and fill at another.
 

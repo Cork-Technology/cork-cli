@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  # Versioning policy R1: the version is written in one place (each package's manifest); every
+  # The version is written in each package's manifest; every
   # copy — including this tag — is checked against it. A tag that disagrees fails the release.
   version-gate:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
           for p in packages/*/package.json; do
             have=$(bun -p "(await import('./$p')).default.version")
             if [ "$have" != "$want" ]; then
-              echo "::error::$p says $have but the tag is $GITHUB_REF_NAME — bump the manifest or fix the tag (policy R1)"; exit 1
+              echo "::error::$p says $have but the tag is $GITHUB_REF_NAME — bump the manifest or fix the tag"; exit 1
             fi
           done
           echo "all package manifests agree with $GITHUB_REF_NAME"
@@ -170,7 +170,7 @@ jobs:
             *)     ! printf '%s\n' "$out" | grep -E 'could not load|carries no HyperSync binding' >/dev/null ;;
           esac
 
-  # R5c: the line's config branch (config/<major>.<minor>, holding only cork-defaults.v2.json) is
+  # The line's config branch (config/<major>.<minor>, holding only cork-defaults.v2.json) is
   # updated from THIS tag before the release is published, so a fresh binary never fetches a 404
   # and falls back to its bundled copy silently. The job enforces the line invariant (no set key a
   # released binary knows may disappear) and fails the release otherwise. Commits are GitHub-signed
@@ -186,7 +186,7 @@ jobs:
 
   # apk repository + OCI image, built for EVERY release and BEFORE the GitHub Release exists.
   # PUBLISH LAST (2026-10-02): the Release body names the image, and for a stable the apk
-  # channel, as covered channels (policy G18). Until this date `publish` ran first and this
+  # channel, as covered channels. Until this date `publish` ran first and this
   # workflow after it; v0.6.1-rc.3 published a Release at 18:53 UTC and this workflow failed
   # one minute later, so the public, immutable record named an image that did not exist for
   # nine and a half hours. Nothing here reads the Release — it builds from the tag's source —
@@ -265,18 +265,18 @@ jobs:
           sh scripts/release-preflight.sh publish > channel.txt
           IMAGE_NAME="$(grep '^image=' channel.txt | cut -d= -f2-)"
           [ "$IMAGE_NAME" = "$PUBLISHED_IMAGE" ] || { echo '::error::apk-repo image destination disagrees with the admitted component'; exit 1; }
-          # G9: while the component is pre-1.0 (v0.x.y) it is partner-preview — unaudited — so a bare
+          # While the component is pre-1.0 (v0.x.y) it is preview-only — unaudited — so a bare
           # tag stays pre-release and never takes GitHub's Latest badge. Only a bare v1.0.0+ tag (the
           # first audited/production line) drops the flag. An -rc is always pre-release. Version is the
           # sole signal; no external flag.
           case "${{ github.ref_name }}" in v0.*|*-*) PRE="--prerelease";; *) PRE="";; esac
           LATEST=""
           case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) LATEST="--latest=false" ;; esac
-          # G18: a release names the channels its claims cover. A candidate publishes the ghcr image
+          # A release names the channels its claims cover. A candidate publishes the ghcr image
           VERIFY_PREFIX=""
           case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) VERIFY_PREFIX="GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" " ;; esac
           # only; a stable also publishes the apk repository. :latest moves only from a bare v1.0.0+
-          # tag (apk-repo.yml, G9/R7) — the v0.5.0 body claimed it and was wrong (2026-09-04). The
+          # tag (apk-repo.yml) — the v0.5.0 body claimed it and was wrong (2026-09-04). The
           # two bodies must therefore not claim the same set, and neither may claim :latest below 1.0.
           case "${{ github.ref_name }}" in
             *-rc.*) CHANNELS="This release covers three:

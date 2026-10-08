@@ -1,7 +1,7 @@
-// A venue TIMESTAMP crosses the boundary in exactly two unambiguous shapes (owner ruling
-// 2026-09-23: normalise to a strict ISO string; live shapes verified the same day — every RFQ
-// field (`valid_until`, `received_at`, `fresh_until`, option `expiry`, `expiry_window`) is integer
-// unix SECONDS, while `/pools/v1` alone serves an ISO-8601 string). Everything else is refused:
+// A venue TIMESTAMP crosses the boundary in exactly two unambiguous shapes, both normalised to a
+// strict ISO string: every RFQ field (`valid_until`, `received_at`, `fresh_until`, option
+// `expiry`, `expiry_window`) is integer unix SECONDS, while `/pools/v1` alone serves an ISO-8601
+// string. Everything else is refused:
 // a zone-less date-time (Date.parse would read it as LOCAL time), a date-only or space-separated
 // form, natural language, a negative or fractional number, and a digit string of 13+ digits
 // (milliseconds masquerading as seconds — refused by the year-2100 bound the input schemas already

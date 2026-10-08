@@ -67,7 +67,7 @@ describe("runTool: cork_capabilities", () => {
     expect(data.tools.find((t) => t.name === "cork_prepare_phoenix")?.cli).toBe("ch prepare pool");
   });
 
-  it("search resolves natural-language queries to the tool AND variant (RFC §13 worked example)", async () => {
+  it("search resolves natural-language queries to the tool AND variant", async () => {
     // "executed trades history" appears in no tool description — only the fills variant hint.
     const env = await runTool("cork_capabilities", { search: "executed trades history" }, { nowSeconds: NOW });
     expect(env.state).toBe("ok");
@@ -75,7 +75,7 @@ describe("runTool: cork_capabilities", () => {
     expect(d.matches[0]?.name).toBe("cork_query");
     expect(d.matches[0]?.variant).toBe("fills");
     // the variant's maturity rides along so the agent knows the outcome before calling
-    expect(d.matches[0]?.variantMaturity?.status).toBe("activated"); // venue-backed since R1
+    expect(d.matches[0]?.variantMaturity?.status).toBe("activated"); // venue-backed
   });
 
   it("search returns matching tools with their input schema", async () => {
@@ -179,7 +179,7 @@ describe("runTool: cork_query", () => {
     expect(env.state).toBe("ok");
     const d = env.data as Data;
     // `data.generation` is the compact ref EVERY result carries (and provenance carries the same);
-    // the config extras live under `data.selected` (review B3, 2026-09-22).
+    // the config extras live under `data.selected`.
     expect(d.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1" });
     expect(env.provenance.generation).toEqual(d.generation);
     expect(d.selected).toEqual({
@@ -211,7 +211,7 @@ describe("runTool: cork_query", () => {
     expect((ro.data as Data).generation).toEqual({ label: "arbitrum-legacy", status: "read-only" });
     expect((ro.data as Data).selected).toMatchObject({ label: "arbitrum-legacy", status: "read-only", contractsVersions: {} });
     // An unknown label is the caller's OWN field → invalid input (exit 2) on EVERY path, the same
-    // class getPoolDep always threw (review B1, 2026-09-22); the message lists the chain's labels
+    // class getPoolDep always threw; the message lists the chain's labels
     // and suggests the nearest one.
     const bad = await runTool("cork_query", { resource: "protocol-config", chainId: 42161, pageSize: 25, format: "concise" }, { nowSeconds: NOW, generation: "phoenix/v0.4-rc1" }).catch((e: unknown) => e);
     expect(bad).toBeInstanceOf(ToolInputError);
@@ -445,7 +445,7 @@ describe("prepare_phoenix funding path is guarded (explicit RPC)", () => {
     expect((env.data as { fundingLegs: number }).fundingLegs).toBe(1);
   });
 
-  // Sweep-back [F13], end-to-end through the handler: a CAPPED action must emit the return leg
+  // Sweep-back, end-to-end through the handler: a CAPPED action must emit the return leg
   // LAST, after the action leg, so the residual of the funded cap goes back to the initiator
   // rather than sitting on the adapter where anyone can take it.
   const mintInput = (id: string) => ({
@@ -807,7 +807,7 @@ describe("runTool: cork_decode (calldata)", () => {
 
 });
 
-describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3])", () => {
+describe("runTool: cork_decode (order/event/receipt — local reconstruction)", () => {
   const ORDER_REC = {
     salt: "1",
     maker: RCV,
@@ -852,7 +852,7 @@ describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3
     expect(d.makerTraits.allowPartialFills).toBe(false); // bit 255 set
   });
 
-  it("order: a caller-claimed orderHash is cross-checked — mismatch is a conflict [K3]", async () => {
+  it("order: a caller-claimed orderHash is cross-checked — mismatch is a conflict", async () => {
     const env = await runTool(
       "cork_decode",
       { kind: "order", data: { ...ORDER_REC, orderHash: `0x${"11".repeat(32)}` }, format: "concise" },
@@ -887,7 +887,7 @@ describe("runTool: cork_decode (order/event/receipt — local reconstruction [K3
     // 123456789012345678901 parses (in any JSON.parse, including the MCP SDK's) to the float
     // 123456789012345680000 — before this guard, String() laundered the rounded value into the
     // struct and the recomputed orderHash with state ok and zero warnings (verified empirically
-    // over MCP stdio, 2026-08-10). The CLI's raw-text F22 guard never protected MCP callers.
+    // over MCP stdio, 2026-08-10). The CLI's raw-text unsafe-integer guard never protected MCP callers.
     const rounded = 123456789012345680000; // what JSON.parse would hand the handler
     try {
       await runTool("cork_decode", { kind: "order", data: { ...ORDER_REC, makingAmount: rounded }, format: "concise" }, { nowSeconds: NOW });
@@ -1110,7 +1110,7 @@ describe("runTool: cork_compute", () => {
   });
 });
 
-describe("track marketRef output scales + offline mismatch path (audit R1.6)", () => {
+describe("track marketRef output scales + offline mismatch path", () => {
   it("labels swapRate/market like the cork-pool read; a non-matching poolId is a conflict, with data intact", async () => {
     // The fixture market does NOT hash to POOL, so this also exercises the marketid_mismatch
     // branch offline (previously fork-parity-only) — the scales must ride on conflict too:
@@ -1131,7 +1131,7 @@ describe("track marketRef output scales + offline mismatch path (audit R1.6)", (
   });
 });
 
-describe("cork-pool output scales — the units-topic contract on the most-read resource (audit R1)", () => {
+describe("cork-pool output scales — the units-topic contract on the most-read resource", () => {
   it("labels the fee fields 1e18 = 1% and the rates 1e18 = 1.0, routing to the units topic", async () => {
     // The collision this guards: swapFeePercentage (1e18 = 1%) and swapRate (1e18 = 1.0) are
     // identically shaped and 100x apart — a swapped label here is a silent 100x lie on the
@@ -1336,11 +1336,11 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
     expect(d.allowances.spenders.permit2).toBe("0x000000000022D473030F116dDEE9F6B43aC78BA3");
     expect(Object.keys(d.allowances.byToken).sort()).toEqual(["collateral", "corkPrincipalToken", "corkSwapToken", "reference"]);
     // permit2Internal is the Permit2-INTERNAL (user, token, spender=adapter) allowance the
-    // permit2 funding leg actually consumes (F18). expiration 0 is EXPIRED per Permit2's own
+    // permit2 funding leg actually consumes. expiration 0 is EXPIRED per Permit2's own
     // gate (block.timestamp > expiration — no zero special-case): this fixture used to pin
-    // expired:false here, i.e. it certified an unspendable 777 allowance as fundable (audit R9).
+    // expired:false here, i.e. it certified an unspendable 777 allowance as fundable.
     expect(d.allowances.byToken.collateral).toEqual({ corkAdapter: "777", permit2: "777", permit2Internal: { amount: "777", expiration: 0, expired: true } });
-    // Audit R1.2: balances/allowances are native base units and now say so, with per-role
+    // Balances/allowances are native base units and now say so, with per-role
     // decimals READ from the tokens (the stub answers 6 — an 18 here means a hardcode crept in);
     // cST/cPT stay the protocol-invariant 18.
     expect(d.decimals).toEqual({ collateral: 6, reference: 6, corkSwapToken: 18, corkPrincipalToken: 18 });
@@ -1366,7 +1366,7 @@ describe("expiry pre-flight + funding-allowance visibility (guards added 2026-07
   });
 });
 
-describe("deadlineAt: byte-stable retries [K2 deadline-basis]", () => {
+describe("deadlineAt: byte-stable retries", () => {
   const base = (id: string, extra: Record<string, unknown> = {}) => ({
     chainId: 1,
     account: "0xc0ffee0000000000000000000000000000000001",

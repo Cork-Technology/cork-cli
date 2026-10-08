@@ -1,5 +1,5 @@
 // A venue row's extension names every contract the LOP will CALL inside the taker's fill
-// (owner requirement 2026-09-23: the user must be safe when the venue returns an order whose
+// (2026-09-23: the user must be safe when the venue returns an order whose
 // extension addresses match no known generation). Three consumers, one classifier:
 //   taker-fill REFUSES a row with an unknown pre/post-interaction hook (no bytes, raw AND forSelf);
 //   the ranked book EXCLUDES it as `foreign-hook` (never dropped — the venue served it; disclosed);

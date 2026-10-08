@@ -476,7 +476,7 @@ describe("generations in the bundled defaults", () => {
   });
 });
 
-describe("F16: a transient refresh failure never rolls addresses back to the bundled copy", () => {
+describe("a transient refresh failure never rolls addresses back to the bundled copy", () => {
   const OLD = 900_000_000_000; // fetchedAt far in the past so the good copy is TTL-expired
   const NOW = 1_000_000_000_000;
 
@@ -520,7 +520,7 @@ describe("F16: a transient refresh failure never rolls addresses back to the bun
   });
 });
 
-describe("corkDefaultsUrlFor — a released binary reads cork-defaults.v2.json from ITS LINE'S CONFIG branch (policy R5c)", () => {
+describe("corkDefaultsUrlFor — a released binary reads cork-defaults.v2.json from ITS LINE'S CONFIG branch", () => {
   it("the tag the release pipeline stamps pins config/<major>.<minor>; a source run reads main", () => {
     // The repository differs between the private and the public tree (the port repoints it).
     const repo = CORK_DEFAULTS_REPO;

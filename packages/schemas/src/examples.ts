@@ -1,10 +1,10 @@
 // Worked examples + maturity map — the single source that feeds (a) tool descriptions on the MCP
 // wire, (b) cork_capabilities search/topic "filled invocation templates", and (c) teaching error
 // payloads (the corrected example an agent can retry with). Shipping examples in tool definitions
-// measurably raises parameter accuracy (Anthropic "Advanced tool use": 72%→90%) [C13].
+// measurably raises parameter accuracy (Anthropic "Advanced tool use": 72%→90%).
 //
 // The demo pool is the canonical vnet fixture (deployed on the Tenderly virtual mainnet via
-// impersonation — recipe: experiments/fork-harness/script/DeployDemoPool.s.sol, private tree).
+// impersonation).
 // It exists ONLY on the vnet: run these against `CORK_RPC_URL=<vnet>`; on real mainnet substitute
 // a live poolId from api-phoenix.cork.tech/v1/pools/.
 import type { ToolName } from "./registry.ts";
@@ -108,7 +108,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   cork_submit: [
     // The maker below is the well-known Anvil dev account #0 and the signature is a REAL EIP-712
     // signature by it over this exact OrderData — cork_submit recovers the signer against the
-    // recomputed digest [K3], so a made-up signature would (correctly) return a conflict.
+    // recomputed digest, so a made-up signature would (correctly) return a conflict.
     { title: "Relay a signed rollover order to the venue (intent hash + digest recomputed before relay)", input: { chainId: 42161, clientRequestId: "demo-submit-0001", action: { type: "rollover-order", order: { user: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", settler: ROLLOVER_EXACT_SETTLER, fillerHint: "0x0000000000000000000000000000000000000000", exclusiveFiller: "0x0000000000000000000000000000000000000000", srcCstToken: SUSDE, dstCstToken: VBUSDC, premiumToken: USDC, rolloverContract: DEMO_ACCOUNT, originChainId: "42161", destinationChainId: "42161", openDeadline: "1795000000", fillDeadline: "1795604800", orderSalt: "8811723641", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", allowPartialFills: false, allowUnderfill: false, premiumPaymentMode: 0, rolloverIntentHash: "0x93cec2a3f4ee806583f173da81e62a11d0a8b392ec9f1509e5f2228006f52d84", rolloverParams: { srcCstToken: SUSDE, dstCstToken: VBUSDC, minCaReceived: "0", minSharesOut: "0", srcPoolId: "0x1111111111111111111111111111111111111111111111111111111111111111", dstPoolId: "0x2222222222222222222222222222222222222222222222222222222222222222", settler: ROLLOVER_EXACT_SETTLER, jitMarketHash: "0x0000000000000000000000000000000000000000000000000000000000000000" } }, intent: { rolloverContract: DEMO_ACCOUNT, deadline: "1795604800", nonce: "1", preRolloverHooks: [], midRolloverHooks: [], postRolloverHooks: [], premiumHooks: [] }, signature: "0x0c8cb5af9b2e3b8121ffc8b8c3a3bd9bd77afe194b20f62cb55cd04d0b9e734b004b4cd56082c23f9bda704c58126acc61f3c36b7963db0530abf9003e4d31dd1c" } } },
     { title: "Open an RFQ (buyer): cover 50k, acceptable parameter envelope", input: { chainId: 42161, clientRequestId: "demo-rfq-0001", action: { type: "rfq-open", kind: "new_position", requester: DEMO_ACCOUNT, referenceAsset: SUSDE, collateralAsset: { one_of: [VBUSDC] }, modes: ["liquidity_impairment"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: 1795000000, notAfter: 1795604800 }, notionalAssets: "50000000000", validUntil: 1794900000, auth: { method: "signature", signature: "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111" } } } },
     { title: "Open an RFQ for IMPAIRMENT (downside) cover: the impairment recipe + a cork-inline-impairment/1 block (10%/yr over 14 days = a 0.38% deductible band)", input: { chainId: 8453, clientRequestId: "demo-rfq-impairment-0001", action: { type: "rfq-open", kind: "new_position", requester: DEMO_ACCOUNT, referenceAsset: "0x9c6864105AEC23388C89600046213a44C384c831", collateralAsset: { exact: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }, modes: ["liquidity_impairment"], packageIds: ["balanced-v1"], expiryWindow: { notBefore: 1796255999, notAfter: 1796256000 }, marketTemplate: { inline: { oracle_recipe: "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9", oracle_params: { schema: "cork-inline-impairment/1", anchor_rate: "1091071000000000000", expiry: "1796256000", swap_fee_wad: "0", unwind_swap_fee_wad: "0", duration_seconds: "1209600", apy_spread_percentage: "10000000000000000000" } } }, notionalAssets: "1000000000", validUntil: 1795046400, auth: { method: "signature", signature: "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111" } } } },
@@ -119,7 +119,7 @@ export const TOOL_EXAMPLES: Record<ToolName, readonly ToolExample[]> = {
   ],
 };
 
-// ─── Maturity map [R6]: specified (schema only) / implemented (code path, backend-gated) /
+// ─── Maturity map: specified (schema only) / implemented (code path, backend-gated) /
 //     activated (works now with built-in defaults). Reasons are the same closed warning codes the
 //     gated call would return — an agent can see the outcome without spending the call.
 export type MaturityStatus = "activated" | "implemented" | "specified";
@@ -143,10 +143,10 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "pool-whitelist": { status: "activated" },
       "protocol-config": { status: "activated" },
       "cork-pools": { status: "activated", reason: "hybrid (venue rows, chain-verified: unknown pools dropped) or full-decentralized (HyperSync MarketCreated scan, needs ENVIO_API_TOKEN)" },
-      "whitelisted-addresses": { status: "activated", reason: "event-derived enumeration (WhitelistManager add/remove/enable events over HyperSync, needs ENVIO token) + live-view [K7] verification when an RPC resolves; single-account checks are pool-whitelist" },
+      "whitelisted-addresses": { status: "activated", reason: "event-derived enumeration (WhitelistManager add/remove/enable events over HyperSync, needs ENVIO token) + live-view verification against the contract when an RPC resolves; single-account checks are pool-whitelist" },
       "rollover-orders": { status: "activated", reason: "hybrid (venue rows; kind=orders chain-verified against settler orderStatus); kind fills|contracts also full-decentralized via HyperSync" },
       "trading-pairs": { status: "activated", reason: "hybrid (the venue's listed view — listing authority — chain-annotated with exists) or full-decentralized (the pairs that CAN trade, derived from MarketCreated events)" },
-      orderbook: { status: "activated", reason: "hybrid: venue rows chain-verified against the LOP invalidator — dead rows dropped [K7], indeterminate rows labeled unverified" },
+      orderbook: { status: "activated", reason: "hybrid: venue rows chain-verified against the LOP invalidator — dead rows dropped, indeterminate rows labeled unverified" },
       fills: { status: "activated", reason: "hybrid (venue rows chain-verified against OrderFilled logs) or full-decentralized (HyperSync scan, Cork-scoped by the same-transaction share-token join)" },
       "registry-assets": { status: "activated", reason: "MarketRegistry 2.1.0 chain views — Arbitrum One + Base (42161, 8453; contracts 0.3.3, identical addresses): two named source slots (priceSource/navSource) + token self-description; filters.address for a single asset" },
       rfqs: { status: "activated", reason: "hybrid's one unverifiable family (off-chain JSON, no chain footprint): GET /rfqs/v2 discovery feed + single get via filters.rfqId; venue-only in every mode" },
@@ -164,7 +164,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "unwind-rate": { status: "activated" },
       "impairment-floor": { status: "activated" },
       "rollover-premium-floor": { status: "activated" },
-      "dutch-auction-price": { status: "activated", reason: "pure local pricing of 1inch Fusion v3.1 dutch-auction orders, reconstructed from the order's own extension bytes [K3]; wei-exact vs the deployed settlement getters on mainnet+Arbitrum (incl. a real production order); at.timestamp pins the moment, baseFeeWei omitted = upper-bound" },
+      "dutch-auction-price": { status: "activated", reason: "pure local pricing of 1inch Fusion v3.1 dutch-auction orders, reconstructed from the order's own extension bytes; wei-exact vs the deployed settlement getters on mainnet+Arbitrum (incl. a real production order); at.timestamp pins the moment, baseFeeWei omitted = upper-bound" },
       "rfq-quote": { status: "specified", reason: "phase_gated (pricing MODEL deliberately deferred — a recommended quote is a product decision, not missing infra; the constraint math it would build on is already live as recipe-rate-constraint)" },
       "recipe-rate-constraint": { status: "activated", reason: "2.1.0 recipe.resolve staticcall — THE step that produces the constraint a JIT order signs (42161). The pre-2.1.0 percentage-band math survives behind legacy:true + CORK_ENABLE_DEPRECATED=1" },
     },
@@ -173,8 +173,8 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       calldata: { status: "activated" },
-      tx: { status: "activated", reason: "pure local: a SIGNED raw transaction (legacy RLP or typed envelope) → recovered signer + to/value/chainId/nonce/gas, target named against known Cork deployments, inner calldata decoded to the same labeled legs [K3] — the validate-before-broadcast step" },
-      order: { status: "activated", reason: "pure local: LOP v4 order (hex tuple or JSON fields) → full makerTraits breakdown + recomputed EIP-712 orderHash; caller-claimed hashes are cross-checked, never trusted [K3]" },
+      tx: { status: "activated", reason: "pure local: a SIGNED raw transaction (legacy RLP or typed envelope) → recovered signer + to/value/chainId/nonce/gas, target named against known Cork deployments, inner calldata decoded to the same labeled legs — the validate-before-broadcast step" },
+      order: { status: "activated", reason: "pure local: LOP v4 order (hex tuple or JSON fields) → full makerTraits breakdown + recomputed EIP-712 orderHash; caller-claimed hashes are cross-checked, never trusted" },
       event: { status: "activated", reason: "pure local: one log {topics,data} → named args against the source-verified Cork/rollover/LOP/ERC-20 ABI set; unverified layouts are labeled raw, never guessed" },
       receipt: { status: "activated", reason: "pure local: labels every log in a receipt against the known ABI set; receipt claims (status, gas) are echoed as claims" },
     },
@@ -192,15 +192,15 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "activated",
     variants: {
       "maker-order": { status: "activated" },
-      "answer-rfq": { status: "activated", reason: "reads the RFQ record (and the re-quoted option) from the venue, derives the pool (derive-cork-pool), reads the collateral decimals, computes the kernel's amounts (ACT/365, ceil toward the maker; golden-pinned), then re-enters the maker-order path — one artifact, one derivation echo, and the RFQ v2 answer option built from the same numbers; never chooses a premium" },
+      "answer-rfq": { status: "activated", reason: "reads the RFQ record (and the re-quoted option) from the venue, derives the pool (derive-cork-pool), reads the collateral decimals, computes the premium amounts (ACT/365, ceil toward the maker; golden-pinned), then re-enters the maker-order path — one artifact, one derivation echo, and the RFQ v2 answer option built from the same numbers; never chooses a premium" },
       "refresh-order": { status: "activated", reason: "venue lookup + local re-hash + LOP invalidator read (a spent bit refuses), then the same terms rebuilt on the SAME nonce with a new expiry — the refresh and the original share one bit" },
       "rfq-write": { status: "implemented", reason: "builds the exact RFQ v2 write body (addresses lowercased as the venue stores them) and its CorkRfqWrite typed data, held to the venue's published signing vectors; answer and counter read the RFQ for its chain and kind; a quoted answer's orders are re-hashed, their signatures proven, and each option held to its order before the typed data is handed out" },
       "maker-ladder": { status: "activated", reason: "a fan-out over the maker-order path — every rung is built by the same code (JIT, auction, approvals, pre-flights), with a derived clientRequestId and the noncePolicy's ocoGroup; fails closed on any rung" },
-      "finalize-maker-order": { status: "activated", reason: "reconstruction + salt↔extension binding check, then EOA ecrecover or (for contract makers, e.g. a Safe) the ERC-1271 isValidSignature staticcall the fill itself performs; emits a content-addressed cork_submit artifact; never signs [K1]" },
+      "finalize-maker-order": { status: "activated", reason: "reconstruction + salt↔extension binding check, then EOA ecrecover or (for contract makers, e.g. a Safe) the ERC-1271 isValidSignature staticcall the fill itself performs; emits a content-addressed cork_submit artifact; never signs" },
       cancel: { status: "activated" },
       "taker-fill": { status: "activated", reason: "bounded venue orderbook lookup + local orderHash re-verification, then canonical uint256-tuple fill calldata (unsigned); `forSelf` emits the fill as a call to an integrator-deployed ForSelf adapter instead (parameter-blind session-key wallets)" },
       "rollover-intent": { status: "activated", reason: "offline typed-data build (rc.2 wire: jitMarketHash signed either way); domain-separator parity proven vs all four live settlers (Arbitrum + Base); with quoteRef, accepts a rollover RFQ quote (reads the RFQ, fills the omitted terms, holds the order to the venue's quote rules)" },
-      "rollover-fill": { status: "activated", reason: "unsigned BaseFiller.execute/executeWithMarket calldata from the venue's signed payload (or an inline one): digest recomputed [K3], settler mode/deadlines/exclusivity/JIT commitment pre-flighted, status + clone + allowances read over RPC; fork-proven on Base" },
+      "rollover-fill": { status: "activated", reason: "unsigned BaseFiller.execute/executeWithMarket calldata from the venue's signed payload (or an inline one): digest recomputed locally, settler mode/deadlines/exclusivity/JIT commitment pre-flighted, status + clone + allowances read over RPC; fork-proven on Base" },
       "deploy-rollover-contract": { status: "activated", reason: "unsigned factory.deployRolloverContract() with the predicted clone address and the existence check over RPC" },
     },
   },
@@ -217,7 +217,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
       "verify/forSelfAdapter": { status: "activated", reason: "CORK()/LOP()/WHITELIST() read over RPC and classified against every configured generation; names the reference adapter; a pool-only or pre-caller-gate adapter is disclosed, never accused" },
       "reconcile/txHash": { status: "activated" },
       "simulate/artifact": { status: "activated", reason: "eth_call dry-run of frozen bytes (wouldRevert + reason + gas estimate); other subject kinds have nothing executable" },
-      "reconcile/orderHash": { status: "activated", reason: "venue lifecycle + [K7] chain verification: settler orderStatus() over RPC (automatic) and event history via HyperRPC (needs ENVIO_API_TOKEN)" },
+      "reconcile/orderHash": { status: "activated", reason: "venue lifecycle + chain verification (chain outranks venue): settler orderStatus() over RPC (automatic) and event history via HyperRPC (needs ENVIO_API_TOKEN)" },
       "reconcile/submissionRef": { status: "activated", reason: "same as reconcile/orderHash; 32-byte digests only" },
     },
   },
@@ -225,7 +225,7 @@ export const MATURITY: Record<ToolName, ToolMaturity> = {
     status: "implemented",
     reason: "all five off-chain venue writes wired; activation pending the first live accepted POST",
     variants: {
-      "rollover-order": { status: "implemented", reason: "K3 intent-hash + orderDigest recomputed before relay" },
+      "rollover-order": { status: "implemented", reason: "intent hash + orderDigest recomputed locally before relay" },
       "lop-order": { status: "implemented", reason: "orderHash recomputed locally; extension/salt commitment pre-flight" },
       "rfq-open": { status: "implemented" },
       "rfq-answer": { status: "implemented" },

@@ -271,7 +271,7 @@ describe("ocoGroup — a shared invalidator nonce is one-cancels-the-other", () 
     expect(ocoGroupNonce("shared-key")).not.toBe(alone.nonce);
   });
 
-  it("the namespace is DISJOINT by construction: an id inside 'oco-group:' is refused, so no id seed can equal a group seed (audit RC1-NONCE-001)", () => {
+  it("the namespace is DISJOINT by construction: an id inside 'oco-group:' is refused, so no id seed can equal a group seed", () => {
     expect(OCO_GROUP_NONCE_NAMESPACE).toBe("oco-group:");
     // The seed a group uses IS what an id spelling that prefix would use — which is exactly why
     // such an id is refused rather than allowed to share the bit silently.

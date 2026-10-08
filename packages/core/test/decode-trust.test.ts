@@ -1,4 +1,4 @@
-// cork_decode target verification (audit ARTIFACT-DECODE-002, 2026-08-24). A selector proves a
+// cork_decode target verification. A selector proves a
 // shape; the `to` proves the contract. Three verdicts, three consequences:
 //   trusted    — the leg targets the configured contract for its role: silent.
 //   mismatch   — a configured contract exists and the leg targets something else: the label is
@@ -145,7 +145,7 @@ describe("kind:calldata — raw bytes with no target of their own", () => {
     expect(env.warnings[0]!.message).toContain('kind "tx"');
   });
 
-  it("a multicall's INNER legs do name their targets, so they verify like a signed tx's — but the OUTER target stays unverified until `to` is claimed (audit DB-003)", async () => {
+  it("a multicall's INNER legs do name their targets, so they verify like a signed tx's — but the OUTER target stays unverified until `to` is claimed", async () => {
     const good = await runTool("cork_decode", { kind: "calldata", chainId: 1, data: encodeMulticall([pullLeg(ADAPTER_1), depositLeg(ADAPTER_1)]) }, ctx);
     expect(good.state).toBe("ok");
     // Every inner leg is trusted, yet a warning-free result would claim more than these bytes can

@@ -33,7 +33,7 @@ const ORACLE = "0x78fb656d01141e3ac2073c9372c8b3e636f49d01";
 const CPT = "0x988dc887bec09db524d23a9714bdcd23cb518535";
 const CST = "0x997f71adad54fbf76a07fbdbc376b1f6c23a6dc5";
 const STAGING_PM = "0x4d0ab6735def9fbaddbf0f2ffb92353afae623d2";
-/** The emitter table decodeMarketRows REQUIRES since 2026-09-22 (review A4): the fixture manager
+/** The emitter table decodeMarketRows REQUIRES since 2026-09-22: the fixture manager
  *  is the arbitrum-v1.1 (8-field) one. */
 const EMITTERS = [{ poolManager: STAGING_PM as `0x${string}`, wire: "8-field" as const, label: "arbitrum-v1.1" }];
 // Clone fixtures are emitted by the RETIRED July factory — the multi-generation scan must still
@@ -310,7 +310,7 @@ describe("full-decentralized fills paths (previously untested decode surfaces)",
   });
 });
 
-describe("full-decentralized honesty: completeness + scoping disclosure (F15)", () => {
+describe("full-decentralized honesty: completeness + scoping disclosure", () => {
   it("markets: a source reporting complete:false surfaces pagination_incomplete (partial evidence, not the full set)", async () => {
     const partial: HyperSyncSource = {
       async queryLogs() {
@@ -324,7 +324,7 @@ describe("full-decentralized honesty: completeness + scoping disclosure (F15)", 
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "pagination_incomplete")).toBe(true);
-    // decoded rows carry blockNumber as a decimal STRING (chain integers ride the wire as strings, F10)
+    // decoded rows carry blockNumber as a decimal STRING (chain integers ride the wire as strings)
     const item = (env.data as { items: Array<Record<string, unknown>> }).items[0];
     expect(typeof item?.blockNumber).toBe("string");
     expect(item?.blockNumber).toBe("485000001");
@@ -592,7 +592,7 @@ describe("decode row helpers — direct, including the honest malformed-log skip
   });
 });
 
-// ── whitelisted-addresses: event replay + [K7] live-view verification ─────────────────────────
+// ── whitelisted-addresses: event replay + live-view verification ─────────────────────────
 
 const WLM_ARB = "0x8af6659d864cb632bcadf0744fb8b5ee78fbea51"; // Arbitrum whitelistManager of the PRIMARY generation (cork-defaults.v2, phoenix/v0.4-rc.1)
 const wlAbi = parseAbi([
@@ -700,7 +700,7 @@ describe("cork_query whitelisted-addresses (event replay over HyperSync)", () =>
     expect(d.enabledByPool[OTHER_POOL]).toBeUndefined(); // never gated — everyone passes
   });
 
-  it("[K7] live-view verification: rows re-checked against the contract; a disagreement is disclosed", async () => {
+  it("live-view verification: rows re-checked against the contract; a disagreement is disclosed", async () => {
     const env = await runTool(
       "cork_query",
       { resource: "whitelisted-addresses", chainId: 42161, filters: { poolId: POOL }, pageSize: 25, format: "concise" },

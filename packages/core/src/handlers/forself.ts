@@ -265,7 +265,7 @@ export async function prepareForSelfTakerFill(args: {
       if (tokens.collateral === ZERO || tokens.cst === ZERO) {
         // "Does the resting order carry a Cork JIT hook?" — decided by the adapter's
         // classification against the chain's generations, never by trial-decoding the bytes
-        // (jit-extension.ts, review A3): a hook at an unconfigured address is not Cork's.
+        // (jit-extension.ts): a hook at an unconfigured address is not Cork's.
         let hasJit = false;
         if (signed.extension && signed.extension !== "0x") {
           try {
@@ -448,7 +448,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
     .join(", plus ");
   warnings.push(forSelfNotice(forSelf.adapter, allowanceText));
 
-  // Summary derived from the BUILT BYTES [K3] — the same decoder+renderer every consumer of
+  // Summary derived from the BUILT BYTES — the same decoder+renderer every consumer of
   // this calldata sees — plus one allowance line from the (test-pinned) matrix. A hand-written
   // narration could drift from what the bytes actually do; a decoded one cannot.
   // The adapter's bindings were verified above, so it IS the trusted target for this decode —
@@ -491,7 +491,7 @@ export async function preparePhoenixForSelf(input: PreparePhoenixInput, ctx: Han
 
 /** What `cork_track verify` kind "forSelfAdapter" answers for an adapter address: which
  *  generation its bindings belong to, and whether it is that generation's REFERENCE adapter.
- *  The decoder cannot run this chain-free (2026-10-01, the 2026-10-01 integration triage, item 2). */
+ *  The decoder cannot run this chain-free. */
 export type ForSelfAdapterClassification =
   | { kind: "verified"; adapter: `0x${string}`; generation: GenerationRef; reference: boolean; surface: "combined" | "pool-only"; callerGate: boolean | undefined; bindings: { poolManager: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }
   | { kind: "mismatch"; adapter: `0x${string}`; reason: string; bindings: { poolManager?: `0x${string}`; lop?: `0x${string}`; whitelistManager?: `0x${string}` } }

@@ -1,8 +1,8 @@
 // Best-first ranking of resting book rows for ONE fill sender — the taker's question "what can I
 // fill best, in this pool and side, as this sender?" answered from the SIGNED order, never from
-// venue metadata [K3]. Pure: rows in, ranked rows + excluded rows out; no I/O.
+// venue metadata. Pure: rows in, ranked rows + excluded rows out; no I/O.
 //
-// The order of business (owner ruling 2026-09-02):
+// The order of business (2026-09-02):
 //   1. partition FILLABLE from not — a row is excluded when it is reserved for another fill
 //      sender, expired by its own signed traits, dead by venue status, or unparseable;
 //   2. price from the signed amounts (a decaying row at its price NOW), never from the listing's

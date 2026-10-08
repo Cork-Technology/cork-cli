@@ -2,7 +2,7 @@
 // applies on every answer, as pure functions so the sugar (`cork_prepare_orders answer-rfq`) and
 // its tests share one source with nothing hidden in a handler.
 //
-// The kernel's convention (the venue's golden-units script and its RFC, "Buyer" section):
+// The venue's convention (the venue's golden-units vectors, buyer side):
 //   premium_amount = premium_fraction × notional × tenor_seconds / YEAR   (ACT/365, integer math,
 //                    rounded TOWARD THE MAKER — ceil), in the collateral asset's native units;
 //   makingAmount   = notional rescaled to the 18-decimal cST;
@@ -13,7 +13,7 @@ import { encodeImpairmentArgs } from "./market-registry.ts";
 import { encodeAbiParameters } from "viem";
 import { ceilDiv, normalizeDecimals } from "./math/fixed.ts";
 
-/** ACT/365: the year the venue and the kernel divide by. */
+/** ACT/365: the year the venue divides by. */
 export const YEAR_SECONDS = 31_536_000n;
 /** cST and cPT are always 18 decimals (protocol invariant, same claim as the compute labels). */
 export const SHARE_DECIMALS = 18;

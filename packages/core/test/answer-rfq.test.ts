@@ -1,5 +1,5 @@
 // answer-rfq and refresh-order — the underwriter's two most frequent moves as one call each.
-// The amount math is pinned to the kernel's golden (the venue's golden-units script);
+// The amount math is pinned to the venue's golden-units vectors;
 // the handler runs against the eval stub's full chain + venue (the same stack the JIT tasks use:
 // registry, recipe.resolve, share prediction via eth_simulateV1, decimals), so the derivation is
 // the production path, not a mock of it.
@@ -11,8 +11,8 @@ import { DEMO_ACCOUNT } from "@cork/schemas";
 import { encodeAnchorArgs, encodeImpairmentArgs, inlineAdditionalData, inlineParamsOfTemplate, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
 import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, DEPLOYED_FIXED_RATE, FIXED_RECIPE, RFQ_FIXED_ID, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_RATE, RFQ_FIXED_ANSWER_ID, RFQ_FIXED_OPTION_RATE, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, RFQ_IMPAIRMENT_EXPIRY, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
 
-describe("the kernel's amount math (ACT/365, rounded toward the maker)", () => {
-  it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (scripts/golden-units.mjs)", () => {
+describe("the ACT/365 amount math (rounded toward the maker)", () => {
+  it("golden: 3.6% on 50,000 bbqUSDC (6 dec) for exactly one day → 4931507 (the venue's golden-units vector)", () => {
     expect(premiumAmount("0.036", 50_000n * 10n ** 6n, 86_400n)).toBe(4931507n);
     // toward the maker: the exact quotient is 4931506.849…, so floor would short the maker.
     expect((36n * 50_000n * 10n ** 6n * 86_400n) / (1000n * YEAR_SECONDS)).toBe(4931506n);
@@ -47,7 +47,7 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
   const base = { chainId: 42161 as const, account: DEMO_ACCOUNT, clientRequestId: "answer-0001" };
   type Answered = { kind: string; orderHash: string; nonce: string; ocoGroup: string; allowedSender: string | null; typedData: { message: Record<string, string> }; jit?: { derivedPoolId: string; predictedCorkSwapToken?: string }; answer: { reach: string; requester: string; takingAmount: string; makingAmount: string; tenorSeconds: string; reservedFor: string; expirySeconds: number; expiryRule: string; quoteRef: unknown; pool: { poolId: string; corkSwapToken: string; exists: boolean }; collateralDecimals: number; impliedPremiumWad: string }; execution: { then: string[] } };
 
-  it("uncited: pair/notional/requester from the RFQ, the kernel's amounts, reserved for the requester, the re-rest expiry, one bit per RFQ", async () => {
+  it("uncited: pair/notional/requester from the RFQ, the ACT/365 amounts, reserved for the requester, the re-rest expiry, one bit per RFQ", async () => {
     // 20 days out: inside the registry's 30-day creation bound (the stub RFQ's own window sits years
     // out, so this is a visible counter-proposal — warned, built).
     const expiry = NOW + 20n * 86_400n;
@@ -170,7 +170,7 @@ describe("cork_prepare_orders answer-rfq — the RFQ record + the caller's premi
     expect(chosen.warnings.some((x) => x.code === "fill_sender_unknown")).toBe(false);
   });
 
-  it("the derived amounts are the kernel's, digit for digit, and a caller expirySeconds / open reach / notional override are honored", async () => {
+  it("the derived amounts are the venue's ACT/365 amounts, digit for digit, and a caller expirySeconds / open reach / notional override are honored", async () => {
     const env = await runTool("cork_prepare_orders", { ...base, clientRequestId: "answer-0002", action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.036", expiryTimestamp: (NOW + 86_400n).toString(), notionalAssets: (50_000n * 10n ** 18n).toString(), reserve: false, expirySeconds: 300, ocoGroup: "capacity-slot-7", jitMarket: { recipe: LIQUIDITY_RECIPE } } }, ctx);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as Answered;

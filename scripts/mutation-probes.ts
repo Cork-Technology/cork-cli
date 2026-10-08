@@ -124,7 +124,6 @@ const T = {
   decodeTrust: "packages/core/test/decode-trust.test.ts",
   implTrust: "packages/core/test/implementation-trust.test.ts",
   makerCode: "packages/core/test/maker-code-probe.test.ts",
-  port: "scripts/port-to-public.test.ts",
   evalAuth: "evals/auth-mode.test.ts",
   evalConfigPin: "evals/config-pin.test.ts",
   fetchTimeout: "packages/core/test/fetch-timeout.test.ts",
@@ -199,7 +198,7 @@ const CATALOG: Mutant[] = [
     tests: [T.keystore],
   },
   {
-    // The MCP server can never reach the signing modules [K1]: an import from MCP is caught.
+    // The MCP server can never reach the signing modules: an import from MCP is caught.
     id: "keystore-mcp-import-guard",
     file: "packages/mcp/src/server.ts",
     find: 'import { Server } from "@modelcontextprotocol/sdk/server/index.js";',
@@ -610,7 +609,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venue],
   },
   {
-    // A previous-generation recipe must be told apart from the primary's: that is the pass Zyfai met.
+    // A previous-generation recipe must be told apart from the primary's.
     id: "rfq-open-recipe-generation-collapsed",
     file: "packages/core/src/handlers/cover-reading.ts",
     find: "  if (primaryLabel !== undefined && recipe.generation !== primaryLabel) {",
@@ -618,7 +617,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venue, T.cover],
   },
   {
-    // R5c: a released binary reads its line's config branch, never main (the development branch).
+    // A released binary reads its line's config branch, never main (the development branch).
     id: "config-url-not-line-pinned",
     file: "packages/core/src/config-remote.ts",
     find: 'const ref = line === undefined ? "main" : `config/${line}`;',
@@ -731,7 +730,7 @@ const CATALOG: Mutant[] = [
     tests: [T.cancelSweep],
   },
   {
-    // cork-cli-private#15: the sweep's ABI args swapped — the LOP would read the mask as traits.
+    // The sweep's ABI args swapped — the LOP would read the mask as traits.
     id: "orders-bits-invalidate-args-swapped",
     file: "packages/core/src/orders.ts",
     find: 'functionName: "bitsInvalidateForOrder", args: [makerTraits, additionalMask] })',
@@ -951,7 +950,7 @@ const CATALOG: Mutant[] = [
     tests: [T.rank],
   },
   {
-    // `sort` on another resource must be refused, never silently unapplied (C13).
+    // `sort` on another resource must be refused, never silently unapplied.
     id: "query-sort-refusal-dropped",
     file: "packages/core/src/handlers/query.ts",
     find: 'if (input.sort !== undefined && input.resource !== "orderbook") {',
@@ -1988,46 +1987,7 @@ const CATALOG: Mutant[] = [
     replace: "decode: (logs) => decodeMarketRows(logs, ms.emitters),",
     tests: [T.hypersync],
   },
-  // ── port-to-public transform gates (2026-08-10): a wrong port = wrong PUBLISHED tree ─────
-  {
-    // Dropping notes/ from the exclusion list leaks the private tree into the public repo.
-    id: "port-exclusion-notes-dropped",
-    file: "scripts/port-to-public.ts",
-    find: 'export const EXCLUDED_PREFIXES = ["notes/", "experiments/", "rfc/", "misc/", "slack-drafts"] as const;',
-    replace: 'export const EXCLUDED_PREFIXES = ["experiments/", "rfc/", "misc/", "slack-drafts"] as const;',
-    tests: [T.port],
-  },
-  {
-    // The anchor-drift gate is what makes a reworded private line FAIL instead of silently
-    // porting an un-repointed file (a private URL/reference reaching the public tree). Since the
-    // `history` spellings (0be3d59) the gate is "no pair applies"; the mutant makes the lookup
-    // never miss, so a reworded anchor falls through to a no-op replace — the silent port.
-    id: "port-anchor-gate-dropped",
-    file: "scripts/port-to-public.ts",
-    find: "    const applicable = pairs.find((p) => content.includes(p.from));",
-    replace: "    const applicable = pairs.find((p) => content.includes(p.from)) ?? pairs[0];",
-    tests: [T.port],
-  },
-  {
-    // A signed port that keeps the original committer re-creates the 2026-10-08 shape: six
-    // web-flow merges on cork-cli release/v0.7.0 signed with the porter's key but committed by
-    // `GitHub <noreply@github.com>` — "Unverified" on GitHub, which resolves the key through
-    // the committer email.
-    id: "port-signed-committer-not-signer",
-    file: "scripts/port-to-public.ts",
-    find: "  return sign ? signer : original;",
-    replace: "  return original;",
-    tests: [T.port],
-  },
-  {
-    // Excluded-only commits must be SKIPPED — minting empty commits with full messages is the
-    // exact misleading-history regression observed live on 2026-08-10.
-    id: "port-empty-skip-dropped",
-    file: "scripts/port-to-public.ts",
-    find: "      if (tree === parentTree) {",
-    replace: "      if (false) {",
-    tests: [T.port],
-  },
+
   {
     // The eval self-skip gate: dropping the skip branch re-creates the 2026-08-10 regression
     // (CI without the secret proceeds keyless and paints main red with a 401).
@@ -2426,7 +2386,7 @@ const CATALOG: Mutant[] = [
     replace: "    if (addressesOf(g)[0]!.toLowerCase() === lc) {",
     tests: [T.rolloverVerify],
   },  {
-    // The venue-miss sweep exists so venue absence cannot silence live chain state [K7]:
+    // The venue-miss sweep exists so venue absence cannot silence live chain state:
     // skipping non-None statuses degrades every archived-generation reconcile to not-found.
     id: "rollover-venue-miss-sweep-inert",
     file: "packages/core/src/handlers/track.ts",
@@ -2553,7 +2513,7 @@ const CATALOG: Mutant[] = [
     tests: [T.taskFixtures],
   },
   {
-    // The [K1] safety axis must gate `ok`. Dropping it from the conjunction makes an agent that
+    // The safety axis must gate `ok`. Dropping it from the conjunction makes an agent that
     // prepares bytes AND relays them to the venue score a perfect task — the exact unrequested
     // side effect the axis exists to catch, invisible again.
     id: "eval-grade-forbid-not-gating-ok",
@@ -2627,7 +2587,7 @@ const CATALOG: Mutant[] = [
 
   {
     // The stub's factory filter mirrors the venue's server-side filtering; a stub that ignores
-    // the parameter grades a task that never exercised the filter (a green no-op, class C13).
+    // the parameter grades a task that never exercised the filter (a green no-op).
     id: "eval-stub-factory-filter-ignored",
     file: "evals/stub.ts",
     find: "const items = factory && factory.toLowerCase() !== RC2_FACTORY.toLowerCase() ? [] : [row];",
@@ -2637,7 +2597,7 @@ const CATALOG: Mutant[] = [
   {
     // Same class as the factory filter: the RFQ feed's state filter is SERVER-SIDE at the venue.
     // A stub that serves the open row regardless of `state` would let a "closed feed" read look
-    // populated — and the discovery task would grade a filter that never ran (green no-op, C13).
+    // populated — and the discovery task would grade a filter that never ran (green no-op).
     id: "eval-stub-rfq-state-filter-ignored",
     file: "evals/stub.ts",
     find: 'const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase()))',
@@ -2665,12 +2625,12 @@ const CATALOG: Mutant[] = [
     tests: [T.taskFixtures],
   },
   {
-    // Finalization is the SAME request as its prepare [K2]: a prompt that names a DIFFERENT
+    // Finalization is the SAME request as its prepare: a prompt that names a DIFFERENT
     // request id than the prepared fixture carries makes the task unpassable for every agent
     // (prepared_context_mismatch). Mutating the shared constant is inert — prompt and fixture
     // move together — so the defect is planted where drift actually happens: the prompt. The
     // anchor names the happy-path finalize task's own wording: conflict-finalize-bad-signature
-    // (1cbb8e8) carries the same "(chain 1, request id …)" clause.
+    // carries the same "(chain 1, request id …)" clause.
     id: "eval-task-finalize-prompt-id-drift",
     file: "evals/tasks.ts",
     find: 'give me the ready-to-relay artifact (chain 1, request id "${FINALIZE_REQUEST_ID}")',
@@ -3489,8 +3449,8 @@ const CATALOG: Mutant[] = [
     tests: [T.cover],
   },
   {
-    // The nav-sourced liquidity recipe read as something else: the very recipe Zyfai traded
-    // (nav) would stop being named exit-only cover.
+    // The nav-sourced liquidity recipe read as something else: a nav recipe would stop being
+    // named exit-only cover.
     id: "cover-nav-recipe-not-liquidity",
     file: "packages/core/src/cover.ts",
     find: "if (name === \"liquidity\" || name === \"nav\") return \"liquidity\";",
@@ -4470,7 +4430,7 @@ const CATALOG: Mutant[] = [
     replace: "if (accountOk !== false) {",
     tests: [T.forself],
   },
-  // ── R4: one synonym resolver across every CLI input path (2026-08-10) ─────────────────────
+  // ── One synonym resolver across every CLI input path (2026-08-10) ─────────────────────
   {
     // preParse validates a canonicalised variant spelling but stops REWRITING it: commander
     // falls through to the parent command, and `--explain` exits 0 showing the WRONG contract —
@@ -4492,7 +4452,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // Resource aliases regress to case-sensitive while chain names stay case-insensitive — the
-    // exact same-table-different-rule split R4 closed.
+    // exact same-table-different-rule split this resolver prevents.
     id: "cli-resource-alias-case-sensitive-regression",
     file: "packages/cli/src/app.ts",
     find: 'if (name === "resource") rawStr = RESOURCE_ALIASES[rawStr.toLowerCase()] ?? rawStr.toLowerCase();',
@@ -4501,7 +4461,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // Variant subcommands and top-level verbs stop taking the parent's positional: `ch exercise
-    // 1` rejects the operand its long form accepts (the R4 class in miniature).
+    // 1` rejects the operand its long form accepts (the same inconsistency in miniature).
     id: "cli-variant-positional-dropped",
     file: "packages/cli/src/app.ts",
     find: "const positionalValue = positional ? (args[0] as string | undefined) : undefined;",
@@ -4531,7 +4491,7 @@ const CATALOG: Mutant[] = [
     // The fraction cap regressed to the pre-rework string-decided form: a 17-digit
     // "0.49999999999999999" is < 0.5 as a decimal but parses to exactly 0.5 — the venue's own
     // parseFloat refine 400s it, so accepting it here relays a doomed POST. This mutant IS the
-    // 22df15a behavior; the boundary tests exist to keep it dead.
+    // earlier string-decided behavior; the boundary tests exist to keep it dead.
     id: "premium-fraction-string-decided-regression",
     file: "packages/core/src/handlers/submit.ts",
     find: 'if (Number.parseFloat(p) >= 0.5) return',
@@ -4613,7 +4573,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // The party rule regressed to the pre-0.4.1 requester-only form: a maker-mode SELL citing
-    // its own quote (the underwriter of the cited answer, gh#60) is refused — the relay
+    // its own quote (the underwriter of the cited answer) is refused — the relay
     // out-rejects its venue on exactly the flow the fix re-enabled.
     id: "quote-ref-party-requester-only",
     file: "packages/core/src/handlers/submit.ts",
@@ -4706,7 +4666,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venue, T.forself],
   },
   {
-    // Book exclusivity served from the venue's echo instead of the signed word [K3]: a
+    // Book exclusivity served from the venue's echo instead of the signed word: a
     // mis-decoding venue relabels reserved orders open (and vice versa) with nothing to catch it.
     id: "book-exclusivity-from-venue-echo",
     file: "packages/core/src/handlers/hybrid-verify.ts",
@@ -4734,7 +4694,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // A mirrored gate vanishes from the register: the next venue version bump's teaching no
-    // longer names it, and its drift goes back to being caught by humans on Slack.
+    // longer names it, and its drift goes back to being caught by hand.
     id: "venue-mirror-register-entry-dropped",
     file: "packages/core/src/datasources/venue.ts",
     find: 'gate: "quote_ref citation: answer existence, PARTY rule',
@@ -4870,7 +4830,7 @@ const CATALOG: Mutant[] = [
   // ── units/scale labels: the C1 collision class — a swapped label is a silent 100x lie ──────
   {
     // The cork-pool fee label claims WAD: identical shape, 100x apart, on the most-read
-    // resource — the exact defect the scales block exists to prevent (footgun audit R1).
+    // resource — the exact defect the scales block exists to prevent.
     id: "units-scales-fee-label-swapped",
     file: "packages/core/src/handlers/query.ts",
     find: 'swapFeePercentage: "1e18 = 1% (PERCENTAGE — not WAD; 100x apart)"',
@@ -4915,7 +4875,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // account-state decimals silently hardcode 18: a 6-dec reference balance reads 10^12 too
-    // small and nothing errors — the exact defect class R1.2 exists to prevent. The stub answers
+    // small and nothing errors — the exact defect the decimals lookup prevents. The stub answers
     // 6, so the killer assertion distinguishes read-from-token from assumed.
     id: "units-accountstate-decimals-hardcoded",
     file: "packages/core/src/handlers/query.ts",
@@ -4950,7 +4910,7 @@ const CATALOG: Mutant[] = [
     replace: 'protocolSurplusFeePercent: "1e5 base (under fillability.surplus)"',
     tests: [T.fusion],
   },
-  // ── Layer split: pattern = contract, bound = policy (owner ruling 2026-08-10) ───────
+  // ── Layer split: pattern = contract, bound = policy (2026-08-10) ───────
   {
     // The cap teaches itself as permanent structure — callers over-fit to a pilot bound that a
     // short-tenor distressed market legitimately breaks; when the venue relaxes it, every
@@ -4958,17 +4918,17 @@ const CATALOG: Mutant[] = [
     id: "premium-fraction-cap-taught-as-structure",
     file: "packages/core/src/handlers/submit.ts",
     find: "POLICY, not structure: pilot posture, spec-invisible, relaxable",
-    replace: "STRUCTURE, permanent: pinned by R13, never relaxable",
+    replace: "STRUCTURE, permanent: the published unit never changes in place",
     tests: [T.venue],
   },
   {
     // The wire shape teaches itself as relaxable policy — the inverse over-fit: callers wait
-    // for a "relaxation" of a shape R13 pins forever (a WAD variant is a NEW field, not a
+    // for a "relaxation" of the published shape (a WAD variant is a NEW field, not a
     // loosened regex).
     id: "premium-fraction-shape-taught-as-policy",
     file: "packages/core/src/handlers/submit.ts",
-    find: "STRUCTURE: the RFC-pinned wire shape",
-    replace: "POLICY: the current wire shape",
+    find: "STRUCTURE: the published wire shape",
+    replace: "POLICY: the published wire shape",
     tests: [T.venue],
   },
   // ── x-units: the machine-readable unit axis — parity binds wire ↔ table ↔ prose ──
@@ -4993,14 +4953,14 @@ const CATALOG: Mutant[] = [
   },
   {
     // The constraint bounds regress to bare UintStr — per-field scale AND x-units vanish from
-    // BOTH jitMarket paths at once (shared shape), the exact R2 defect this schema closes.
+    // BOTH jitMarket paths at once (shared shape), the exact missing-scale defect this schema closes.
     id: "units-constraint-field-scale-dropped",
     file: "packages/schemas/src/tools.ts",
     find: 'rateMin: UintStr.describe("ABSOLUTE rate floor, 1e18 = 1.0 (NOT the 1e18=1% fee family)").meta({ "x-units": X_UNITS.wad }),',
     replace: "rateMin: UintStr,",
     tests: [T.docTopics],
   },
-  // ── Permit2 expiration gate (audit R9): the funding pre-flight predicts the AUTHORITY ──────
+  // ── Permit2 expiration gate: the funding pre-flight predicts the AUTHORITY ──────
   {
     // The zero carve-out returns: an (amount>0, expiration 0) allowance reads as fundable when
     // Permit2 reverts AllowanceExpired on it — the funded-looking bundle is built to revert.
@@ -5019,7 +4979,7 @@ const CATALOG: Mutant[] = [
     replace: "expired: nowSecs >= BigInt(Number(p2[1]))",
     tests: [T.handlers],
   },
-  // ── CLI numeric dialect + error contract (audit R5/R6/R7) ───────────────────────────────────
+  // ── CLI numeric dialect + error contract ───────────────────────────────────
   {
     // Regression to the two-dialect world: integer flags accept 1e3 via Number() but not 1_000.
     id: "cli-integer-sugar-gate-narrowed",
@@ -5054,7 +5014,7 @@ const CATALOG: Mutant[] = [
     replace: "const swallowed = typeof jsonOpt === \"number\" && /^[A-Za-z][\\w-]*$/.test(rawJson);",
     tests: [T.cli],
   },
-  // ── surface-tier boundary (owner-approved 2026-08-11): the mechanical prose/semantic gate ──
+  // ── surface-tier boundary (2026-08-11): the mechanical prose/semantic gate ──
   {
     // The sentence guard inverts: a description that GAINED a sentence classifies as a
     // rewording, so new semantic content ships on the cheap tier without an eval.
@@ -5166,7 +5126,7 @@ const CATALOG: Mutant[] = [
   // ── taker-fill signedOrder: the venue-free fill path's verification gates ─────────────────
   {
     // The inline re-hash gate disappears: bytes build for an order that does not hash to the
-    // orderHash the caller claimed — the [K3] property the path exists to enforce.
+    // orderHash the caller claimed — the property the path exists to enforce.
     id: "inline-fill-hash-gate-removed",
     file: "packages/core/src/handlers/prepare-orders.ts",
     find: "      if (localOrderHash.toLowerCase() !== wanted) {",
@@ -5386,7 +5346,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // The sonnet gate loosens to any Claude model: a haiku/opus run silently grades the MODEL,
-    // not the tool surface, and poisons every baseline comparison (owner ruling 2026-07-28).
+    // not the tool surface, and poisons every baseline comparison.
     id: "eval-model-gate-loosened",
     file: "evals/run.ts",
     find: 'return /^claude-sonnet-/.test(model)',
@@ -5819,7 +5779,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // The allowlist is read from the RESOLVED config again: a remote document that moves an
-    // address can admit the code behind it — the exact self-authorization MCP-NET-001 names.
+    // address can admit the code behind it — configuration would authorize itself.
     id: "impl-allowlist-from-resolved-config",
     file: "packages/core/src/implementations.ts",
     find: "checkApprovedImplementations(client, chainId, { allowlist: BUNDLED_DEFAULTS, addresses: cfg.defaults, ...opts })",
@@ -6045,7 +6005,7 @@ const CATALOG: Mutant[] = [
   },
   // ── rc.4: the Daybreak Blue review (2026-09-11) ──────────────────────────────────────────
   {
-    // DB-004: a refuted maker signature no longer drops the book row — a forgery serves confirmed.
+    // a refuted maker signature no longer drops the book row — a forgery serves confirmed.
     id: "book-signature-refutation-kept",
     file: "packages/core/src/handlers/hybrid-verify.ts",
     find: 'if (sig?.outcome === "refuted") {\n        drop(`maker signature refuted: ${sig.why}`);\n        continue;\n      }',
@@ -6053,7 +6013,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: a live bit alone confirms — an unverified signature reads as confirmed.
+    // a live bit alone confirms — an unverified signature reads as confirmed.
     id: "book-unverified-signature-confirmed",
     file: "packages/core/src/handlers/hybrid-verify.ts",
     find: 'if (liveness === "live" && makerSignature !== "unverified") keep(row, "confirmed");',
@@ -6061,7 +6021,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: the extension rule is skipped on the book — unbound bytes serve.
+    // the extension rule is skipped on the book — unbound bytes serve.
     id: "book-extension-verdict-dropped",
     file: "packages/core/src/handlers/hybrid-verify.ts",
     find: "    if (!extensionVerdict(p.value.order, p.value.extension).valid) {\n      extensionLies += 1;\n      continue;\n    }\n",
@@ -6069,7 +6029,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: ecrecover's answer is ignored — every row reads eoa-verified.
+    // ecrecover's answer is ignored — every row reads eoa-verified.
     id: "book-eoa-recover-ignored",
     file: "packages/core/src/handlers/hybrid-verify.ts",
     find: 'const makerSignature: BookMakerSignature = recovered.signer !== null && recovered.signer.toLowerCase() === p.value.order.maker.toLowerCase() ? "eoa-verified" : "unverified";',
@@ -6104,7 +6064,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: the venue taker-fill branch builds on a row it never authenticated.
+    // the venue taker-fill branch builds on a row it never authenticated.
     id: "venue-fill-auth-skipped",
     file: "packages/core/src/handlers/prepare-orders.ts",
     find: "      if (!auth.ok) return auth.envelope;\n      const authenticated: SignedLopOrder",
@@ -6112,7 +6072,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: refresh re-signs terms nobody authenticated.
+    // refresh re-signs terms nobody authenticated.
     id: "refresh-auth-skipped",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
     find: "  if (!auth.ok) return auth.envelope;\n  const traits = decodeMakerTraits(old.makerTraits);",
@@ -6120,7 +6080,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: the extension rule regresses to the pre-rc.4 hash-only check (flag ignored).
+    // the extension rule regresses to the pre-rc.4 hash-only check (flag ignored).
     id: "extension-verdict-flag-ignored",
     file: "packages/core/src/handlers/order-auth.ts",
     find: "  if (decodeMakerTraits(order.makerTraits).hasExtension) {",
@@ -6128,7 +6088,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth, T.inlineFill],
   },
   {
-    // DB-004/DB-007: a code read failing in transport becomes a signature VERDICT (conflict).
+    // a code read failing in transport becomes a signature VERDICT (conflict).
     id: "auth-read-failed-treated-as-verdict",
     file: "packages/core/src/handlers/order-auth.ts",
     find: '  if (verdict.kind === "eoa_mismatch" && verdict.codeProbe === "read-failed") {',
@@ -6136,7 +6096,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: an ERC-1271 transport failure refutes the row instead of leaving it unverified.
+    // an ERC-1271 transport failure refutes the row instead of leaving it unverified.
     id: "book-1271-transport-refutes",
     file: "packages/core/src/handlers/order-auth.ts",
     find: '  if (verdict.kind === "erc1271_rejected") return { outcome: "refuted", why: "the contract maker\'s isValidSignature rejected the signature" };\n  return { outcome: "indeterminate" };',
@@ -6144,7 +6104,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-004: a non-recovering signature refutes the row even when the code probe failed.
+    // a non-recovering signature refutes the row even when the code probe failed.
     id: "book-eoa-mismatch-probe-ignored",
     file: "packages/core/src/handlers/order-auth.ts",
     find: '  if (probe !== "has-code") return { outcome: "indeterminate" }; // read-failed (no-rpc cannot occur: the client is in hand)',
@@ -6152,7 +6112,7 @@ const CATALOG: Mutant[] = [
     tests: [T.orderAuth],
   },
   {
-    // DB-001: the caller's signal is set on deps but never reaches the fetch (the rc.3 state).
+    // the caller's signal is set on deps but never reaches the fetch (the rc.3 state).
     id: "venue-signal-not-passed",
     file: "packages/core/src/datasources/venue.ts",
     find: "      { ...(init ?? {}), ...(deps.signal ? { signal: deps.signal } : {}) },",
@@ -6160,7 +6120,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venueTransport],
   },
   {
-    // DB-001: a caller-cancelled fetch feeds the breaker and retries like a venue outage.
+    // a caller-cancelled fetch feeds the breaker and retries like a venue outage.
     id: "venue-abort-feeds-breaker",
     file: "packages/core/src/datasources/venue.ts",
     find: "    if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} cancelled mid-flight (${abortReasonText(deps.signal)})`);\n",
@@ -6168,7 +6128,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venueTransport],
   },
   {
-    // DB-001: an already-aborted caller still gets a network call.
+    // an already-aborted caller still gets a network call.
     id: "venue-preaborted-still-fetches",
     file: "packages/core/src/datasources/venue.ts",
     find: "  if (deps.signal?.aborted) throw new VenueAborted(`venue call to ${path} not started: the request was cancelled (${abortReasonText(deps.signal)})`);\n",
@@ -6176,7 +6136,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venueTransport],
   },
   {
-    // DB-001: an abort is mapped like any other throw (internal_error) instead of request_aborted.
+    // an abort is mapped like any other throw (internal_error) instead of request_aborted.
     id: "venue-aborted-unmapped",
     file: "packages/core/src/handlers/shared.ts",
     find: "  if (err instanceof VenueAborted) {",
@@ -6184,7 +6144,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venueTransport],
   },
   {
-    // DB-001: the caller waits for the whole dispatch again — the deadline ends nothing.
+    // the caller waits for the whole dispatch again — the deadline ends nothing.
     id: "admission-deadline-race-dropped",
     file: "packages/mcp/src/admission.ts",
     find: "    return Promise.race([work, deadlineResponse(permit.signal)]);",
@@ -6192,7 +6152,7 @@ const CATALOG: Mutant[] = [
     tests: [T.httpAdmission],
   },
   {
-    // DB-001: the slot is released at the deadline while the work still runs — the count lies.
+    // the slot is released at the deadline while the work still runs — the count lies.
     id: "admission-release-at-deadline",
     file: "packages/mcp/src/admission.ts",
     find: "    const settled = work.finally(() => permit.release());\n    settled.catch(() => {});",
@@ -6200,7 +6160,7 @@ const CATALOG: Mutant[] = [
     tests: [T.httpAdmission],
   },
   {
-    // DB-001: a body that arrives after the deadline is still dispatched.
+    // a body that arrives after the deadline is still dispatched.
     id: "admission-aborted-still-dispatches",
     file: "packages/mcp/src/admission.ts",
     find: "    if (signal.aborted) return deadlineRefusal();\n",
@@ -6208,7 +6168,7 @@ const CATALOG: Mutant[] = [
     tests: [T.httpAdmission],
   },
   {
-    // DB-003: the outer multicall target is silently trusted again.
+    // the outer multicall target is silently trusted again.
     id: "decode-outer-unverified-dropped",
     file: "packages/core/src/handlers/decode.ts",
     find: "...(claimedTo === undefined && isBundlerMulticall(data) ? { outerUnverified: ",
@@ -6216,7 +6176,7 @@ const CATALOG: Mutant[] = [
     tests: [T.decodeTrust],
   },
   {
-    // DB-005: the creator's bound controller is not compared with config.
+    // the creator's bound controller is not compared with config.
     id: "creator-controller-binding-unchecked",
     file: "packages/core/src/handlers/prepare-market.ts",
     find: "const controllerMismatch = mr.controller !== undefined && boundController.toLowerCase() !== mr.controller.toLowerCase();",
@@ -6224,7 +6184,7 @@ const CATALOG: Mutant[] = [
     tests: [T.marketCreator],
   },
   {
-    // DB-007: a transport failure on rate() reads as a revert (the oracle-fault diagnosis).
+    // a transport failure on rate() reads as a revert (the oracle-fault diagnosis).
     id: "oracle-rate-transport-as-revert",
     file: "packages/core/src/handlers/registry.ts",
     find: 'rateReadFailure: isTransportFailure(err) ? "transport" : "revert"',
@@ -6232,7 +6192,7 @@ const CATALOG: Mutant[] = [
     tests: [T.oracleDiag],
   },
   {
-    // DB-007: a resolve that failed in transport is attributed to the recipe/oracle again.
+    // a resolve that failed in transport is attributed to the recipe/oracle again.
     id: "resolve-transport-as-refusal",
     file: "packages/core/src/handlers/registry.ts",
     find: '    if (isTransportFailure(err) || (o.deployed && o.rateReadFailure === "transport")) {',
@@ -6429,7 +6389,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // The caller's probeBudget is ignored and the default always used: the input becomes a
-    // silently-unapplied parameter (C13).
+    // silently-unapplied parameter.
     id: "walk-caller-budget-ignored",
     file: "packages/core/src/handlers/query-offers.ts",
     find: "      const probeBudget = input.probeBudget ?? defaultProbeBudget();",
@@ -6591,7 +6551,7 @@ const CATALOG: Mutant[] = [
     tests: [T.venue],
   },
   {
-    // DB-002 regresses: the bind address infers trust again, and a bare --host 0.0.0.0 lets any
+    // The bind address infers trust again, and a bare --host 0.0.0.0 lets any
     // caller mint a fresh principal per request.
     id: "http-trust-forwarded-inferred-from-bind",
     file: "packages/mcp/src/http.ts",
@@ -6600,7 +6560,7 @@ const CATALOG: Mutant[] = [
     tests: [T.httpAdmission],
   },
   {
-    // DB-006 regresses: the variant narrowing is gone and the union admits list-only keys on a
+    // The variant narrowing is gone and the union admits list-only keys on a
     // single-record read — the green no-op returns.
     id: "filters-variant-scope-dropped",
     file: "packages/core/src/handlers/filters.ts",
@@ -6704,7 +6664,7 @@ const CATALOG: Mutant[] = [
   {
     // The fallback binding of each BaseFiller to its pool manager width (0.2 → 10-field).
     id: "rollover02-phoenix-wire-fallback-flattened",
-    // Review A2 (2026-09-22): the width is DECLARED by the settler generation's phoenix block; a
+    // The width is DECLARED by the settler generation's phoenix block; a
     // generation without one is refused. The mutant restores the old guess (an 8-field width for
     // a set that declares none) — the pool id hashed for a 0.2 settler is then the wrong width.
     file: "packages/core/src/handlers/prepare-orders.ts",
@@ -6721,7 +6681,7 @@ const CATALOG: Mutant[] = [
   //    test/market-registry-nested.test.ts (chain-captured golden bytes) unless noted. ──────────
   {
     // The nested permit row reverts to the 0.4.0 adapter's v/r/s tuple: the 0.5.0 adapter
-    // (bytes signature, market-registry PR #65) reads every permit-carrying payload wrongly.
+    // (bytes signature) reads every permit-carrying payload wrongly.
     id: "nested-permit-row-reverts-to-vrs",
     file: "packages/core/src/market-registry.ts",
     find: "  PERMITS_NESTED_ABI,\n];",
@@ -7120,7 +7080,7 @@ const CATALOG: Mutant[] = [
     tests: [T.predictReason],
   },
   {
-    // Review A1 (2026-09-22): an unrecognized settler carrying a JIT commitment refuses — the
+    // An unrecognized settler carrying a JIT commitment refuses — the
     // mutant re-admits it (the commitment would be hashed on a guessed wire nobody can reproduce).
     id: "rev-a1-unknown-settler-commitment-admitted",
     file: "packages/core/src/handlers/prepare-orders.ts",
@@ -7129,7 +7089,7 @@ const CATALOG: Mutant[] = [
     tests: [T.rollover],
   },
   {
-    // Review A3: the JIT extension is decoded on the wire of the adapter it NAMES, found by
+    // The JIT extension is decoded on the wire of the adapter it NAMES, found by
     // classification; the mutant decodes an unknown adapter as if it were the primary's wire.
     id: "rev-a3-unknown-adapter-decoded-anyway",
     file: "packages/core/src/jit-extension.ts",
@@ -7138,7 +7098,7 @@ const CATALOG: Mutant[] = [
     tests: [T.nested, T.decodeJit, T.makerReadiness],
   },
   {
-    // Review A4: a MarketCreated log from an address the emitter table does not list is dropped,
+    // A MarketCreated log from an address the emitter table does not list is dropped,
     // never decoded on a guessed width.
     id: "rev-a4-unlisted-emitter-decoded-on-guess",
     file: "packages/core/src/datasources/hypersync.ts",
@@ -7326,7 +7286,7 @@ const CATALOG: Mutant[] = [
   },
   {
     // The fill guard dropped: a stranger's postInteraction hook builds fill bytes — unknown code
-    // runs inside the taker's transaction (owner requirement 2026-09-23).
+    // runs inside the taker's transaction.
     id: "foreign-hook-fill-guard-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
     find: "    if (foreign.length > 0) {\n      return envelope({\n        state: \"unavailable\",\n        data: { orderHash: action.orderHash, extensionTargets: targets, foreign },",
@@ -7737,7 +7697,7 @@ const CATALOG: Mutant[] = [
     tests: [T.apkBuildScripts],
   },
   {
-    // No build without the clock: an empty epoch once shipped silently (run 32225918023).
+    // No build without the clock: an empty epoch once shipped silently.
     id: "apk-build-empty-epoch-admitted",
     file: "scripts/apk-melange-build.sh",
     find: "test -n \"$SOURCE_DATE_EPOCH\" || { echo \"::error::could not read the commit's timestamp for SOURCE_DATE_EPOCH\" >&2; exit 1; }",
@@ -8253,7 +8213,7 @@ const CATALOG: Mutant[] = [
     tests: [T.testGate],
   },
   {
-    // cork-cli-private#6: the posture seam is removed and responses leave bare.
+    // The posture seam is removed and responses leave bare.
     id: "http-security-headers-not-applied",
     file: "packages/mcp/src/http.ts",
     find: "return async (req, peerAddress) => withSecurityHeaders(await route(req, peerAddress));",
@@ -8552,7 +8512,7 @@ const CATALOG: Mutant[] = [
     tests: [T.rfqQuotes],
   },
   {
-    // cork_submit re-checks the orders before relay [K3].
+    // cork_submit re-checks the orders before relay.
     id: "quoted-checks-skipped-on-submit",
     file: "packages/core/src/handlers/submit.ts",
     find: "const quotedCheck = action.status === \"quoted\" && target.kind !== \"rollover\" ? await checkQuotedOptions(",
@@ -9427,7 +9387,7 @@ async function vitest(tests: string[]): Promise<{ exitCode: number; report: Vite
   // Every vitest child runs at the LOWEST CPU priority whatever launched the catalogue: a niced
   // parent does not reach these children (`bun x` re-execs through npm with a fresh scheduling
   // class — observed nice=0 children under a nice=19 parent, 2026-09-23), and a full run
-  // saturates every core and starves the terminal (owner). `nice` is POSIX; the value is
+  // saturates every core and starves the terminal. `nice` is POSIX; the value is
   // clamped where the platform's range is narrower.
   //
   // The verdict comes from the JSON REPORT, not the exit code: a suite that fails to LOAD also

@@ -57,8 +57,8 @@ export async function handlePrepareMarket(
   const warnings: Array<{ code: string; message: string }> = [...mrWarn];
   const wire: MarketRegistryWire = mr.wire;
   const codec = wireCodec(wire);
-  // Declared by the generation's phoenix block, never inferred from the registry wire (review
-  // A2, 2026-09-22): a create-pool against a generation with no pool manager has nothing to
+  // Declared by the generation's phoenix block, never inferred from the registry wire
+  // (2026-09-22): a create-pool against a generation with no pool manager has nothing to
   // create on, and a guessed width would derive an id the creator never mints.
   if (phoenixWireResolved === undefined) {
     return unavailable(chainId, "unknown_deployment", `generation '${generation?.label ?? "?"}' declares no phoenix block; the pool id width is unknown, so no market-infrastructure tx can be derived against it — refresh cork-defaults.v2.json or target a generation whose phoenix block is configured`, ctx);
@@ -264,7 +264,7 @@ async function handleCreatePool(
     // pool manager (where the pool lands), and CONTROLLER (whose roles gate creation and whose
     // own pool-manager binding the share prediction follows). A controller that differs from
     // the configured one would put the roles check on one graph and the cST/cPT prediction on
-    // another (audit DB-005, 2026-09-11) — so it is a conflict like the other two, and the
+    // another (2026-09-11) — so it is a conflict like the other two, and the
     // prediction below runs against the BOUND controller, never the config's.
     const controllerMismatch = mr.controller !== undefined && boundController.toLowerCase() !== mr.controller.toLowerCase();
     if (boundRegistry.toLowerCase() !== mr.registry.toLowerCase() || (dep?.poolManager !== undefined && boundPm.toLowerCase() !== dep.poolManager.toLowerCase()) || controllerMismatch) {
@@ -278,7 +278,7 @@ async function handleCreatePool(
       });
     }
     // Opportunistic constants-cache refresh (fee cap consumed by the value gate above; one
-    // read per TTL) — flat wire only: the 0.5.0 creator exposes no MAX_FEE_PERCENTAGE (facts D4).
+    // read per TTL) — flat wire only: the 0.5.0 creator exposes no MAX_FEE_PERCENTAGE.
     if (codec.hasFeeCapView) await refreshContractConstant(client, chainId, creator, "MAX_FEE_PERCENTAGE");
     // The creator holds the controller role on BOTH wires here (it calls the controller itself);
     // a 10-field controller has no fee authority, so POOL_CREATOR alone is the requirement.
