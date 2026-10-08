@@ -16,7 +16,7 @@ An opt-in recovery candidate for the 0.7 line. The CLI/MCP/SDK behavior and comp
 - **Image attestation can read the registry login.** The image was pushed in the `v0.7.0-rc.1` run, but the attestation action ignored its temporary `DOCKER_CONFIG` directory and failed to find `$HOME/.docker/config.json`. Both apko login and the pinned attestation action now share that default path, with directory mode 0700 and credential-file mode 0600. The always-run cleanup removes only the credential file, preserving unrelated Docker data. Image digest provenance remains mandatory before GitHub Release publication.
 - **Recovery uses a new immutable version.** The failed `v0.7.0-rc.1` tag and already-pushed container image are left unchanged. Re-running its tag workflow would execute the old code, so the corrected workflow ships as `v0.7.0-rc.2` with fresh checks and its own signed tag.
 
-The source-first port also includes the already-reviewed signer-identity and main-only agent-evaluation corrections from the release branch. This candidate follows the normal release-branch tagging guard and uses engineer SSH signatures for both the public commit and annotated tag; the web-flow signature exception granted for rc.1 is not needed here.
+The source-first port also includes the existing signer-identity and main-only agent-evaluation corrections from the release branch. This candidate follows the normal release-branch tagging guard and uses engineer SSH signatures for both the public commit and annotated tag; the web-flow signature exception granted for rc.1 is not needed here.
 
 ## [0.7.0-rc.1] — 2026-10-08; publication incomplete
 
