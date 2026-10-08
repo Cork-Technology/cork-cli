@@ -7,6 +7,19 @@ covered.
 
 ## [Unreleased]
 
+## [0.7.0-rc.2] — 2026-10-08
+
+An opt-in recovery candidate for the 0.7 line. The CLI/MCP/SDK behavior and compatibility changes below remain the same; this cut repairs image publication and advances all package, lockfile and SDK archive versions together. It is **unreviewed and unaudited**, not a production promotion. The release owner retained the author-only review and deferred notice/usage posture for this opt-in candidate; existing installations and API-v1 routes are not retired.
+
+### Fixed
+
+- **Image attestation can read the registry login.** The image was pushed in the `v0.7.0-rc.1` run, but the attestation action ignored its temporary `DOCKER_CONFIG` directory and failed to find `$HOME/.docker/config.json`. Both apko login and the pinned attestation action now share that default path, with directory mode 0700 and credential-file mode 0600. The always-run cleanup removes only the credential file, preserving unrelated Docker data. Image digest provenance remains mandatory before GitHub Release publication.
+- **Recovery uses a new immutable version.** The failed `v0.7.0-rc.1` tag and already-pushed container image are left unchanged. Re-running its tag workflow would execute the old code, so the corrected workflow ships as `v0.7.0-rc.2` with fresh checks and its own signed tag.
+
+The source-first port also includes the already-reviewed signer-identity and main-only agent-evaluation corrections from the release branch. This candidate follows the normal release-branch tagging guard and uses engineer SSH signatures for both the public commit and annotated tag; the web-flow signature exception granted for rc.1 is not needed here.
+
+## [0.7.0-rc.1] — 2026-10-08; publication incomplete
+
 ### Changed
 
 - **`/readyz` on the HTTP MCP server answers a summary to a bare request** (cork-cli-private#6). The public body is `status`, `version`, `detail: "summary"`, one `degraded` flag per subsystem and the aggregate `degraded`. The full snapshot (RPC hosts and breaker states, the venue host and its last outcome, in-flight counts, the admission bounds, the trust posture, the config source) now needs a bearer: the MCP token (`CORK_MCP_TOKEN`) or the new read-only `CORK_MCP_DIAGNOSTICS_TOKEN`. Monitors that read `degraded` keep working; a monitor that read a host or a count presents the bearer. The route stays 200 in both views, and a wrong bearer gets the summary, never a 401. SDK: `readyzBody` builds either view from the diagnostics it is handed.
@@ -28,15 +41,14 @@ covered.
 - **`signature` on every JIT permit input** (`jitMarket.permits[]` on maker-order and taker-fill): the permit signature as bytes, the canonical form. `v`, `r`, `s` stay accepted and are normalized to `r‖s‖v`. Pass one form: both, neither, or a partial `v`/`r`/`s` is refused as invalid input. On the flat wire a signature that is not 65 bytes is refused with teaching, because that adapter takes ECDSA only.
 - **SDK:** `PermitParams` now carries `signature` in place of `v`, `r`, `s` (the API-surface fixture is regenerated). New exports `permitSignatureOfVrs`, `splitPermitSignature`, `permitOfFlatRow` and the type `FlatPermitRow`. `encodeJitExtraData("flat", …)` throws on a non-65-byte signature.
 
-## [0.7.0-rc.1] — preparation, not yet published
 
-A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. This public candidate does not publish a tag, Release, package, image, or hosted MCP deployment. Independent exposure/review and compatibility approval, removal notice and usage evidence, and release signing prerequisites remain release gates.
+A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. The signed tag was published, but image attestation failed before GitHub Release creation; the already-pushed image is not a completed release. The owner accepted this opt-in candidate under the review and notice exceptions below, without production promotion or hosted MCP deployment.
 
 Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.6 at `c10ae6b` on 2026-10-08, including the full-answer proof fix. The committed OpenAPI capture is refreshed from production after reviewing the 0.4.5 → 0.4.6 source diff: the published spec changes only its version, and the v2 registry moves to the 0.5.0 adapter already supported by this CLI; route and validation logic are unchanged. The drift check remains strict. The API still serves v1 alongside v2; **this CLI/MCP/SDK RFQ surface serves v2 only**, with no v1 compatibility shim. See [the migration guide](docs/cli.md#12-migrate-from-06-to-07) before upgrading.
 
-Public-port preparation also preserves executable release-script modes and handles the actual SDK Git repository URLs and current release-graph validator, including historical spellings. Cache-isolation tests cover either build channel. The public candidate remains unpublished and subject to independent review and release approval.
+Public-port preparation also preserves executable release-script modes and handles the actual SDK Git repository URLs and current release-graph validator, including historical spellings. Cache-isolation tests cover either build channel.
 The SDK installation guide now selects the public release repository by default and no longer includes private-preparation instructions. Archive verification still binds every download to its repository, signing workflow, release tag and approved source commit.
-Release candidates now tag only the advertised head of their public `release/vX.Y.Z` branch; final versions still tag public `main`. CI and release-toolchain rehearsals run on both main and release branches. Push the transformed candidate to `release/v0.7.0`, wait for its checks, then run `sh scripts/release-tag.sh v0.7.0-rc.1 <public-commit> cork-cli`. The script refuses missing branches and mismatched heads before signing.
+Release candidates normally tag only the advertised head of their public `release/vX.Y.Z` branch; final versions tag public `main`. The owner approved tagging rc.1 on main and accepting that merge commit’s GitHub web-flow signature; its annotated tag was engineer SSH-signed and verified. Subsequent RCs use the normal release-branch guard, for example `sh scripts/release-tag.sh v0.7.0-rc.2 <public-commit> cork-cli`. The script refuses missing branches and mismatched heads before signing.
 
 ### Release exceptions
 

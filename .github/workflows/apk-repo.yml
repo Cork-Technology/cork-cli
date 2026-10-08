@@ -548,12 +548,16 @@ jobs:
           tags="$image:$TAG"
           case "$TAG" in v0.*|*-*) : ;; *) tags="$tags $image:latest" ;; esac
           echo "publishing: $tags"
-          DOCKER_CONFIG="$(mktemp -d)"
+          # The attestation action reads $HOME/.docker/config.json, ignoring DOCKER_CONFIG.
+          # apko and the action must share that path until the always-run cleanup below.
+          DOCKER_CONFIG="$HOME/.docker"
           export DOCKER_CONFIG
+          mkdir -p "$DOCKER_CONFIG"
           chmod 700 "$DOCKER_CONFIG"
           echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
           echo "CORK_REGISTRY_AUTH_DIR=$DOCKER_CONFIG" >> "$GITHUB_ENV"
           printf '%s' "$GHCR_TOKEN" | apko login ghcr.io -u "${{ github.actor }}" --password-stdin
+          chmod 600 "$DOCKER_CONFIG/config.json"
           # shellcheck disable=SC2086 # $tags is a deliberate word list
           apko publish packaging/cork-cli.apko.yaml $tags --sbom-path sboms/ | tee digest.txt
           # apko prints the pushed ref with digest as the last line: capture for attestation
@@ -575,4 +579,4 @@ jobs:
       - name: Remove ephemeral registry authentication
         if: ${{ always() }}
         shell: sh
-        run: '[ -z "${CORK_REGISTRY_AUTH_DIR:-}" ] || rm -rf "$CORK_REGISTRY_AUTH_DIR"' 
+        run: '[ -z "${CORK_REGISTRY_AUTH_DIR:-}" ] || rm -f "$CORK_REGISTRY_AUTH_DIR/config.json"'

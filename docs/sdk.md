@@ -48,21 +48,21 @@ done
 ```
 
 Merge dependencies **and overrides** into your consumer's package.json. This example is for
-0.7.0-rc.1 after publication; use the archive version of the tag you actually downloaded.
+0.7.0-rc.2 after publication; use the archive version of the tag you actually downloaded.
 The overrides keep transitive Cork dependencies on those same verified archives rather than
 trying unpublished npm versions. MCP is optional: omit both of its entries if you need only core.
 
 ```json
 {
   "dependencies": {
-    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.1.tgz",
-    "@cork/core": "file:./cork-core-0.7.0-rc.1.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.1.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.2.tgz",
+    "@cork/core": "file:./cork-core-0.7.0-rc.2.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.2.tgz"
   },
   "overrides": {
-    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.1.tgz",
-    "@cork/core": "file:./cork-core-0.7.0-rc.1.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.1.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.7.0-rc.2.tgz",
+    "@cork/core": "file:./cork-core-0.7.0-rc.2.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.7.0-rc.2.tgz"
   }
 }
 ```
