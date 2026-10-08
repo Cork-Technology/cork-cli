@@ -7,6 +7,14 @@ covered.
 
 ## [Unreleased]
 
+## [0.7.0] — preparation, not yet published
+
+Version-only preparation from `v0.7.0-rc.2`. Runtime behavior, tool contracts, dependencies and public/private release channels are unchanged. This version is **unreviewed and unaudited**; removing the RC suffix does not promote it to production. No `v0.7.0` tag or publication is recorded here.
+
+### Changed
+
+- All package and lockfile workspace versions are `0.7.0`; SDK archive examples use the matching names.
+
 ## [0.7.0-rc.2] — 2026-10-08
 
 An opt-in recovery candidate for the 0.7 line. The CLI/MCP/SDK behavior and compatibility changes below remain the same; this cut repairs image publication and advances all package, lockfile and SDK archive versions together. It is **unreviewed and unaudited**, not a production promotion. The release owner retained the author-only review and deferred notice/usage posture for this opt-in candidate; existing installations and API-v1 routes are not retired.
