@@ -2009,6 +2009,17 @@ const CATALOG: Mutant[] = [
     tests: [T.port],
   },
   {
+    // A signed port that keeps the original committer re-creates the 2026-10-08 shape: six
+    // web-flow merges on cork-cli release/v0.7.0 signed with the porter's key but committed by
+    // `GitHub <noreply@github.com>` — "Unverified" on GitHub, which resolves the key through
+    // the committer email.
+    id: "port-signed-committer-not-signer",
+    file: "scripts/port-to-public.ts",
+    find: "  return sign ? signer : original;",
+    replace: "  return original;",
+    tests: [T.port],
+  },
+  {
     // Excluded-only commits must be SKIPPED — minting empty commits with full messages is the
     // exact misleading-history regression observed live on 2026-08-10.
     id: "port-empty-skip-dropped",
