@@ -16,6 +16,7 @@ covered.
 
 ### Fixed
 
+- **The eval job runs on `main` pushes only** (`ci.yml` `agent-evals`): the `release/v*` trigger added on 2026-10-07 also ran it on the public release branch, whose OIDC subject the evals AWS role does not trust, so the job failed at assume-role (cork-cli run 37767263288). Tests and live smoke still run on release branches.
 - **A signed port names the signer as committer** (`scripts/port-to-public.ts`): GitHub resolves an SSH signature through the committer email, so a re-signed web-flow merge that kept `GitHub <noreply@github.com>` as committer showed as unverified on the public tree (six merges on `release/v0.7.0`, 2026-10-08). The author and both dates are unchanged; an unsigned port keeps the original committer.
 
 ### Added
@@ -31,7 +32,7 @@ covered.
 
 A breaking candidate of the 0.7 line: RFQ v1 inputs are removed, RFQ writes require explicit authorization, and `rfq-open` requires a kind. Below 1.0 these covered-schema breaks require a minor bump, not a 0.6 patch. This public candidate does not publish a tag, Release, package, image, or hosted MCP deployment. Independent exposure/review and compatibility approval, removal notice and usage evidence, and release signing prerequisites remain release gates.
 
-Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.5 at `4fb7eb3` on 2026-10-07, including the full-answer proof fix. The committed OpenAPI capture is refreshed from production. The API still serves v1 alongside v2; **this CLI/MCP/SDK RFQ surface serves v2 only**, with no v1 compatibility shim. See [the migration guide](docs/cli.md#12-migrate-from-06-to-07) before upgrading.
+Production `https://api-phoenix.cork.tech/v1/meta` reports cork-api 0.4.6 at `c10ae6b` on 2026-10-08, including the full-answer proof fix. The committed OpenAPI capture is refreshed from production after reviewing the 0.4.5 → 0.4.6 source diff: the published spec changes only its version, and the v2 registry moves to the 0.5.0 adapter already supported by this CLI; route and validation logic are unchanged. The drift check remains strict. The API still serves v1 alongside v2; **this CLI/MCP/SDK RFQ surface serves v2 only**, with no v1 compatibility shim. See [the migration guide](docs/cli.md#12-migrate-from-06-to-07) before upgrading.
 
 Public-port preparation also preserves executable release-script modes and handles the actual SDK Git repository URLs and current release-graph validator, including historical spellings. Cache-isolation tests cover either build channel. The public candidate remains unpublished and subject to independent review and release approval.
 The SDK installation guide now selects the public release repository by default and no longer includes private-preparation instructions. Archive verification still binds every download to its repository, signing workflow, release tag and approved source commit.
