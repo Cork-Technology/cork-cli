@@ -14,6 +14,11 @@ covered.
 - **A contract wallet can sign a JIT permit on the nested wire.** The share token checks the permit with ECDSA for an EOA and ERC-1271 for a contract (for example a Safe). `data.approvals` marks the nested-wire permit `wallets: "eoa+contract"` (flat stays `eoa-only`). `contract_maker_pre_rest` on the nested wire names both paths (sign the permit through ERC-1271, or create the pool first), and a maker-order that already carries a permit over the predicted cST no longer gets the create-pool-first execution. The maker-readiness classifier no longer reports `contract-maker-unborn-cst` for a nested-wire JIT permit. The flat wire keeps the ECDSA-only rule.
 - **Allowlist.** The approved-implementations `jitAdapter` list gains `0x24a11fba…225d` (the 0.5.0 runtime code, the same on both chains) and drops `0x2fe70bac…d35a` (0.4.0): this build encodes only the 0.5.0 permit row, so it must not build JIT bytes for the 0.4.0 adapter, even from a stale remote config.
 
+### Fixed
+
+- **The eval job runs on `main` pushes only** (`ci.yml` `agent-evals`): the `release/v*` trigger added on 2026-10-07 also ran it on the public release branch, whose OIDC subject the evals AWS role does not trust, so the job failed at assume-role (cork-cli run 37767263288). Tests and live smoke still run on release branches.
+- **A signed port names the signer as committer** (`scripts/port-to-public.ts`): GitHub resolves an SSH signature through the committer email, so a re-signed web-flow merge that kept `GitHub <noreply@github.com>` as committer showed as unverified on the public tree (six merges on `release/v0.7.0`, 2026-10-08). The author and both dates are unchanged; an unsigned port keeps the original committer.
+
 ### Added
 
 - **CI's tests step fails closed** (`bun run test:ci`, `scripts/test-gate.ts`): the suite runs through vitest's programmatic API, awaited to its close, and the run is judged by `scripts/suite-verdict.ts` from the JSON report against the file set vitest discovered — every discovered file must carry a result, no test may fail, no file may error at load, at least one test must run. On 2026-10-07 the previous step, `bun --bun vitest run` judged by exit code, passed on main after one file in three seconds with no summary (run 37622917869). The mutation runner's baseline is held to the same rule. `bun run test` is unchanged for local runs.

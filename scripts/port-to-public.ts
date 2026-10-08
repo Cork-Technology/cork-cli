@@ -233,10 +233,21 @@ export function stripAiTrailers(message: string): string {
   return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }
 
+/** The committer of a ported commit. Unsigned: the original committer, verbatim. Signed: the
+ *  SIGNER (the repo's user.name/user.email) — GitHub resolves an SSH signature through the
+ *  committer email to an account and then to that account's signing keys, so a re-signed
+ *  web-flow merge that keeps `GitHub <noreply@github.com>` as committer shows "Unverified:
+ *  this user has not yet uploaded their public signing key" (six commits on
+ *  cork-cli release/v0.7.0, 2026-10-08). The committer DATE is always the original's. */
+export function portedCommitter(original: { name: string; email: string }, sign: boolean, signer: { name: string; email: string }): { name: string; email: string } {
+  return sign ? signer : original;
+}
+
 export function portCommits(repo: string, commits: string[], base: string, sign: boolean): { head: string; ported: Array<{ from: string; to: string }>; skipped: string[] } {
   const indexFile = join(mkdtempSync(join(tmpdir(), "port-index-")), "index");
   try {
     let parent = git(repo, ["rev-parse", base]).trim();
+    const signer = { name: git(repo, ["config", "user.name"]).trim(), email: git(repo, ["config", "user.email"]).trim() };
     const ported: Array<{ from: string; to: string }> = [];
     const skipped: string[] = [];
     for (const c of commits) {
@@ -250,14 +261,15 @@ export function portCommits(repo: string, commits: string[], base: string, sign:
       for (const w of noteLeakWarnings(repo, parentTree, tree)) console.warn(`WARN ${commit.slice(0, 7)}: ${w}`);
       const fmt = (f: string) => git(repo, ["log", "-1", `--format=${f}`, commit]).trim();
       const message = stripAiTrailers(git(repo, ["log", "-1", "--format=%B", commit]));
+      const committer = portedCommitter({ name: fmt("%cn"), email: fmt("%ce") }, sign, signer);
       const newCommit = git(repo, ["commit-tree", tree, "-p", parent, ...(sign ? ["-S"] : [])], {
         input: message,
         env: {
           GIT_AUTHOR_NAME: fmt("%an"),
           GIT_AUTHOR_EMAIL: fmt("%ae"),
           GIT_AUTHOR_DATE: fmt("%aI"),
-          GIT_COMMITTER_NAME: fmt("%cn"),
-          GIT_COMMITTER_EMAIL: fmt("%ce"),
+          GIT_COMMITTER_NAME: committer.name,
+          GIT_COMMITTER_EMAIL: committer.email,
           GIT_COMMITTER_DATE: fmt("%cI"),
         },
       }).trim();

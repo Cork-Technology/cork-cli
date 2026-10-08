@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { EXCLUDED_PREFIXES, isExcluded, parseArgs, portCommits, REPOINTS, stripAiTrailers, transformTree } from "./port-to-public.ts";
+import { EXCLUDED_PREFIXES, isExcluded, parseArgs, portCommits, portedCommitter, REPOINTS, stripAiTrailers, transformTree } from "./port-to-public.ts";
 
 let repo: string;
 
@@ -105,9 +105,17 @@ describe("port-to-public: the transform is a pure function of the private tree",
   });
 
   it("preserves author/committer identity and dates on the ported commit", () => {
-    const priv = git(["log", "-1", "--format=%an|%ae|%aI|%cI", "main"]).trim();
-    const pub = git(["log", "-1", "--format=%an|%ae|%aI|%cI", "public"]).trim();
+    const priv = git(["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI", "main"]).trim();
+    const pub = git(["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI", "public"]).trim();
     expect(pub).toBe(priv);
+  });
+
+  it("a SIGNED port makes the signer the committer (GitHub resolves the key through the committer email); the author and both dates stay", () => {
+    const web = { name: "GitHub", email: "noreply@github.com" };
+    const me = { name: "heri16", email: "527101+heri16@users.noreply.github.com" };
+    expect(portedCommitter(web, true, me)).toEqual(me);
+    expect(portedCommitter(web, false, me)).toEqual(web);
+    expect(portedCommitter(me, true, me)).toEqual(me);
   });
 
   it("drops an AI co-author trailer from the ported message, keeps human trailers (policy G8)", () => {
