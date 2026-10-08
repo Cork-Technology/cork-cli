@@ -129,11 +129,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: test
-    # Only on main pushes — eval runs cost real tokens; PRs get Layer A, and a release/v* push
-    # gets the toolchain rehearsal: the evals AWS role trusts the refs/heads/main OIDC subject
-    # alone, so an eval job on a release branch fails at assume-role before it spends a token
-    # (cork-cli run 37767263288, 2026-10-08).
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Only on main/release pushes — eval runs cost real tokens; PRs get Layer A.
+    if: github.event_name == 'push'
     permissions:
       contents: read
       id-token: write # mint the GitHub OIDC token the AWS role trust policy verifies

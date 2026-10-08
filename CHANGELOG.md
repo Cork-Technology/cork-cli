@@ -29,7 +29,6 @@ The source-first port also includes the existing signer-identity and main-only a
 
 ### Fixed
 
-- **The eval job runs on `main` pushes only** (`ci.yml` `agent-evals`): the `release/v*` trigger added on 2026-10-07 also ran it on the public release branch, whose OIDC subject the evals AWS role does not trust, so the job failed at assume-role (cork-cli run 37767263288). Tests and live smoke still run on release branches.
 - **A signed port names the signer as committer** (`scripts/port-to-public.ts`): GitHub resolves an SSH signature through the committer email, so a re-signed web-flow merge that kept `GitHub <noreply@github.com>` as committer showed as unverified on the public tree (six merges on `release/v0.7.0`, 2026-10-08). The author and both dates are unchanged; an unsigned port keeps the original committer.
 
 ### Added
