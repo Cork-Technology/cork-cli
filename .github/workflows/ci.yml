@@ -98,14 +98,18 @@ jobs:
         # venue-spec-live is the OpenAPI tripwire: the venue changed its contract under one version
         # label once already (0.4.1 gained an rfqs `underwriter` parameter, 2026-09-04) while this job
         # stayed green because the tripwire was not in it. It self-skips without CORK_RPC_LIVE.
-        run: bunx --bun vitest run packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts packages/core/test/venue-spec-live.test.ts
+        # rollover-live holds the rollover encoding and the clone-admission mirror to the REAL
+        # settler's resolveFor on both chains. Both live steps run through the fail-closed gate,
+        # like the tests step: an incomplete Vitest run can exit successfully without reporting
+        # every test file.
+        run: bun scripts/test-gate.ts packages/core/test/rpc-live.test.ts packages/core/test/venue-live.test.ts packages/core/test/venue-spec-live.test.ts packages/core/test/rollover-live.test.ts
 
       # Compiles `ch` for this (glibc x64) host with the release script and proves the embedded
       # HyperSync binding gets past the native loader — the bare-image finding of 2026-08-20.
       - name: Compiled binary embeds + loads its HyperSync binding
         env:
           CORK_RPC_LIVE: "1"
-        run: bunx --bun vitest run packages/cli/test/compiled-binding-live.test.ts
+        run: bun scripts/test-gate.ts packages/cli/test/compiled-binding-live.test.ts
 
   # Layer B agent evals: runs the trace-graded task set when credentials resolve;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.

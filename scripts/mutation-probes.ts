@@ -129,6 +129,7 @@ const T = {
   fetchTimeout: "packages/core/test/fetch-timeout.test.ts",
   teaching: "packages/schemas/test/teaching.test.ts",
   docTopics: "packages/core/test/doc-topics.test.ts",
+  docsFreshness: "packages/core/test/docs-freshness.test.ts",
   http: "packages/mcp/test/http.test.ts",
   httpAdmission: "packages/mcp/test/http-admission.test.ts",
   surfaceTier: "packages/mcp/test/surface-tier.test.ts",
@@ -1986,6 +1987,216 @@ const CATALOG: Mutant[] = [
     find: "decode: (logs) => decodeMarketRows(logs, ms.emitters).map((m) => ({ poolId: m.poolId, corkSwapToken: m.corkSwapToken, collateralAsset: m.collateralAsset, referenceAsset: m.referenceAsset, expiry: m.expiry, poolManager: m.poolManager, wire: m.wire, ...(m.generation !== undefined ? { generation: m.generation } : {}), blockNumber: m.blockNumber, txHash: m.txHash })),",
     replace: "decode: (logs) => decodeMarketRows(logs, ms.emitters),",
     tests: [T.hypersync],
+  },
+  // ── rollover roles in prose: the cPT holder signs and asks, the cST
+  // holder fills. Each mutant puts back one statement the 0.7.0-rc.2 docs shipped, or drops a
+  // guard the detector needs; the docs-freshness suite must kill every one.
+  {
+    // The migration topic's RFQ section names the cST holder as the requester again.
+    id: "docs-rollover-requester-cst",
+    file: "packages/schemas/src/doc-topics.ts",
+    find: "A cPT holder who does not know what a roll is worth can ask for a price",
+    replace: "A cST holder who does not know what a roll is worth can ask for a price",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The quickstart again says the cST holder signs the rollover-intent.
+    id: "docs-rollover-quickstart-cst-signs",
+    file: "docs/zyfai-quickstart.md",
+    find: "A rollover takes two parties: the cPT holder signs a\n  `rollover-intent`, and the cST holder fills it with `rollover-fill`.",
+    replace: "A cST holder rolls cover with a `rollover-intent`.",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The symmetric error: the cPT holder is told to fill.
+    id: "docs-rollover-cpt-fills",
+    file: "docs/cli.md",
+    find: "The source cST holder answers, fills with `rollover-fill` and pays the premium.",
+    replace: "The source cPT holder answers, fills with `rollover-fill` and pays the premium.",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The old "tool cannot build the fill" claim returns to the quickstart.
+    id: "docs-rollover-fill-not-built-claim",
+    file: "docs/zyfai-quickstart.md",
+    find: "`ch` builds the fill:",
+    replace: "`ch` does not yet build the filler transaction. Build it yourself:",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The README names only one side of the trade again.
+    id: "docs-rollover-readme-half-told",
+    file: "README.md",
+    find: "signed by the cPT holder; rollover-fill, the\n  unsigned `BaseFiller.execute` calldata with which the source cST holder fills that order and\n  pays the premium.",
+    replace: "signed by the cPT holder.",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The detector stops lifting asides: "The cST holder (principal) signs" slips through.
+    id: "docs-rollover-detector-asides-ignored",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "        main = main.replace(/\\(([^()]*)\\)/g, (_, inner: string) => (asides.push(inner), \" \"));",
+    replace: "        main = main.replace(/\\(([^()]*)\\)/g, (_, inner: string) => ` ${inner} `);",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The detector stops splitting code blocks per line: adjacent command lines run together and
+    // the scan reads a flag-free command comment as a role claim, or misses one.
+    id: "docs-rollover-detector-code-lines-joined",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "    const units = i % 2 === 1 ? part.split(\"\\n\") : [part];",
+    replace: "    const units = [part];",
+    tests: [T.docsFreshness],
+  },
+  {
+    // A negation exempts the WHOLE clause again: "a cST holder who does not know what a roll is
+    // worth can ask for a price" (a shipped falsehood) passes because "not" governs another verb.
+    id: "docs-rollover-detector-negation-whole-clause",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "      const asserted = c.replace(NEGATED_ACT, \" \");",
+    replace: "      if (/\\b(not|never)\\b/.test(c)) continue;\n      const asserted = c;",
+    tests: [T.docsFreshness],
+  },
+  {
+    // Negations are ignored: "the cST holder never signs the order" reads as a violation.
+    id: "docs-rollover-detector-negation-ignored",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "      const asserted = c.replace(NEGATED_ACT, \" \");",
+    replace: "      const asserted = c;",
+    tests: [T.docsFreshness],
+  },
+  {
+    // The sign verb loses its object check: a filler signing its own transaction is flagged.
+    id: "docs-rollover-detector-sign-object-unchecked",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "  if (/\\bsigns?\\b|\\bsigned\\b(?! by)/.test(c) && !NOT_THE_ORDER.test(c)) return true;",
+    replace: "  if (/\\bsigns?\\b|\\bsigned\\b(?! by)/.test(c)) return true;",
+    tests: [T.docsFreshness],
+  },
+  {
+    // A contrast takes the subject: "The cST holder, not the cPT holder, signs the order" passes.
+    id: "docs-rollover-detector-contrast-takes-subject",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "      if (!CONTRAST.test(c)) subject = HOLDER.exec(c.replace(PASSIVE_AGENT, \" \"))?.[1] ?? subject;",
+    replace: "      subject = HOLDER.exec(c.replace(PASSIVE_AGENT, \" \"))?.[1] ?? subject;",
+    tests: [T.docsFreshness],
+  },
+  {
+    // A passive's agent becomes the subject: "signed by a cPT holder, and a cST holder fills it"
+    // then judges a correct sentence wrong.
+    id: "docs-rollover-detector-passive-agent-as-subject",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "      if (!CONTRAST.test(c)) subject = HOLDER.exec(c.replace(PASSIVE_AGENT, \" \"))?.[1] ?? subject;",
+    replace: "      if (!CONTRAST.test(c)) subject = HOLDER.exec(c)?.[1] ?? subject;",
+    tests: [T.docsFreshness],
+  },
+  {
+    // Passives go unchecked: "the rollover order is signed by a cST holder" passes.
+    id: "docs-rollover-detector-passive-unchecked",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "      if (passiveViolation(asserted) || (subject === \"cST\"",
+    replace: "      if ((subject === \"cST\"",
+    tests: [T.docsFreshness],
+  },
+  {
+    // A possessive becomes the subject: "The cPT holder's order fills when …" is flagged.
+    id: "docs-rollover-detector-possessive-as-subject",
+    file: "packages/core/test/docs-freshness.test.ts",
+    find: "const HOLDER = /\\b(cST|cPT) holders?\\b(?!['’]s)/;",
+    replace: "const HOLDER = /\\b(cST|cPT) holders?\\b/;",
+    tests: [T.docsFreshness],
+  },
+  // ── rollover clone admission: the settler's two checks, in the settler's order ───────────────
+  {
+    // The ownership check runs first: an undeployed address (owner unreadable) is reported as
+    // someone else's clone, and the holder is told to re-sign when deploying would do.
+    id: "clone-admission-check-order-swapped",
+    file: "packages/core/src/handlers/rollover-clone-admission.ts",
+    find: "  if (notDeployed) {",
+    replace: "  if (notDeployed && !notOwner) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Every undeployed address is treated as the holder's predicted one: "deploy and the same
+    // order fills" is promised for an order that can never fill.
+    id: "clone-admission-predicted-ignored",
+    file: "packages/core/src/handlers/rollover-clone-admission.ts",
+    find: "    if (isAddressEqual(f.named, f.predicted)) {",
+    replace: "    if (true) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The ownership check is dropped: an order naming someone else's clone is built.
+    id: "clone-admission-owner-check-dropped",
+    file: "packages/core/src/handlers/rollover-clone-admission.ts",
+    find: "  if (notOwner) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An unread owner is trusted as the holder (fail open).
+    id: "clone-admission-null-owner-trusted",
+    file: "packages/core/src/handlers/rollover-clone-admission.ts",
+    find: "  const notOwner = f.owner === null || !isAddressEqual(f.owner, f.user);",
+    replace: "  const notOwner = f.owner !== null && !isAddressEqual(f.owner, f.user);",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The holder's existing clone is never named in the fix: they are sent to deploy again.
+    id: "clone-admission-holder-clone-ignored",
+    file: "packages/core/src/handlers/rollover-clone-admission.ts",
+    find: "  const holderHasClone = !isAddressEqual(f.holderClone, zeroAddress);",
+    replace: "  const holderHasClone = false;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The handler builds the fill whatever the verdict says.
+    id: "clone-admission-verdict-ignored",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "    if (admission !== null && !admission.ok) {",
+    replace: "    if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The deployment check asks about another address than the one the order names (here the
+    // holder's account): the settler checks the NAMED address.
+    id: "clone-admission-deployment-check-wrong-address",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "functionName: \"isDeployedRolloverContract\", args: [order.rolloverContract], ...at }),",
+    replace: "functionName: \"isDeployedRolloverContract\", args: [order.user], ...at }),",
+    tests: [T.rolloverFill],
+  },
+  {
+    // answer-rfq's handler moves family without the topic moving (read in the eval stub world).
+    id: "docs-signing-family-answer-rfq-tx",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: "      execution: executionAnswerRfq(cited),",
+    replace: "      execution: { ...executionAnswerRfq(cited), kind: \"eth-transaction\" as const },",
+    tests: [T.docTopics],
+  },
+  {
+    // The signing topic's transaction producers drop the rollover fill.
+    id: "docs-signing-producers-rollover-fill-dropped",
+    file: "packages/schemas/src/doc-topics.ts",
+    find: "\\`cork_prepare_orders\\` taker-fill, cancel,\nrollover-fill and deploy-rollover-contract.",
+    replace: "\\`cork_prepare_orders\\` taker-fill, cancel and\ndeploy-rollover-contract.",
+    tests: [T.docTopics],
+  },
+  {
+    // The signing topic's typed-data producers drop rfq-write.
+    id: "docs-signing-producers-rfq-write-dropped",
+    file: "packages/schemas/src/doc-topics.ts",
+    find: "rollover-intent (CorkSettler domain), and\nrfq-write (the venue's \\`Cork RFQ\\` domain).",
+    replace: "and rollover-intent (CorkSettler domain).",
+    tests: [T.docTopics],
+  },
+  {
+    // A handler's family moves without the topic moving: the deploy builds typed data.
+    id: "docs-signing-family-deploy-clone-typed",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "      existingRolloverContract: existing,\n      simulationRequired: true,\n      execution: executionEthTransaction(),",
+    replace: "      existingRolloverContract: existing,\n      simulationRequired: true,\n      execution: { ...executionEthTransaction(), kind: \"eip712-typed-data\" as const },",
+    tests: [T.docTopics],
   },
 
   {

@@ -7,6 +7,16 @@ covered.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The docs name the rollover parties correctly.** The cPT holder signs the rollover order, asks for its price with a rollover RFQ, and receives the premium. The source cST holder fills the order with `rollover-fill` and pays the premium. The `migration` capability topic, `docs/zyfai-quickstart.md`, `docs/cli.md` and the README had named the cST holder as the signer and the requester. The quickstart also said the tool did not build the fill; it builds it with `rollover-fill`, and the quickstart now shows how.
+- **The `signing` capability topic lists every prepare action under its signing family.** Six `cork_prepare_orders` actions were missing: `rollover-fill`, `deploy-rollover-contract`, `maker-ladder`, `refresh-order`, `answer-rfq` and `rfq-write`. The topic now also says how an RFQ write and an `answer-rfq` result are completed.
+- **`rollover-fill` checks the clone the order names the way the settler does.** It asks the factory whether the named address is a deployed clone, then asks that clone for its owner, in the settler's order. A refusal names the settler's error (`Settler__RolloverContractNotDeployed` or `Settler__UserNotRolloverContractOwner`) and who can fix it. When the order names the address the factory deploys for the holder, the holder sends `deploy-rollover-contract` and the same order then fills; otherwise the holder must sign a new order. The previous check compared the named address with the holder's own clone only, and it named the wrong error for an order that names someone else's clone. The result carries `data.settlerError` and `data.fix`.
+
+### Changed
+
+- **The live suites run through the fail-closed test gate.** `bun run test:live` and both live steps of CI's `live-smoke` job now use `scripts/test-gate.ts`, like the tests step. `live-smoke` also runs `rollover-live.test.ts`, which no job ran before. It now also checks, against the real settler on both chains, that each clone fault reverts with the error `rollover-fill` names. A run in which every test skips is red: `bun run test:live` without `CORK_RPC_LIVE=1` (or `CORK_TEST_RPC`) now exits 1 with "no test executed", where it exited 0 before.
+
 ## [0.7.0] — preparation, not yet published
 
 Preparation of the 0.7.0 CLI/MCP/SDK version, including the 0.7 changes recorded below and the documentation-and-guidance cleanup since `v0.7.0-rc.2`. It remains **unreviewed and unaudited**. Removing the RC suffix is not a production promotion: existing installations and API-v1 routes are not retired, and hosted services are not deployed. This entry records prepared content only; no `v0.7.0` tag or publication has occurred.

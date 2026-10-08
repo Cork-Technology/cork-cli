@@ -21,6 +21,8 @@ import {
   resolveRollover,
   resolveRpc,
 } from "@cork/core";
+import { rolloverFactoryAbi } from "../src/rollover-fill.ts";
+import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -141,5 +143,91 @@ describe.skipIf(!LIVE)("rollover rc.2 deployment — live (both chains)", () => 
       expect(revertData, "resolveFor must revert at the clone state check").not.toBeNull();
       expect(revertData!.toLowerCase().startsWith(selector)).toBe(true);
     }, 60_000);
+  }
+});
+
+// ── The settler's clone admission, mirrored: rollover-clone-admission.ts against real bytecode ──
+// BaseSettler runs two clone checks in order: the NAMED address must be a deployed clone
+// (Settler__RolloverContractNotDeployed(user)), then it must be the user's
+// (Settler__UserNotRolloverContractOwner(user, rolloverContract)). This leg builds orders that fail
+// each check, asks the real settler's resolveFor, and holds the pure mirror — fed facts read live
+// with the same views the fill pre-flight reads — to the error the settler actually raised.
+// KNOWN_CLONE is a deployed primary-generation clone (CREATE2, the same address on both chains,
+// listed on the venue's contracts feed 2026-10-08); clones cannot be undeployed, and its owner is
+// READ here, never assumed.
+const KNOWN_CLONE = "0x149b46a125284611963c37e238679dd993d8ef41" as const;
+const ownerAbi = [{ type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }] as const;
+
+/** The 4-byte selector of the settler's revert from resolveFor, or a diagnostic string. */
+type LiveClient = NonNullable<Awaited<ReturnType<typeof resolveRpc>>>["client"];
+async function resolveForRevert(client: LiveClient, chainId: 42161 | 8453, settler: `0x${string}`, user: `0x${string}`, rolloverContract: `0x${string}`): Promise<string> {
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const built = buildRolloverIntent({
+    chainId, user, settler, rolloverContract,
+    srcCstToken: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", dstCstToken: "0x53E82ABbb12638F09d9e624578ccB666217a765e", premiumToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    srcPoolId: `0x${"11".repeat(32)}`, dstPoolId: `0x${"22".repeat(32)}`, orderSize: 250n * 10n ** 18n, minPremiumPerShare: 12n * 10n ** 15n,
+    openDeadline: now + 3_600n, fillDeadline: now + 86_400n, clientRequestId: `live-clone-admission-${user}-${rolloverContract}`,
+  });
+  const data = encodeFunctionData({
+    abi: resolveForAbi,
+    functionName: "resolveFor",
+    args: [{ originSettler: settler, user, nonce: built.order.orderSalt, originChainId: BigInt(chainId), openDeadline: Number(built.order.openDeadline), fillDeadline: Number(built.order.fillDeadline), orderDataType: ORDER_DATA_TYPEHASH, orderData: encodeOrderData(built.order) }, "0x"],
+  });
+  try {
+    await client.call({ to: settler, data });
+    return "<did not revert>";
+  } catch (err) {
+    for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
+      const d = (e as { data?: unknown }).data;
+      if (typeof d === "string" && d.startsWith("0x") && d.length >= 10) return d.slice(0, 10).toLowerCase();
+      if (typeof d === "object" && d !== null && typeof (d as { data?: unknown }).data === "string") return (d as { data: string }).data.slice(0, 10).toLowerCase();
+    }
+    return `<no data: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}>`;
+  }
+}
+const selectorOf = (sig: string) => keccak256(stringToBytes(sig)).slice(0, 10);
+const SETTLER_ERRORS = {
+  Settler__RolloverContractNotDeployed: selectorOf("Settler__RolloverContractNotDeployed(address)"),
+  Settler__UserNotRolloverContractOwner: selectorOf("Settler__UserNotRolloverContractOwner(address,address)"),
+} as const;
+
+describe.skipIf(!LIVE)("the settler's clone admission, mirrored — live (both chains)", () => {
+  for (const chainId of [42161, 8453] as const) {
+    it(`chain ${chainId}: each clone fault reverts the error cloneAdmission names, in the settler's order`, async () => {
+      const { rollover } = await resolveRollover(chainId);
+      const client = (await resolveRpc(chainId, undefined))!.client;
+      const factory = rollover!.factory as `0x${string}`;
+      const settler = rollover!.exactSettler as `0x${string}`;
+      const STRANGER_USER = "0xC0FFEe0000000000000000000000000000000001" as const; // owns no clone
+      const NOT_A_CLONE = "0x00000000000000000000000000000000000000de" as const;
+      const facts = async (user: `0x${string}`, named: `0x${string}`) => {
+        const [deployed, predicted, holderClone] = await Promise.all([
+          client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "isDeployedRolloverContract", args: [named] }),
+          client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "predictRolloverContractOf", args: [user] }),
+          client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "rolloverContractOf", args: [user] }),
+        ]);
+        const owner = deployed ? await client.readContract({ address: named, abi: ownerAbi, functionName: "owner" }) : null;
+        return { user, named, deployed, owner, predicted, holderClone };
+      };
+      const cloneOwner = await client.readContract({ address: KNOWN_CLONE, abi: ownerAbi, functionName: "owner" });
+      expect(cloneOwner.toLowerCase()).not.toBe(STRANGER_USER.toLowerCase());
+
+      const cases: Array<[string, `0x${string}`, `0x${string}`]> = [
+        ["check 1, the user's own predicted address (not deployed)", STRANGER_USER, (await facts(STRANGER_USER, NOT_A_CLONE)).predicted],
+        ["check 1, an address that is no clone", STRANGER_USER, NOT_A_CLONE],
+        ["check 2, someone else's deployed clone", STRANGER_USER, KNOWN_CLONE],
+      ];
+      for (const [label, user, named] of cases) {
+        const verdict = cloneAdmission(await facts(user, named), "live");
+        expect(verdict.ok, label).toBe(false);
+        if (verdict.ok) continue;
+        expect(await resolveForRevert(client, chainId, settler, user, named), label).toBe(SETTLER_ERRORS[verdict.settlerError]);
+      }
+      // The clone's own owner passes both checks: resolveFor no longer stops at the clone (it may
+      // revert later, on the fake pools, but never with either clone error).
+      const own = await resolveForRevert(client, chainId, settler, cloneOwner, KNOWN_CLONE);
+      expect(Object.values(SETTLER_ERRORS)).not.toContain(own);
+      expect(cloneAdmission(await facts(cloneOwner, KNOWN_CLONE), "live")).toEqual({ ok: true });
+    }, 90_000);
   }
 });

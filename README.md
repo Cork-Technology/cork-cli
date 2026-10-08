@@ -590,7 +590,9 @@ Implemented + tested:
 - **cork_prepare_orders** — 1inch maker-order EIP-712 typed data (incl. extension orders and
   JIT-market orders with adapter pre-flight checks) + cancel calldata, order hash proven equal to
   on-chain `hashOrder`; rollover-intent ERC-7683 OrderData (CorkSettler domain, intent hash
-  recomputed locally, settler-mode gate checked). Orders live in the 1inch **bit** invalidator,
+  recomputed locally, settler-mode gate checked), signed by the cPT holder; rollover-fill, the
+  unsigned `BaseFiller.execute` calldata with which the source cST holder fills that order and
+  pays the premium. Orders live in the 1inch **bit** invalidator,
   which keys on `(maker, nonce)` rather than order hash, so the nonce is derived per
   `clientRequestId`: give each order you want live at the same time its own id, or they share a bit
   and filling one invalidates the others.

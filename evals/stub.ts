@@ -161,6 +161,21 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // as not-ready). Every other (owner, spender) answers 0 — the confirmed-missing fixture
       // the approval_missing tasks grade.
       return String(args.args?.[0]).toLowerCase() === RESTING_MAKER.address.toLowerCase() ? 10n ** 24n : 0n;
+    // The rollover factory + clone views the fill pre-flight reads, from ROLLOVER_CLONES alone.
+    case "isDeployedRolloverContract":
+      return [...ROLLOVER_CLONES.values()].some((c) => c.toLowerCase() === String(args.args?.[0]).toLowerCase());
+    case "rolloverContractOf":
+      return ROLLOVER_CLONES.get(String(args.args?.[0]).toLowerCase()) ?? "0x0000000000000000000000000000000000000000";
+    case "predictRolloverContractOf": {
+      // CREATE2: every owner HAS a predicted address; a deployed clone sits exactly there.
+      const owner = String(args.args?.[0]).toLowerCase();
+      return ROLLOVER_CLONES.get(owner) ?? getAddress(`0x${keccak256(`0x${owner.slice(2)}`).slice(-40)}`);
+    }
+    case "owner": {
+      const owner = [...ROLLOVER_CLONES].find(([, c]) => c.toLowerCase() === args.address.toLowerCase())?.[0];
+      if (owner === undefined) throw new Error(`execution reverted: ${args.address} is not a rollover clone`);
+      return owner;
+    }
     case "bitInvalidatorForOrder":
       return 0n; // untouched slot — the resting order reads LIVE to the fill's pre-flight
     case "orderStatus":
@@ -491,6 +506,42 @@ export const SIGNED_ROLLOVER_POST = {
 };
 export const SIGNED_ROLLOVER_DIGEST = SIGNED_ROLLOVER_BUILT.orderDigest;
 
+// A RESTING roll order for the filler-side task: on the PRIMARY rollover generation, signed (for
+// real, over the real digest) by a cPT holder whose clone is DEPLOYED and OWNED by that holder.
+// The venue serves it by digest, and the factory views + clone.owner() below answer from this
+// one world, so the fill pre-flight admits the clone exactly as the settler would.
+const ROLL_FILL_HOLDER = privateKeyToAccount(`0x${"0a".repeat(32)}`);
+const ROLL_FILL_GENERATION = ROLLOVERS_42161.find((g) => g.primary)!;
+export const ROLL_FILL_CLONE = "0x000000000000000000000000000000000000c10e" as const;
+const ROLL_FILL_BUILT = buildRolloverIntent({
+  chainId: 42161,
+  user: ROLL_FILL_HOLDER.address,
+  settler: ROLL_FILL_GENERATION.exactSettler as `0x${string}`,
+  rolloverContract: ROLL_FILL_CLONE,
+  srcCstToken: SUSDE,
+  dstCstToken: VBUSDC,
+  premiumToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  srcPoolId: `0x${"11".repeat(32)}`,
+  dstPoolId: `0x${"22".repeat(32)}`,
+  orderSize: 100n * 10n ** 18n,
+  minPremiumPerShare: 10n ** 4n,
+  openDeadline: NOW + 3_600n,
+  fillDeadline: NOW + 86_400n,
+  clientRequestId: "eval-rollfill-fixture",
+});
+export const ROLL_FILL_DIGEST = ROLL_FILL_BUILT.orderDigest;
+const ROLL_FILL_ROW = {
+  order: {
+    orderDigest: ROLL_FILL_DIGEST,
+    remainingSize: (100n * 10n ** 18n).toString(),
+    payload: { chainId: 42161, order: ROLL_FILL_BUILT.venuePost.order, intent: ROLL_FILL_BUILT.venuePost.intent, signature: await ROLL_FILL_HOLDER.sign({ hash: ROLL_FILL_DIGEST }) },
+  },
+  fills: [],
+  slots: [],
+};
+/** The rollover factory world of every configured generation: owner → deployed clone. */
+const ROLLOVER_CLONES = new Map<string, string>([[ROLL_FILL_HOLDER.address.toLowerCase(), ROLL_FILL_CLONE]]);
+
 // The JIT rollover task's CORRECT destination pool id: derived through the same Market-tuple
 // hash the fill runs, against the stub's pair oracle and the constraint the prompt carries —
 // so the task grades commitment-building, not pool-id guessing.
@@ -731,6 +782,7 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     const items = chain === 42161 ? migrationVenueRows() : chain === 1 ? [{ chainId: 1, poolId: DEMO_POOL_ID, poolName: "sUSDe-vbUSDC-DEMO" }] : [];
     return r(200, { items, nextCursor: null, hasMore: false });
   }
+  if (url.toLowerCase().includes(`/rollover/v1/orders/${ROLL_FILL_DIGEST.toLowerCase()}`)) return r(200, ROLL_FILL_ROW);
   if (/\/rollover\/v1\/orders\/0x/.test(url)) return r(404, { message: "not found" });
   if (url.includes("/rollover/v1/contracts")) {
     // The venue applies the factory filter server-side; the stub mirrors that so a filtered

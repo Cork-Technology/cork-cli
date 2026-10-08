@@ -605,15 +605,29 @@ pay that premium. The settlers run on both chains in both generations. Find open
 ch query rollover-orders --chain-id 8453 --kind orders      # 25 orders on Base on 2026-09-25
 ```
 
-One atomic settler call fronts the user's expiring cST, pays the premium in the order's
-`premiumToken`, and delivers the fresh cST to the user's Safe. You supply the premium token, so
-first swap some of the user's REF into it in your own stack.
+One atomic `BaseFiller.execute` call takes the user's expiring cST, pays the premium in the order's
+`premiumToken`, and delivers the fresh cST to the caller, the user's Safe. You supply the premium
+token, so first swap some of the user's REF into it in your own stack.
 
-> **Tool status.** `ch` builds the supply side of rollover today (`rollover-intent`, then `submit
-> rollover-order`). It does not yet build the filler transaction. Discover with `rollover-orders`,
-> then build and sign the `fill` with your own stack: `ExactSettler.fill(orderId, originData,
-> fillerData)` for all-or-nothing, `PartialSettler.fill(…)` for a slice. The order's signed
-> `allowPartialFills` flag routes it to exactly one of these.
+`ch` builds the fill:
+
+```sh
+ch prepare order rollover-fill --chain-id 8453 --account <safe> --client-request-id <id> \
+  --order-digest <0x…>                                       # unsigned BaseFiller.execute calldata
+```
+
+- BaseFiller pulls the source cST and at most `premiumCap` of the premium token from the caller.
+  The result's `data.approvals` lists both allowances to BaseFiller, each with an unsigned approve
+  transaction, and warns `approval_missing` when the chain shows one absent.
+- The call carries no recipient. The fresh cST and every refund go to the caller, and BaseFiller
+  accepts only its own two settlers. A session-key policy must admit `BaseFiller.execute` and the
+  two approvals.
+- The order's signed `allowPartialFills` flag picks the settler. An all-or-nothing order needs the
+  full size unless it allows underfill; a partial order takes `--filler-src-cst` for a slice.
+- An order reserved for another filler needs that filler's signature, `--filler-auth-sig`. The
+  result explains how to get it.
+- Simulate with `ch track simulate` before you sign. The tool builds no bytes for an order whose
+  fill deadline passed, or one the settler reports as settled, expired or cancelled.
 
 ---
 
@@ -674,7 +688,8 @@ and `phoenix/v0.3-rc.1` stays active. `cork-cli` supports both at the same time:
   `unwind-mint` before expiry, `withdraw`, `redeem` or `withdraw-other` after. The tool resolves
   the pool's generation from the chain.
 - Enter the new pool with `deposit` or `mint` on the primary, or `ch prepare market create-pool`
-  first when it does not exist. A cST holder rolls cover with a `rollover-intent`.
+  first when it does not exist. A rollover takes two parties: the cPT holder signs a
+  `rollover-intent`, and the cST holder fills it with `rollover-fill`.
 - `--generation previous`, `primary`, or a label targets a set explicitly. The result carries the
   resolved label. `ch capabilities --topic migration` has the recipe.
 

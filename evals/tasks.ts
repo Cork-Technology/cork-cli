@@ -5,7 +5,7 @@
 import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // Recipe addresses come from the SAME config-tracking constants the stub answers isRecipe with —
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
-import { RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
+import { ROLL_FILL_DIGEST, RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
 import corkDefaults from "../cork-defaults.v2.json";
 
 // The mainnet adapter, read from the SAME schema-2 config the stub resolves (the pinned-literal
@@ -262,6 +262,22 @@ export const TASKS: EvalTask[] = [
       params: { action: { type: "rollover-order" } },
       state: "ok",
       answer: /accept|relay|success|ok/i,
+      maxCalls: 3,
+    },
+  },
+  {
+    // The FILLER side of a roll, asked in the cover holder's words, with no tool or action named:
+    // the agent must know that the source cST holder fills a resting order (and pays the
+    // premium), not sign a new rollover order of its own. The order is a real signed fixture on
+    // the primary generation whose clone is deployed and owned by its holder.
+    id: "rollover-fill-as-cover-holder",
+    prompt: `On Arbitrum (chain 42161) a rollover order with digest ${ROLL_FILL_DIGEST} is resting on the Cork venue. I hold the source cST it rolls (my expiring cover) and want to use that order to roll my cover forward. Build the unsigned transaction I have to sign, from my account ${A}, request id "eval-rollfill-0001". Do not send or relay anything. Tell me who receives the premium.`,
+    expect: {
+      tool: "cork_prepare_orders",
+      params: { chainId: 42161, account: A, action: { type: "rollover-fill", orderDigest: ROLL_FILL_DIGEST } },
+      state: "ok",
+      answer: /(cPT holder|holder of the cPT|order'?s (signer|holder|maker)|signer of the order)[\s\S]{0,120}(premium)|premium[\s\S]{0,160}(cPT holder|signer|order'?s holder)/i,
+      forbid: ["cork_submit"],
       maxCalls: 3,
     },
   },

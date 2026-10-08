@@ -23,6 +23,7 @@ import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarnin
 import { activeSettlersTeaching, classifyRolloverSettler, computeOrderDigest, hashJitMarketParams, type JitMarketParamsStruct, retiredSettlerTeaching, type RolloverGeneration, RolloverJitWireError } from "../rollover.ts";
 import { encodeBaseFillerExecute, encodeBaseFillerExecuteWithMarket, encodeDeployRolloverContract, encodeOriginData, fillerAuthTypedData, gaslessOrderOf, hashFillerAuth, parseRolloverPayload, type ParsedRolloverPayload, requiredPremium, rolloverFactoryAbi } from "../rollover-fill.ts";
 import { checkContractMakerSignature, probeMakerCode, recoverEoaSigner } from "./order-auth.ts";
+import { type CloneAdmission, cloneAdmission, rolloverCloneAbi } from "./rollover-clone-admission.ts";
 import { chainStatusName, settlerStatusAbi } from "../rollover-verify.ts";
 import { resolveJitBytesInput } from "./jit.ts";
 import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
@@ -250,7 +251,9 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   // ── chain pre-flights (best-effort; a transport failure discloses, never refuses) ──
   const resolved = await getRpc(ctx, chainId);
   let chainStatus: string | null = null;
-  let cloneOk: boolean | null = null;
+  // The settler's clone admission for the address the order names (rollover-clone-admission.ts);
+  // null when no RPC resolved or the reads failed in transport.
+  let admission: CloneAdmission | null = null;
   let approvals: ApprovalRequirement[] = [
     { role: "taker", stage: "before-fill", holder: account, token: order.srcCstToken, tokenRole: "src cST (the source pool's cover you roll)", spender: baseFiller, spenderRole: "Cork BaseFiller", mechanism: "erc20-approve", amount: fillerSrcCst.toString(), kind: "exact", wallets: "eoa+contract", note: "BaseFiller pulls exactly fillerSrcCst from you, forwards it to the settler, and refunds any part the clone does not consume", unsignedTx: erc20ApproveTx(order.srcCstToken, baseFiller, fillerSrcCst) },
     { role: "taker", stage: "before-fill", holder: account, token: order.premiumToken, tokenRole: "premium token", spender: baseFiller, spenderRole: "Cork BaseFiller", mechanism: "erc20-approve", amount: premiumCap.toString(), kind: "cap", wallets: "eoa+contract", note: "BaseFiller pulls the whole premiumCap, pays the settler exactly ceil(dstCstProduced × minPremiumPerShare / 1e18), and refunds the rest to you in the same transaction", unsignedTx: erc20ApproveTx(order.premiumToken, baseFiller, premiumCap) },
@@ -314,14 +317,21 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   }
   if (resolved) {
     try {
-      const [status, clone, srcBal, premBal] = await Promise.all([
-        resolved.client.readContract({ address: order.settler, abi: settlerStatusAbi, functionName: "orderStatus", args: [localDigest], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) }),
-        resolved.client.readContract({ address: generation.factory as `0x${string}`, abi: rolloverFactoryAbi, functionName: "rolloverContractOf", args: [order.user], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) }),
-        resolved.client.readContract({ address: order.srcCstToken, abi: erc20Abi, functionName: "balanceOf", args: [account], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) }),
-        resolved.client.readContract({ address: order.premiumToken, abi: erc20Abi, functionName: "balanceOf", args: [account], ...(ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {}) }),
+      const at = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
+      const factory = generation.factory as `0x${string}`;
+      const [status, deployed, predicted, holderClone, srcBal, premBal] = await Promise.all([
+        resolved.client.readContract({ address: order.settler, abi: settlerStatusAbi, functionName: "orderStatus", args: [localDigest], ...at }),
+        resolved.client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "isDeployedRolloverContract", args: [order.rolloverContract], ...at }),
+        resolved.client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "predictRolloverContractOf", args: [order.user], ...at }),
+        resolved.client.readContract({ address: factory, abi: rolloverFactoryAbi, functionName: "rolloverContractOf", args: [order.user], ...at }),
+        resolved.client.readContract({ address: order.srcCstToken, abi: erc20Abi, functionName: "balanceOf", args: [account], ...at }),
+        resolved.client.readContract({ address: order.premiumToken, abi: erc20Abi, functionName: "balanceOf", args: [account], ...at }),
       ]);
       chainStatus = chainStatusName(status as bigint | number);
-      cloneOk = (clone as string).toLowerCase() === order.rolloverContract.toLowerCase();
+      // owner() exists only on a deployed clone, so it is read after the deployment check, as the
+      // settler reads it.
+      const owner = deployed ? ((await resolved.client.readContract({ address: order.rolloverContract, abi: rolloverCloneAbi, functionName: "owner", ...at })) as `0x${string}`) : null;
+      admission = cloneAdmission({ user: order.user, named: order.rolloverContract, deployed: deployed as boolean, owner, predicted: predicted as `0x${string}`, holderClone: holderClone as `0x${string}` }, generation.label);
       balances.srcCst = String(srcBal);
       balances.premiumToken = String(premBal);
     } catch (err) {
@@ -342,8 +352,17 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     if (chainStatus === "None" && order.openDeadline <= nowSecs) {
       return refuse("invalid_order_terms", `the order is not yet opened on the settler and its openDeadline ${order.openDeadline} has passed (now ${nowSecs}) — BaseFiller's openFor reverts Settler__OpenAfterOpenDeadline`);
     }
-    if (cloneOk === false) {
-      return refuse("invalid_order_terms", `the order names rolloverContract ${order.rolloverContract}, but the ${generation.label} factory's clone for user ${order.user} is a different address — admission reverts Settler__RolloverContractNotDeployed / Settler__UserNotRolloverContractOwner`);
+    if (admission !== null && !admission.ok) {
+      // The filler can fix none of these; the data names the settler's error and the holder's fix.
+      return envelope({
+        state: "unavailable",
+        data: { orderDigest: localDigest, rolloverContract: order.rolloverContract, holder: order.user, settlerError: admission.settlerError, fix: admission.fix },
+        chainId,
+        source: "chain",
+        warnings: [...rpcWarn(resolved), { code: "invalid_order_terms", message: admission.message }, ...warnings],
+        ...rpcProvenance(input.format, resolved),
+        ctx,
+      });
     }
     approvals = await annotateApprovalStatus(resolved.client, { entries: approvals, nowSeconds: nowSecs, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
     warnings.push(...amountNotices);
@@ -400,7 +419,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       intentHooks: hooks,
       originData,
       chainStatus,
-      cloneVerified: cloneOk,
+      cloneVerified: admission === null ? null : admission.ok,
       ...(balances.srcCst !== undefined ? { balances } : {}),
       approvals,
       scales: {

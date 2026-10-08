@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { DOC_TOPICS, inputJsonSchema, ORDERS_TOPIC_REFERENCE, REGISTRY, UNITS_TOPIC_REFERENCE, X_UNITS } from "@cork/schemas";
 import { runTool } from "@cork/core";
 import { BOOK_EXCLUSIVITY } from "../src/handlers/hybrid-verify.ts";
+import { privateKeyToAccount } from "viem/accounts";
+import { LIQUIDITY_RECIPE, RESTING_ORDER_HASH, RFQ_OPEN_ID, stubContext } from "../../../evals/stub.ts";
 
 const NOW = 1_800_000_000n;
 const A = "0xc0ffee0000000000000000000000000000000001" as const;
@@ -357,5 +359,99 @@ describe("the no-args manual carries the doc-topic CATALOG (progressive disclosu
     }
     // the new warnings topic is in the catalog, resolvable on demand
     expect(d.docTopics.some((t) => t.name === "warnings")).toBe(true);
+  });
+});
+
+// ── The signing topic names every prepare action under the family its result carries ─────────
+// The producer lists are what an agent reads to learn HOW to complete an artifact. They drifted:
+// six cork_prepare_orders actions (rollover-fill, deploy-rollover-contract, maker-ladder,
+// refresh-order, answer-rfq, rfq-write) were missing, and cork_prepare_market was said to have
+// "both actions" when it has three. The table below classifies every action; a new action fails
+// the schema-parity test until someone classifies it, and the table is proven by REAL runs: with
+// no endpoint at all (no RPC resolved, venue fetch refused) for the actions that need none, and
+// in the eval stub world (a resting signed order, an open RFQ, the chain views) for the ones that
+// read a venue row. rollover-fill's kind is asserted in rollover-fill.test.ts, on its own chain
+// world; finalize-maker-order emits no execution block (it already returns the submit payload).
+describe("the signing topic's producer lists name every prepare action under its family", () => {
+  type Family = "eth-transaction" | "eip712-typed-data";
+  const ORDER_ACTION_FAMILY: Record<string, Family | "none"> = {
+    "maker-order": "eip712-typed-data",
+    "maker-ladder": "eip712-typed-data",
+    "refresh-order": "eip712-typed-data",
+    "answer-rfq": "eip712-typed-data",
+    "rollover-intent": "eip712-typed-data",
+    "rfq-write": "eip712-typed-data",
+    "finalize-maker-order": "none", // emits a relayable submitInput, no execution block
+    "taker-fill": "eth-transaction",
+    cancel: "eth-transaction",
+    "rollover-fill": "eth-transaction",
+    "deploy-rollover-contract": "eth-transaction",
+  };
+  const body = DOC_TOPICS.signing!.body;
+  const section = (heading: string) => {
+    const start = body.indexOf(heading);
+    expect(start, heading).toBeGreaterThanOrEqual(0);
+    const next = body.indexOf("\n## ", start + heading.length);
+    return body.slice(start, next < 0 ? undefined : next);
+  };
+  const producers = (heading: string) => /Producers:([\s\S]*?)\n\n/.exec(section(heading))![1]!.replace(/\s+/g, " ");
+  const familyA = producers("## Family A");
+  const familyB = producers("## Family B");
+  /** The action names a producer paragraph lists, as whole words (a name is never a substring hit). */
+  const names = (para: string, action: string) => new RegExp(`(?<![\\w-])${action.replace(/-/g, "\\-")}(?![\\w-])`).test(para);
+
+  it("the table classifies exactly the actions cork_prepare_orders accepts", () => {
+    const schema = inputJsonSchema("cork_prepare_orders") as unknown as { properties: { action: { oneOf: Array<{ properties: { type: { const: string } } }> } } };
+    const actions = schema.properties.action.oneOf.map((v) => v.properties.type.const).sort();
+    expect(Object.keys(ORDER_ACTION_FAMILY).sort()).toEqual(actions);
+  });
+
+  it("each order action is named in its own family's producer list and not in the other's", () => {
+    for (const [action, family] of Object.entries(ORDER_ACTION_FAMILY)) {
+      if (family === "none") continue;
+      const [own, other] = family === "eth-transaction" ? [familyA, familyB] : [familyB, familyA];
+      expect(names(own, action), `${action} missing from the ${family} producers`).toBe(true);
+      expect(names(other, action), `${action} also listed under the other family`).toBe(false);
+    }
+  });
+
+  it("the pool and market tools are transaction producers as a whole: every action, no stale count", () => {
+    expect(familyA).toMatch(/`cork_prepare_phoenix`/);
+    expect(familyA).toMatch(/`cork_prepare_market` \(every action\)/);
+    expect(familyB).not.toMatch(/cork_prepare_(phoenix|market)/);
+  });
+
+  it("the table matches what the handlers emit, for every action that builds with no endpoint", async () => {
+    const offline = { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async () => { throw new Error("venue refused in test"); } };
+    const runs: Array<[string, number, Record<string, unknown>]> = [
+      ["cancel", 1, { type: "cancel", orderHash: `0x${"11".repeat(32)}`, makerTraits: "0" }],
+      ["maker-order", 1, { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", takingAmount: "1000000" }],
+      ["maker-ladder", 1, { type: "maker-ladder", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", takerAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", makingAmount: "1000000000000000000", rungs: [{ takingAmount: "1000000" }, { takingAmount: "990000" }] }],
+      ["rollover-intent", 42161, { type: "rollover-intent", settler: "0xF4ffd4b3FAedb784b04d1883119840515f224C2f", rolloverContract: A, srcPoolId: `0x${"11".repeat(32)}`, dstPoolId: `0x${"22".repeat(32)}`, srcCstToken: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", dstCstToken: "0x53E82ABbb12638F09d9e624578ccB666217a765e", premiumToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: "1900000000", fillDeadline: "1900604800" }],
+      ["deploy-rollover-contract", 42161, { type: "deploy-rollover-contract" }],
+      ["rfq-write", 8453, { type: "rfq-write", request: { type: "rfq-open", kind: "rollover", requester: A, referenceAsset: "0x53E82ABbb12638F09d9e624578ccB666217a765e", collateralAsset: { exact: "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497" }, expiryWindow: { notBefore: 1_800_086_400, notAfter: 1_800_864_000 }, validUntil: 1_800_003_600, source: { poolId: `0x${"11".repeat(32)}`, shares: "1000000000000000000" }, premiumToken: { exact: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } } }],
+    ];
+    for (const [action, chainId, input] of runs) {
+      const env = await runTool("cork_prepare_orders", { chainId, account: A, clientRequestId: `family-${action}`, action: input }, offline);
+      expect(env.state, `${action}: ${JSON.stringify(env.warnings)}`).toBe("ok");
+      const data = env.data as { execution?: { kind: string }; rungs?: Array<{ execution?: { kind: string } }> };
+      const kind = data.execution?.kind ?? data.rungs?.[0]?.execution?.kind; // a ladder carries one artifact per rung
+      expect(kind, action).toBe(ORDER_ACTION_FAMILY[action]);
+    }
+  });
+
+  it("the table matches what the handlers emit for the actions that read a venue row or an RFQ (eval stub world)", async () => {
+    const ctx = stubContext();
+    const restingMaker = privateKeyToAccount(`0x${"07".repeat(32)}`).address; // evals/stub.ts RESTING_MAKER
+    const runs: Array<[string, Record<string, unknown>]> = [
+      ["taker-fill", { chainId: 1, account: A, action: { type: "taker-fill", orderHash: RESTING_ORDER_HASH } }],
+      ["refresh-order", { chainId: 1, account: restingMaker, action: { type: "refresh-order", orderHash: RESTING_ORDER_HASH } }],
+      ["answer-rfq", { chainId: 42161, account: A, action: { type: "answer-rfq", rfqId: RFQ_OPEN_ID, premiumAnnualized: "0.04", expiryTimestamp: String(BigInt(ctx.nowSeconds!) + 20n * 86_400n), jitMarket: { recipe: LIQUIDITY_RECIPE } } }],
+    ];
+    for (const [action, input] of runs) {
+      const env = await runTool("cork_prepare_orders", { clientRequestId: `family-${action}`, ...input }, ctx);
+      expect(env.state, `${action}: ${JSON.stringify(env.warnings)}`).toBe("ok");
+      expect((env.data as { execution?: { kind: string } }).execution?.kind, action).toBe(ORDER_ACTION_FAMILY[action]);
+    }
   });
 });

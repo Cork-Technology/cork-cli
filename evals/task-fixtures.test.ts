@@ -40,6 +40,7 @@ import {
   RETIRED_EXACT_SETTLER,
   SIGNED_LOP_PAYLOAD,
   SIGNED_ROLLOVER_POST,
+  ROLL_FILL_DIGEST,
 } from "./stub.ts";
 
 const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
@@ -90,6 +91,17 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     // The task hands the DERIVED pool id, so the cross-check must stay silent — a mismatch here
     // means the fixture's constraint/oracle drifted from the stub's resolve/lookupWrapper.
     expect(env.warnings.some((w) => w.code === "jit_pool_mismatch")).toBe(false);
+  });
+
+  it("rollover-fill-as-cover-holder: the resting order fills from the venue row, its clone admitted the settler's way, outputs to the caller", async () => {
+    const task = TASKS.find((t) => t.id === "rollover-fill-as-cover-holder")!;
+    const env = await runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-rollfill-0001", action: { type: "rollover-fill", orderDigest: ROLL_FILL_DIGEST } }, stubContext());
+    expect(env.state, JSON.stringify(env.warnings)).toBe(task.expect.state);
+    const d = env.data as Record<string, unknown>;
+    expect(d).toMatchObject({ kind: "rollover-fill", orderDigest: ROLL_FILL_DIGEST, cloneVerified: true, holderSignature: "eoa-verified" });
+    expect(String(d.destination).toLowerCase()).toBe(DEMO_ACCOUNT.toLowerCase());
+    // No clone refusal and no other order-terms finding on the admitted path.
+    expect(env.warnings.some((w) => w.code === "invalid_order_terms")).toBe(false);
   });
 
   it("rollover-retired-settler: refused settler_retired, teaching names the active replacement", async () => {

@@ -249,7 +249,9 @@ ch fill --chain-id <id> --account <0x…> --client-request-id <id> --order-hash 
   [--fill-making-amount <amt>] [--for-self '{"adapter":"0x…","poolId":"0x…"}']                        # unsigned fill calldata
 ch prepare order refresh-order --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…>   # re-rest on the same nonce
 ch prepare order cancel --chain-id <id> --account <0x…> --client-request-id <id> --order-hash <0x…> --maker-traits <n> [--scope order|slot] [--max-pages <n>]
-ch prepare order rollover-intent --chain-id <id> --account <0x…> --client-request-id <id> --settler <0x…> …   # signable ERC-7683 order
+ch prepare order rollover-intent --chain-id <id> --account <0x…> --client-request-id <id> --settler <0x…> …   # cPT holder: signable ERC-7683 order
+ch prepare order deploy-rollover-contract --chain-id <id> --account <0x…> --client-request-id <id>           # cPT holder: the clone the order names, once per factory
+ch prepare order rollover-fill --chain-id <id> --account <0x…> --client-request-id <id> --order-digest <0x…> # cST holder: unsigned BaseFiller.execute calldata
 ```
 
 Three facts about orders. First, a Cork-built order fills once: the first fill of any size
@@ -555,6 +557,8 @@ mode authorizes the venue write; this tool still checks quoted order signatures 
 Sign the body returned by `rfq-write`, not a separately assembled body. Reuse the same
 `clientRequestId` for a retry of the same intent; a changed body needs a fresh id.
 
+A rollover takes two parties. The cPT holder opens the rollover RFQ, signs the order and receives
+the premium. The source cST holder answers, fills with `rollover-fill` and pays the premium.
 A rollover RFQ uses `source { poolId, shares }` and `premiumToken`, not new-position
 modes/packageIds/notionalAssets. Options name an existing destination pool or a just-in-time
 market; prices are raw premium-token units per 1e18 destination shares. `rollover-intent`

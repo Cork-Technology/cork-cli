@@ -177,7 +177,8 @@ block naming its exact completion path; the two artifact families are:
 ## Family A — unsigned Ethereum transactions
 
 Producers: \`cork_prepare_phoenix\` (Bundler3 bundles and the authority-onboard/revoke approve
-txs), \`cork_prepare_market\` (both actions), \`cork_prepare_orders\` taker-fill and cancel.
+txs), \`cork_prepare_market\` (every action), \`cork_prepare_orders\` taker-fill, cancel,
+rollover-fill and deploy-rollover-contract.
 The result carries \`{to, data|calldata|multicall, value, chainId}\`.
 
 1. **Simulate first** — \`cork_track\` mode:"simulate" dry-runs the frozen bytes and answers
@@ -206,14 +207,20 @@ The result carries \`{to, data|calldata|multicall, value, chainId}\`.
 
 ## Family B — EIP-712 typed-data
 
-Producers: \`cork_prepare_orders\` maker-order (1inch LOP v4 domain) and rollover-intent
-(CorkSettler domain). The result carries the full \`typedData\` (domain/types/primaryType/message).
+Producers: \`cork_prepare_orders\` maker-order, maker-ladder (one artifact per rung),
+refresh-order and answer-rfq (1inch LOP v4 domain), rollover-intent (CorkSettler domain), and
+rfq-write (the venue's \`Cork RFQ\` domain). The result carries the full \`typedData\`
+(domain/types/primaryType/message).
 
 - Sign with \`eth_signTypedData_v4\` over the returned domain and message, client-side.
 - **Maker orders** then go through \`cork_prepare_orders\` finalize-maker-order (signature
   recovery + exact-bytes reconstruction check); its \`submitInput\` passes VERBATIM to
   \`cork_submit\` lop-order.
 - **Rollover intents** go straight to \`cork_submit\` rollover-order.
+- **RFQ writes** go to \`cork_submit\` rfq-open / rfq-answer / rfq-counter with
+  \`auth {method:'signature', signature}\` and the same \`clientRequestId\`.
+- **answer-rfq** signs twice, in order: the maker order, then the rfq-write of the answer that
+  carries it. Its \`data.execution.then\` lists every step.
 - \`cork_submit\` relays only — it recomputes every commitment locally before relaying and
   never signs.
 
@@ -864,7 +871,7 @@ horizon and the most reference one cST can ever cost.
     name: "migration",
     aliases: ["migrate", "move-funds", "previous-generation"],
     summary:
-      "Moving funds from a pool on the previous generation to a pool on the current one is ONE workflow that spans two generations, and needs no second selector: every pool-scoped call follows the POOL's generation from the chain. Start with `cork_query account-state` WITHOUT filters.poolId — the account's positions across every generation. Exit each old pool with the pool-scoped action for its expiry state (unwind-deposit/unwind-mint before expiry; withdraw/redeem/withdraw-other after), enter a pool on the primary (deposit/mint; create-pool first when the pool does not exist; or a rollover-intent src→dst for a cST holder), and verify with cork_track. The `generation` input takes the aliases `previous` and `primary` beside labels; results always carry the resolved label.",
+      "Moving funds from a pool on the previous generation to a pool on the current one is ONE workflow that spans two generations, and needs no second selector: every pool-scoped call follows the POOL's generation from the chain. Start with `cork_query account-state` WITHOUT filters.poolId — the account's positions across every generation. Exit each old pool with the pool-scoped action for its expiry state (unwind-deposit/unwind-mint before expiry; withdraw/redeem/withdraw-other after), enter a pool on the primary (deposit/mint; create-pool first when the pool does not exist; or a rollover: the cPT holder signs a rollover-intent src→dst and the source cST holder fills it with rollover-fill), and verify with cork_track. The `generation` input takes the aliases `previous` and `primary` beside labels; results always carry the resolved label.",
     body: `# Migrating funds between generations
 
 Cork redeploys. The previous generation's pools keep working, so a migration is not forced — but
@@ -924,23 +931,28 @@ provenance of a prepared artifact is exact.
      names it);
    - if the pool does not exist yet, \`cork_prepare_market\` \`create-pool\` first (permissionless,
      idempotent — the same derivation a JIT fill runs), then deposit;
-   - a cST holder rolling cover to a successor expiry signs a \`rollover-intent\` (src pool → dst
-     pool; the settler's generation sets the wire) and relays it with \`cork_submit\`.
+   - a ROLLOVER moves a position to a successor expiry and takes two parties. The cPT holder
+     (principal) signs a \`rollover-intent\` (src pool → dst pool; the settler's generation sets
+     the wire) and relays it with \`cork_submit\`. The order names the holder's clone, which must
+     exist before anyone can fill: the holder sends \`deploy-rollover-contract\` once, from their
+     own account. The source cST holder (cover) fills it with \`rollover-fill\`: they bring the
+     source cST, pay the premium, and receive the destination cST.
 
 4. **Verify.** \`cork_track\` mode \`reconcile\` with each txHash, then the positions read again: the
    old rows are gone, the new row carries the primary's label.
 
 ## Ask for a rollover price first: rollover RFQs
 
-A cST holder who does not know what a roll is worth can ask for a price (venue RFQ v2, kind
-\`rollover\`). Every write is signed: build it with \`cork_prepare_orders\` \`rfq-write\`, sign the
+A cPT holder who does not know what a roll is worth can ask for a price (venue RFQ v2, kind
+\`rollover\`). The requester is the party that signs the rollover order, so it is the cPT holder:
+the premium is what a cover holder pays THEM to roll the cover along. Every write is signed: build it with \`cork_prepare_orders\` \`rfq-write\`, sign the
 typed data, relay it with \`cork_submit\` (topic:"signing").
 
 1. **Ask.** \`cork_submit\` \`rfq-open\` with \`kind: "rollover"\`, \`source {poolId, shares}\` (the
    pool your position is in, and how many shares; the pool must exist and not be expired) and
    \`premiumToken\` (\`{exact}\` or \`{one_of}\`: the tokens you accept the premium in). A rollover
    RFQ carries no modes, packages or notional.
-2. **Quote.** An underwriter answers with \`rfq-answer\` options of \`{option_id, chain_id,
+2. **Quote.** A cover holder ready to fill (the venue's \`underwriter\` field) answers with \`rfq-answer\` options of \`{option_id, chain_id,
    destination, premium_token, premium_per_share, shares_max, fresh_until}\`. The destination is
    an existing live pool that is not the source (\`{pool_id}\`) or a market the filler creates at
    fill time (\`{jitMarket}\`, written like every jitMarket input). \`premium_per_share\` is raw
@@ -959,6 +971,11 @@ typed data, relay it with \`cork_submit\` (topic:"signing").
 5. **Watch.** \`cork_query\` \`rfqs\` with \`filters.rfqId\` marks a rollover quote \`firm\` when a live
    rollover order (fillable, confirmed by its settler) cites it; \`rollover-orders\` takes
    \`filters.rfqId\` for the orders that accepted one RFQ.
+6. **Fill.** A source cST holder — the quoting party or anyone else, unless the order names an
+   \`exclusiveFiller\` — runs \`cork_prepare_orders\` \`rollover-fill\` with the order's
+   \`orderDigest\`. It returns unsigned \`BaseFiller.execute\` calldata and the two allowances
+   BaseFiller pulls against (source cST and premium token). The destination cST and every refund
+   go to the caller: the job carries no recipient.
 
 ## Two standing facts (2026-09-22)
 

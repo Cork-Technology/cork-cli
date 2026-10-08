@@ -3,7 +3,7 @@
 // same intent builder a holder signs with, signed with a throwaway key, and the fill calldata is
 // decoded back through the BaseFiller ABI to prove the job the contract will read.
 import { describe, expect, it } from "vitest";
-import { decodeAbiParameters, getAddress, hashTypedData, type Hex, keccak256, encodeAbiParameters, toHex, zeroHash } from "viem";
+import { decodeAbiParameters, getAddress, hashTypedData, type Hex, keccak256, encodeAbiParameters, toHex, zeroAddress, zeroHash } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   buildRolloverIntent,
@@ -24,6 +24,7 @@ import {
   type RolloverVenuePost,
 } from "@cork/core";
 import { stubRpc, type StubCall } from "./helpers.ts";
+import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
 import { chainStatusName } from "../src/rollover-verify.ts";
 
 // The public Anvil #1 key — a well-known test vector, never a secret: the EXCLUSIVE filler.
@@ -62,18 +63,44 @@ async function signedOrder(over: Partial<Parameters<typeof buildRolloverIntent>[
   return { built, payload, digest: built.orderDigest };
 }
 
-/** The chain as the pre-flight reads it: settler orderStatus, factory rolloverContractOf, balances, allowances. */
-function chain(o: { status?: number; clone?: string; srcBal?: bigint; premBal?: bigint; allow?: Record<string, bigint> } = {}) {
+/** Where the factory deploys for an owner that has no clone yet: the holder's is CLONE (the
+ *  address the test orders name), anyone else's a fixed other address. */
+const PREDICTED_ELSEWHERE = getAddress("0x0000000000000000000000000000000000000b0b");
+/** The chain as the pre-flight reads it: settler orderStatus, the rollover factory, the clone's
+ *  owner(), balances, allowances. The factory is ONE world — `clones` maps each owner to the clone
+ *  deployed for it, `predicted` overrides where an owner WOULD get one — and isDeployed /
+ *  rolloverContractOf / predictRolloverContractOf / owner() all derive from it, so no test can
+ *  describe a factory whose views disagree. owner() on an address that is no clone reverts, as a
+ *  call to it on chain would. */
+function chain(o: { status?: number; clones?: Record<string, string>; predicted?: Record<string, string>; srcBal?: bigint; premBal?: bigint; allow?: Record<string, bigint>; code?: Record<string, string>; isValidSignature?: string | Error } = {}) {
+  const clones = new Map(Object.entries(o.clones ?? { [holder.address]: CLONE }).map(([owner, clone]) => [owner.toLowerCase(), getAddress(clone)]));
+  const factories = new Set([FACTORY, PREVIOUS.factory as string].map((a) => a.toLowerCase()));
+  const factoryOnly = (c: StubCall) => {
+    if (!factories.has(c.address.toLowerCase())) throw new Error(`${c.functionName} called on ${c.address}, not a configured rollover factory`);
+  };
+  const predictedFor = (owner: string) =>
+    clones.get(owner.toLowerCase()) ?? getAddress(o.predicted?.[owner] ?? (owner.toLowerCase() === holder.address.toLowerCase() ? CLONE : PREDICTED_ELSEWHERE));
   return stubRpc((c: StubCall) => {
     switch (c.functionName) {
       case "orderStatus": return BigInt(o.status ?? 1);
-      case "rolloverContractOf": return o.clone ?? CLONE;
-      case "predictRolloverContractOf": return CLONE;
+      case "isDeployedRolloverContract": factoryOnly(c); return [...clones.values()].some((v) => v.toLowerCase() === String(c.args?.[0]).toLowerCase());
+      case "rolloverContractOf": factoryOnly(c); return clones.get(String(c.args?.[0]).toLowerCase()) ?? zeroAddress;
+      case "predictRolloverContractOf": factoryOnly(c); return predictedFor(String(c.args?.[0]));
+      case "owner": {
+        const owner = [...clones].find(([, clone]) => clone.toLowerCase() === c.address.toLowerCase())?.[0];
+        if (owner === undefined) throw new Error(`execution reverted: ${c.address} is not a rollover clone`);
+        return getAddress(owner);
+      }
       case "balanceOf": return c.address.toLowerCase() === SRC_CST.toLowerCase() ? (o.srcBal ?? 10n ** 18n) : (o.premBal ?? 10n ** 9n);
       case "allowance": { const [owner, spender] = c.args as [string, string]; return o.allow?.[`${c.address}:${owner}:${spender}`.toLowerCase()] ?? 0n; }
+      case "isValidSignature":
+        // Only a contract answers ERC-1271: a call to an address without code returns no data.
+        if (o.code?.[c.address.toLowerCase()] === undefined) throw new Error(`execution reverted: ${c.address} has no code (returned no data "0x")`);
+        if (o.isValidSignature instanceof Error) throw o.isValidSignature;
+        return o.isValidSignature ?? "0x1626ba7e";
       default: throw new Error(`no stub for ${c.functionName}`);
     }
-  });
+  }, { code: o.code ?? {} });
 }
 function venue(routes: Array<{ match: string; status?: number; body: unknown }>, seen: Seen[] = []) {
   return async (url: string, init?: RequestInit): Promise<Response> => {
@@ -249,7 +276,49 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     expect(codes(exactInline)).not.toContain("invalid_order_terms"); // an exact order fills at its size by definition
   });
 
-  it("a partial-settler order fills at a smaller size; a wrong clone, a low premium cap and a short balance are named before the chain says so", async () => {
+  it("the clone the ORDER names is admitted the way the settler admits it: deployed first, then owned by the holder; each refusal names the settler's error and the holder's fix", async () => {
+    const p = await signedOrder(); // names CLONE, the address the factory deploys for the holder
+    const OTHER_PREDICTED = getAddress("0x0000000000000000000000000000000000000abc");
+    const HOLDER_CLONE = getAddress("0x0000000000000000000000000000000000000d0d");
+    const STRANGER = getAddress("0x0000000000000000000000000000000000005555");
+    const refusal = async (world: Parameters<typeof chain>[0]) => {
+      const env = await fill({ orderDigest: p.digest, signedOrder: p.payload }, { resolveRpc: chain(world) });
+      expect(env.state).toBe("unavailable");
+      const w = env.warnings.find((x) => x.code === "invalid_order_terms")!;
+      return { data: env.data as Record<string, unknown>, message: w.message };
+    };
+
+    // 1. Not deployed, and the order names the holder's predicted address: the holder deploys,
+    //    and this SAME signed order then fills.
+    const deploys = await refusal({ clones: {} });
+    expect(deploys.data).toMatchObject({ settlerError: "Settler__RolloverContractNotDeployed", fix: "holder-deploys-clone", rolloverContract: CLONE, holder: holder.address });
+    expect(deploys.message).toMatch(new RegExp(`Settler__RolloverContractNotDeployed\\(${holder.address}\\)`, "u"));
+    expect(deploys.message).toMatch(/deploy-rollover-contract from their own account[\s\S]*The same signed order then fills/u);
+
+    // 2. Not deployed, and the order names some other address: no deployment helps.
+    const elsewhere = await refusal({ clones: {}, predicted: { [holder.address]: OTHER_PREDICTED } });
+    expect(elsewhere.data).toMatchObject({ settlerError: "Settler__RolloverContractNotDeployed", fix: "holder-signs-new-order" });
+    expect(elsewhere.message).toMatch(new RegExp(`no deployment can change that[\\s\\S]*new order naming ${OTHER_PREDICTED}`, "u"));
+
+    // 3. Not deployed, while the holder HAS a clone at another address: still check 1, not a
+    //    "wrong owner" — and the fix names the clone the holder already has.
+    const hasOne = await refusal({ clones: { [holder.address]: HOLDER_CLONE } });
+    expect(hasOne.data).toMatchObject({ settlerError: "Settler__RolloverContractNotDeployed", fix: "holder-signs-new-order" });
+    expect(hasOne.message).toMatch(new RegExp(`new order naming their clone ${HOLDER_CLONE}`, "u"));
+
+    // 4. The order names someone else's DEPLOYED clone while the holder has none: check 2.
+    const theirs = await refusal({ clones: { [STRANGER]: CLONE } });
+    expect(theirs.data).toMatchObject({ settlerError: "Settler__UserNotRolloverContractOwner", fix: "holder-signs-new-order" });
+    expect(theirs.message).toMatch(new RegExp(`owned by ${STRANGER}, not by the holder[\\s\\S]*Settler__UserNotRolloverContractOwner\\(${holder.address}, ${CLONE}\\)`, "u"));
+    expect(theirs.message).toMatch(new RegExp(`new order naming ${PREDICTED_ELSEWHERE}|new order naming ${CLONE}`, "u"));
+
+    // The admitted case still builds, and says it verified the clone.
+    const ok = await fill({ orderDigest: p.digest, signedOrder: p.payload }, { resolveRpc: chain() });
+    expect(ok.state).toBe("ok");
+    expect((ok.data as Record<string, unknown>).cloneVerified).toBe(true);
+  });
+
+  it("a partial-settler order fills at a smaller size; a low premium cap and a short balance are named before the chain says so", async () => {
     const p = await signedOrder({ settler: PARTIAL, allowPartialFills: true });
     const env = await fill({ orderDigest: p.digest, signedOrder: p.payload, fillerSrcCst: "250000000000000000", premiumCap: "10" }, { resolveRpc: chain({ srcBal: 10n ** 17n }) });
     expect(env.state).toBe("ok");
@@ -258,9 +327,6 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     expect(msgs).toHaveLength(2);
     expect(msgs[0]).toMatch(/premiumCap 10 is below .* = 16, .*Settler__PremiumExceedsCap/u);
     expect(msgs[1]).toMatch(/you hold 100000000000000000 of the src cST/u);
-    const wrongClone = await fill({ orderDigest: p.digest, signedOrder: p.payload, fillerSrcCst: "250000000000000000" }, { resolveRpc: chain({ clone: "0x00000000000000000000000000000000000000de" }) });
-    expect(wrongClone.state).toBe("unavailable");
-    expect(wrongClone.warnings[0]!.message).toMatch(/Settler__RolloverContractNotDeployed/u);
   });
 
   it("a JIT commitment: executeWithMarket on the settler generation's wire, the instruction must hash to the signed commitment; missing or surplus instructions refuse", async () => {
@@ -338,23 +404,9 @@ describe("rollover-fill — the HOLDER's signature is verified the way the settl
   // The settler runs SignatureChecker.isValidSignatureNow(order.user, orderDigest, signature) and
   // reverts on a false answer. Bytes for a signature the holder did not give can only revert.
   const CONTRACT_CODE = "0x6080";
+  // The same factory world as every other test, with the holder as a contract account.
   const chainWithHolder = (o: { holderCode?: string; isValidSignature?: string | Error }) =>
-    stubRpc(
-      (c: StubCall) => {
-        switch (c.functionName) {
-          case "orderStatus": return 1n;
-          case "rolloverContractOf": return CLONE;
-          case "predictRolloverContractOf": return CLONE;
-          case "balanceOf": return 10n ** 18n;
-          case "allowance": return 0n;
-          case "isValidSignature":
-            if (o.isValidSignature instanceof Error) throw o.isValidSignature;
-            return o.isValidSignature ?? "0x1626ba7e";
-          default: throw new Error(`no stub for ${c.functionName}`);
-        }
-      },
-      { code: o.holderCode !== undefined ? { [holder.address.toLowerCase()]: o.holderCode } : {} },
-    );
+    chain({ ...(o.isValidSignature !== undefined ? { isValidSignature: o.isValidSignature } : {}), code: o.holderCode !== undefined ? { [holder.address.toLowerCase()]: o.holderCode } : {} });
   type Verdict = Data & { holderSignature: string };
 
   it("the holder's own signature: eoa-verified, bytes built", async () => {
@@ -402,5 +454,18 @@ describe("rollover-fill — the HOLDER's signature is verified the way the settl
     expect(outage.state, JSON.stringify(outage.warnings)).toBe("ok");
     expect((outage.data as Verdict).holderSignature).toBe("unverified");
     expect(outage.warnings.some((w) => w.code === "chain_read_failed" && /isValidSignature could not be asked/u.test(w.message))).toBe(true);
+  });
+});
+
+describe("cloneAdmission — the settler's two clone checks as a pure rule", () => {
+  const facts = { user: holder.address, named: CLONE, deployed: true, owner: holder.address, predicted: CLONE, holderClone: CLONE } as const;
+  it("admits the holder's own deployed clone, and fails closed on a deployed clone whose owner could not be read", () => {
+    expect(cloneAdmission(facts, "test")).toEqual({ ok: true });
+    // Unreachable through the handler (owner() is read on every deployed clone and a failed read
+    // throws), so the rule must not read a missing owner as the holder.
+    expect(cloneAdmission({ ...facts, owner: null }, "test")).toMatchObject({ ok: false, settlerError: "Settler__UserNotRolloverContractOwner" });
+  });
+  it("owner comparison is by address, not by spelling", () => {
+    expect(cloneAdmission({ ...facts, owner: holder.address.toLowerCase() as `0x${string}` }, "test")).toEqual({ ok: true });
   });
 });
