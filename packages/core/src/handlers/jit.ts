@@ -1,10 +1,10 @@
 // Split from handlers.ts (2026-08-05): jit handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope } from "@cork/schemas";
-import { size, sliceHex } from "viem";
+import { size } from "viem";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, jitAdapterNestedBytesAbi, type JITMarketParams, permitOfBytesRow, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, jitAdapterNestedVrsAbi, type FlatPermitRow, type JITMarketParams, permitOfFlatRow, permitSignatureOfVrs, splitPermitSignature, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
@@ -213,8 +213,7 @@ const LADDER_SIDE = {
  *  own signature so the shape has exactly one declaration site. */
 export type JitMarketWireParams = Parameters<typeof runJitPreflightLadder>[0]["jm"];
 
-/** One permit input row: v/r/s, or (accepted since 0.7.0) the same ECDSA signature as one
- *  `signature` field. */
+/** One permit input row: the signature as `signature` bytes (canonical), or the older v/r/s. */
 export interface PermitWireRow {
   token: `0x${string}`;
   value: string;
@@ -225,44 +224,33 @@ export interface PermitWireRow {
   s?: `0x${string}` | undefined;
 }
 
-/** The v/r/s of a permit row. Every JIT adapter this build targets (0.4.0 on the nested wire, the
- *  0.3.x flat one, the legacy one) takes ECDSA v/r/s, so `signature` must be 65 bytes r‖s‖v and is
- *  split; both forms at once, neither, a partial triple, or another length refuse with teaching. */
-export function permitVrsOfWire(p: PermitWireRow, path: Array<string | number>): { v: number; r: `0x${string}`; s: `0x${string}` } {
+/** The permit signature of one input row, as bytes. v/r/s normalize to r‖s‖v. The set's permit
+ *  row decides what a signature may be: `bytes` (CorkLimitOrderAdapter 0.5.0, set phoenix/v0.5)
+ *  carries it verbatim, so a contract wallet's ERC-1271 bytes work; `vrs` (0.4.0, the flat
+ *  adapter) takes a 65-byte ECDSA signature only. Both forms at once, neither, a partial triple,
+ *  or a non-65-byte signature on the v/r/s row refuse with teaching. */
+export function permitSignatureOfWire(p: PermitWireRow, path: Array<string | number>, permitWire: JitPermitWire): `0x${string}` {
   const split = [p.v, p.r, p.s].filter((x) => x !== undefined).length;
   if (p.signature !== undefined && split > 0) {
-    throw new ToolInputError("cork_prepare_orders", [{ path, message: "pass the permit signature ONCE: either `signature` (65 bytes r‖s‖v) or v/r/s, not both" }]);
+    throw new ToolInputError("cork_prepare_orders", [{ path, message: "pass the permit signature ONCE: either `signature` (bytes) or v/r/s, not both" }]);
   }
-  if (p.signature !== undefined) {
-    if (size(p.signature) !== 65) {
-      throw new ToolInputError("cork_prepare_orders", [{
-        path: [...path, "signature"],
-        message: `the permit signature is ${size(p.signature)} bytes; the JIT adapter of this deployment set (CorkLimitOrderAdapter 0.4.0 on phoenix/v0.4-rc.1, or the flat adapter) takes a 65-byte ECDSA signature only (r‖s‖v from an EOA). A contract wallet's ERC-1271 signature cannot authorize this permit here: target phoenix/v0.5 (generation: "phoenix/v0.5", adapter 0.5.0, ERC-1271 accepted), or create the pool first (cork_prepare_market create-pool), then rest the order without a JIT mint`,
-      }]);
-    }
-    return { r: sliceHex(p.signature, 0, 32), s: sliceHex(p.signature, 32, 64), v: Number(BigInt(sliceHex(p.signature, 64, 65))) };
+  if (p.signature === undefined) {
+    if (split !== 3) throw new ToolInputError("cork_prepare_orders", [{ path, message: "a permit needs its signature: pass `signature` (bytes), or all three of v/r/s" }]);
+    return permitSignatureOfVrs(p.v!, p.r!, p.s!);
   }
-  if (split !== 3) {
-    throw new ToolInputError("cork_prepare_orders", [{ path, message: "a permit needs its signature: pass all three of v/r/s, or `signature` (65 bytes r‖s‖v)" }]);
+  if (permitWire === "vrs" && size(p.signature) !== 65) {
+    throw new ToolInputError("cork_prepare_orders", [{
+      path: [...path, "signature"],
+      message: `the permit signature is ${size(p.signature)} bytes; the JIT adapter of this deployment set (CorkLimitOrderAdapter 0.4.0 on phoenix/v0.4-rc.1, or the flat adapter) takes a 65-byte ECDSA signature only (r‖s‖v from an EOA). A contract wallet's ERC-1271 signature cannot authorize this permit here: target phoenix/v0.5 (generation: "phoenix/v0.5", adapter 0.5.0, ERC-1271 accepted), or create the pool first (cork_prepare_market create-pool), then rest the order without a JIT mint`,
+    }]);
   }
-  return { v: p.v!, r: p.r!, s: p.s! };
+  return p.signature;
 }
 
 /** Parse the ERC-2612 permit wire rows into bigint params — ONE spelling for the maker and
- *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). The
- *  set's declared permit wire decides what a signature may be: `vrs` (CorkLimitOrderAdapter
- *  0.4.0, the flat adapter) takes 65-byte ECDSA only; `bytes` (0.5.0, set phoenix/v0.5) also
- *  takes a contract wallet's ERC-1271 bytes, carried verbatim. */
+ *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). */
 export function parsePermitWires(permits: JitMarketWireParams["permits"], permitWire: JitPermitWire = "vrs"): PermitParams[] {
-  return (permits ?? []).map((p, i) => {
-    const path = ["action", "jitMarket", "permits", i];
-    const base = { token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline) };
-    if (permitWire === "bytes" && p.signature !== undefined) {
-      if ([p.v, p.r, p.s].some((x) => x !== undefined)) permitVrsOfWire(p, path); // refuses both forms, with its teaching
-      return permitOfBytesRow({ ...base, signature: p.signature });
-    }
-    return { ...base, ...permitVrsOfWire(p, path) };
-  });
+  return (permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), signature: permitSignatureOfWire(p, ["action", "jitMarket", "permits", i], permitWire) }));
 }
 
 /**
@@ -655,7 +643,7 @@ export async function prepareJitLegacy(args: {
     unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
     enableJitMint: jm.enableJitMint,
   };
-  const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...permitVrsOfWire(p, ["action", "jitMarket", "permits", i]) }));
+  const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...splitPermitSignature(permitSignatureOfWire(p, ["action", "jitMarket", "permits", i], "vrs"))! }));
   const extension = legacyRegistry.buildJitExtension(mr.adapter, legacyRegistry.encodeJitExtraData(jitParams, permits));
   let jitData: LegacyJitReport = { generation: "legacy (pre-2.1.0)", adapter: mr.adapter, hook: "preInteraction (maker-side)", mode, enableJitMint: jm.enableJitMint };
   warnings.push({ code: "rate_drift_notice", message: "LEGACY generation: market identity follows the LIVE oracle rate — the derived pool id is only stepwise-stable, and a drifted rate reverts the fill with OrderNotForPool (by design, as a staleness guard)" });
@@ -789,16 +777,16 @@ export async function verifyExtraDataLayout(a: {
 }): Promise<{ status: string } | { gate: Envelope }> {
   let decoded: { params: JITMarketParams; permits: PermitParams[] };
   try {
-    if (a.wire === "nested" && a.permitWire === "bytes") {
-      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedBytesAbi as never, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [Parameters<typeof flattenNestedJitParams>[0][0], readonly { token: `0x${string}`; value: bigint; deadline: bigint; signature: `0x${string}` }[]];
-      decoded = { params: flattenNestedJitParams([out[0], []]).params, permits: out[1].map(permitOfBytesRow) };
+    if (a.wire === "nested" && a.permitWire === "vrs") {
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedVrsAbi as never, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [Parameters<typeof flattenNestedJitParams>[0][0], readonly FlatPermitRow[]];
+      decoded = { params: flattenNestedJitParams([out[0], []]).params, permits: out[1].map(permitOfFlatRow) };
     } else if (a.wire === "nested") {
       const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedAbi, functionName: "decodeExtraData", args: [a.extraData] })) as Parameters<typeof flattenNestedJitParams>[0];
       decoded = flattenNestedJitParams(out);
     } else {
-      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams & { additionalData: `0x${string}` }, readonly PermitParams[]];
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams & { additionalData: `0x${string}` }, readonly FlatPermitRow[]];
       const { additionalData, ...rest } = out[0];
-      decoded = { params: { ...rest, extraData: additionalData, constraint: { ...out[0].constraint } }, permits: out[1].map((p) => ({ ...p })) };
+      decoded = { params: { ...rest, extraData: additionalData, constraint: { ...out[0].constraint } }, permits: out[1].map(permitOfFlatRow) };
     }
   } catch (err) {
     return { status: `unchecked: the adapter exposes no decodeExtraData helper (pre-0.4.0 generation) or the read failed (${revertReason(err)}) — the bytes follow the layout this build knows` };

@@ -1,7 +1,8 @@
 // Maker-side readiness of a RESTING order: can the LOP actually pull the maker asset when a
 // taker fills it? A signed, live, authentic order can still be structurally un-fillable — the
 // incident class (Base, 2026-09-11): a CONTRACT maker rested a JIT order on a not-yet-created
-// cST; the embedded ERC-2612 permit path is ECDSA-only and a contract cannot hold an allowance
+// cST; that adapter's embedded ERC-2612 permit was ECDSA-only (the bytes row of phoenix/v0.5
+// later opened it to ERC-1271) and a contract cannot hold an allowance
 // on a code-less token, so the book ranked #1 an order every fill of which reverts
 // TransferFromMakerToTakerFailed.
 //
@@ -197,7 +198,7 @@ export async function gatherMakerReadinessFacts(client: ReadinessClient, t: Make
 export type MakerNotReadyCode =
   | "silent-noop" // code-less makerAsset NO hook creates: the maker transfer "succeeds" moving nothing — the taker pays for nothing
   | "unborn-cst-no-permit" // JIT creates the makerAsset but no embedded permit covers it — the LOP cannot pull the minted cST
-  | "contract-maker-unborn-cst" // the incident class: permit present but the maker is a contract, and ERC-2612 is ECDSA-only
+  | "contract-maker-unborn-cst" // the incident class: permit present but the maker is a contract, and the permit row is ECDSA-only (v/r/s)
   | "allowance-missing"
   | "allowance-insufficient"
   | "balance-empty"

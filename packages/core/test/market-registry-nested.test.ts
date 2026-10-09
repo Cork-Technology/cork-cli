@@ -75,7 +75,9 @@ const SAMPLE: JITMarketParams = {
   unwindSwapFeePercentage: 2n * WAD,
   enableJitMint: true,
 };
-const SAMPLE_PERMIT: PermitParams = { token: USDC, value: 123n, deadline: 1_800_000_000n, v: 27, r: `0x${"22".repeat(32)}`, s: `0x${"33".repeat(32)}` };
+const SAMPLE_PERMIT: PermitParams = { token: USDC, value: 123n, deadline: 1_800_000_000n, signature: `0x${"22".repeat(32)}${"33".repeat(32)}1b` }; // r ‖ s ‖ v=27
+const SAMPLE_R = `0x${"22".repeat(32)}` as const;
+const SAMPLE_S = `0x${"33".repeat(32)}` as const;
 /** adapter.encodeExtraData({ market, enableJitMint: true }, [permit]) — the deployed 0.4.0 adapter's own bytes. */
 const LIVE_EXTRA_DATA =
   "0x0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda029130000000000000000000000009c6864105aec23388c89600046213a44c384c831000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000d5e8f76aafa20aa9a8983a35b71ad3a793070ed900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec80000000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000000000000001a011111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000001bc16d674ec800000000000000000000000000000000000000000000000000000000000000000003aabbcc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000000000000000000000000000000000000000007b000000000000000000000000000000000000000000000000000000006b49d200000000000000000000000000000000000000000000000000000000000000001b22222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333" as const;
@@ -93,19 +95,19 @@ const bodyWord = (calldata: string, i: number): string => word(`0x${calldata.sli
 
 describe("nested wire — the deployed adapter's own bytes (golden, 42161 2026-09-22)", () => {
   it("encodeJitExtraData('nested') reproduces adapter.encodeExtraData byte for byte, with and without permits", () => {
-    expect(encodeJitExtraData("nested", SAMPLE, [SAMPLE_PERMIT])).toBe(LIVE_EXTRA_DATA);
-    expect(encodeJitExtraData("nested", { ...SAMPLE, enableJitMint: false }, [])).toBe(LIVE_EXTRA_DATA_NO_PERMIT);
-    expect(WIRES.nested.encodeExtraData(SAMPLE, [SAMPLE_PERMIT])).toBe(LIVE_EXTRA_DATA);
+    expect(encodeJitExtraData("nested", SAMPLE, [SAMPLE_PERMIT], "vrs")).toBe(LIVE_EXTRA_DATA);
+    expect(encodeJitExtraData("nested", { ...SAMPLE, enableJitMint: false }, [], "vrs")).toBe(LIVE_EXTRA_DATA_NO_PERMIT);
+    expect(WIRES.nested.encodeExtraData(SAMPLE, [SAMPLE_PERMIT], "vrs")).toBe(LIVE_EXTRA_DATA);
   });
 
   it("decodeJitExtraData('nested') reads the live bytes back to the sample — the adapter's decodeExtraData answer, unwrapped", () => {
-    const back = decodeJitExtraData("nested", LIVE_EXTRA_DATA);
+    const back = decodeJitExtraData("nested", LIVE_EXTRA_DATA, "vrs");
     expect(diffJitExtraData({ params: SAMPLE, permits: [SAMPLE_PERMIT] }, back)).toEqual([]);
     expect(back.params.oracleSalt).toBe(SAMPLE.oracleSalt);
     expect(back.params.extraData).toBe("0xaabbcc");
     expect(back.params.enableJitMint).toBe(true);
     expect(back.permits).toEqual([SAMPLE_PERMIT]);
-    const noPermit = decodeJitExtraData("nested", LIVE_EXTRA_DATA_NO_PERMIT);
+    const noPermit = decodeJitExtraData("nested", LIVE_EXTRA_DATA_NO_PERMIT, "vrs");
     expect(noPermit.params.enableJitMint).toBe(false);
     expect(noPermit.permits).toEqual([]);
   });
@@ -135,7 +137,7 @@ describe("nested wire — the deployed adapter's own bytes (golden, 42161 2026-0
     };
     const readFlatAsNested = (): string[] | "threw" => {
       try {
-        return diffJitExtraData({ params: SAMPLE, permits: [SAMPLE_PERMIT] }, decodeJitExtraData("nested", flatBytes));
+        return diffJitExtraData({ params: SAMPLE, permits: [SAMPLE_PERMIT] }, decodeJitExtraData("nested", flatBytes, "vrs"));
       } catch {
         return "threw";
       }
@@ -160,7 +162,7 @@ describe("nested wire — the deployed adapter's own bytes (golden, 42161 2026-0
     // chain list, not per address shape.
     expect(decodeJitExtensionFor(generationsOf(BUNDLED_DEFAULTS, 1), buildJitExtension(adapter, LIVE_EXTRA_DATA))).toBeNull();
     expect(decodeJitExtensionFor(gens, buildJitExtension("0x00000000000000000000000000000000000000ee", flatBytes))).toBeNull();
-    expect(decodeJitExtension("nested", buildJitExtension(adapter, LIVE_EXTRA_DATA)).adapter).toBe(adapter);
+    expect(decodeJitExtension("nested", buildJitExtension(adapter, LIVE_EXTRA_DATA), "vrs").adapter).toBe(adapter);
   });
 
   it("the flat encoder refuses a non-zero oracleSalt (no field carries it); the zero salt is the same as no salt on both wires", () => {
@@ -588,8 +590,8 @@ describe("JIT permit input: `signature` (65-byte ECDSA) or v/r/s, into the 0.4.0
   it("a 65-byte signature splits into the golden's v/r/s and encodes the live 0.4.0 bytes", () => {
     const [p] = parsePermitWires([{ ...row, signature: SIG65 }]);
     expect(p).toEqual(SAMPLE_PERMIT);
-    expect(encodeJitExtraData("nested", SAMPLE, [p!])).toBe(LIVE_EXTRA_DATA);
-    expect(parsePermitWires([{ ...row, v: 27, r: SAMPLE_PERMIT.r, s: SAMPLE_PERMIT.s }])).toEqual([p]);
+    expect(encodeJitExtraData("nested", SAMPLE, [p!], "vrs")).toBe(LIVE_EXTRA_DATA);
+    expect(parsePermitWires([{ ...row, v: 27, r: SAMPLE_R, s: SAMPLE_S }])).toEqual([p]);
   });
   /** The teaching a refused permit row carries: its ToolInputError issues, path and message. */
   const refusal = (rows: Parameters<typeof parsePermitWires>[0]): string => {
@@ -604,7 +606,7 @@ describe("JIT permit input: `signature` (65-byte ECDSA) or v/r/s, into the 0.4.0
   it("refuses both forms, neither, a partial triple, and any length but 65 — naming the 0.4.0 adapter and create-pool", () => {
     expect(refusal([{ ...row, signature: SIG65, v: 27 }])).toMatch(/ONCE/);
     expect(refusal([{ ...row }])).toMatch(/needs its signature/);
-    expect(refusal([{ ...row, v: 27, r: SAMPLE_PERMIT.r }])).toMatch(/all three of v\/r\/s/);
+    expect(refusal([{ ...row, v: 27, r: SAMPLE_R }])).toMatch(/all three of v\/r\/s/);
     const erc1271 = `0x${"ab".repeat(85)}` as const; // a Safe7579-style validator ++ signature
     const taught = refusal([{ ...row, signature: SIG65 }, { ...row, signature: erc1271 }]); // row 0 is valid, row 1 is not
     expect(taught).toMatch(/85 bytes[\s\S]*CorkLimitOrderAdapter 0\.4\.0[\s\S]*create-pool/);

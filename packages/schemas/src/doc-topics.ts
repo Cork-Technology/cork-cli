@@ -1106,7 +1106,8 @@ export function executionRefreshOrder(requote = false): ExecutionBlock {
 }
 
 /** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet: the
- *  EOA-only ERC-2612 permit path is closed, so the pool is created and the allowances placed
+ *  ECDSA-only permit row (phoenix/v0.4-rc.1, the flat wire) is closed to it — or, on phoenix/v0.5,
+ *  it carries no ERC-1271 permit yet — so the pool is created and the allowances placed
  *  BEFORE the order rests (cork-periphery CorkMarketCreator, batched by the smart account). */
 export function executionMakerOrderContractMaker(): ExecutionBlock {
   return executionTypedData([

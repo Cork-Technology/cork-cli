@@ -290,7 +290,7 @@ describe("decodeMakerExtensionContext — from the signed bytes, never throwing"
     unwindSwapFeePercentage: 0n,
     enableJitMint: true,
   } as const;
-  const permit = { token: ASSET, value: 10n ** 18n, deadline: 1_795_000_000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` } as const;
+  const permit = { token: ASSET, value: 10n ** 18n, deadline: 1_795_000_000n, signature: `0x${"ab".repeat(32)}${"cd".repeat(32)}1b` } as const;
 
   it("no extension: nulls", () => {
     expect(decodeMakerExtensionContext(GENS, undefined)).toEqual({ jit: null, extensionPermitToken: null });

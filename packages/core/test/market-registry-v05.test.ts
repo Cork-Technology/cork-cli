@@ -17,12 +17,18 @@ import {
   decodeJitExtensionFor,
   decodeJitExtraData,
   encodeJitExtraData,
+  type FlatPermitRow,
   generationsOf,
   type HandlerContext,
   type JITMarketParams,
+  type PermitParams,
+  permitOfFlatRow,
+  permitSignatureOfVrs,
   primaryOf,
   runTool,
+  splitPermitSignature,
   ToolInputError,
+  WIRES,
 } from "@cork/core";
 import { CST, JIT_TASK_PAIR, LIQUIDITY_RECIPE, stubContext } from "../../../evals/stub.ts";
 import { parsePermitWires } from "../src/handlers/jit.ts";
@@ -97,14 +103,29 @@ describe("the bytes permit row (CorkLimitOrderAdapter 0.5.0)", () => {
     expect((bytes.length - 2) / 2).toBe(1216);
     const back = decodeJitExtraData("nested", bytes, "bytes");
     expect(back.params).toEqual(SAMPLE);
-    // 65 bytes split back into v/r/s; any other length rides verbatim.
-    expect(back.permits[0]).toMatchObject({ v: 27, r: `0x${"22".repeat(32)}`, s: `0x${"33".repeat(32)}` });
-    expect(back.permits[0]!.signature).toBeUndefined();
-    expect(back.permits[1]!.signature).toBe(SIG1271);
+    // The one signature field round-trips verbatim, ECDSA and ERC-1271 alike.
+    expect(back.permits).toEqual(permits);
+    // The nested default IS the bytes row (the v0.7.0 behaviour SDK callers rely on), on every entry point.
+    expect(encodeJitExtraData("nested", SAMPLE, permits)).toBe(bytes);
+    expect(WIRES.nested.encodeExtraData(SAMPLE, permits)).toBe(bytes);
+    expect(decodeJitExtraData("nested", bytes)).toEqual(back);
+    expect(WIRES.nested.decodeExtraData(bytes)).toEqual(back);
+  });
+  it("the v0.7.0 permit SDK surface: one `signature` field; the four helpers convert v/r/s both ways", () => {
+    const vrs = splitPermitSignature(SIG65)!;
+    expect(vrs).toEqual({ v: 27, r: `0x${"22".repeat(32)}`, s: `0x${"33".repeat(32)}` });
+    expect(permitSignatureOfVrs(vrs.v, vrs.r, vrs.s)).toBe(SIG65);
+    expect(splitPermitSignature(SIG1271)).toBeNull(); // ERC-1271 bytes have no v/r/s form
+    const row: FlatPermitRow = { token: USDC, value: 7n, deadline: 9n, ...vrs };
+    expect(permitOfFlatRow(row)).toEqual({ token: USDC, value: 7n, deadline: 9n, signature: SIG65 } satisfies PermitParams);
+    // v/r/s input and the same signature as bytes are ONE permit, on both rows.
+    const asVrs = { token: USDC, value: "7", deadline: "9", ...vrs };
+    const asSig = { token: USDC, value: "7", deadline: "9", signature: SIG65 };
+    for (const wire of ["bytes", "vrs"] as const) expect(parsePermitWires([asVrs], wire)).toEqual(parsePermitWires([asSig], wire));
   });
   it("the v/r/s row refuses a permit it cannot carry, and bytes on the flat wire refuse", () => {
     const permits = parsePermitWires(ROWS, "bytes");
-    expect(() => encodeJitExtraData("nested", SAMPLE, permits, "vrs")).toThrow(/v\/r\/s permit row/);
+    expect(() => encodeJitExtraData("nested", SAMPLE, permits, "vrs")).toThrow(/permits\[1\] carries a 85-byte signature[\s\S]*CorkLimitOrderAdapter 0\.4\.0[\s\S]*phoenix\/v0\.5/);
     expect(() => encodeJitExtraData("flat", SAMPLE, [], "bytes")).toThrow(/nested wire/);
     // Same 65-byte permit, two rows, two different encodings: the row is load-bearing.
     const only65 = parsePermitWires([ROWS[0]!], "bytes");
@@ -113,6 +134,15 @@ describe("the bytes permit row (CorkLimitOrderAdapter 0.5.0)", () => {
   it("parse: bytes takes an 85-byte signature verbatim and still refuses both forms; vrs refuses the 85 bytes", () => {
     expect(parsePermitWires([ROWS[1]!], "bytes")[0]!.signature).toBe(SIG1271);
     expect(() => parsePermitWires([{ ...ROWS[1]!, v: 27 }], "bytes")).toThrow(ToolInputError);
+    // Neither form, or a partial v/r/s triple, refuses on BOTH rows.
+    const bare = { token: USDC, value: "7", deadline: "9" };
+    for (const w of ["bytes", "vrs"] as const) {
+      for (const row of [bare, { ...bare, v: 27, r: `0x${"22".repeat(32)}` as const }]) {
+        const e = (() => { try { parsePermitWires([row], w); } catch (x) { return x; } })();
+        expect(e, w).toBeInstanceOf(ToolInputError);
+        expect(JSON.stringify((e as ToolInputError).issues)).toMatch(/needs its signature/);
+      }
+    }
     const err = (() => { try { parsePermitWires([ROWS[1]!], "vrs"); } catch (e) { return e; } })();
     expect(err).toBeInstanceOf(ToolInputError);
     expect(JSON.stringify((err as ToolInputError).issues)).toMatch(/85 bytes[\s\S]*phoenix\/v0\.5/);
@@ -166,6 +196,56 @@ describe("the JIT maker path on phoenix/v0.5 (the primary) and on phoenix/v0.4-r
     const err = await makerJit(stubContext(), "v05-maker-0003", [permit(SIG1271)], { generation: V04 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ToolInputError);
     expect(JSON.stringify((err as ToolInputError).issues)).toMatch(/CorkLimitOrderAdapter 0\.4\.0[\s\S]*phoenix\/v0\.5/);
+  });
+});
+
+describe("a CONTRACT maker (a Safe) with a JIT order whose pool does not exist yet", () => {
+  /** The stub with the maker account given code — a smart account. */
+  const contractMaker = (): HandlerContext => {
+    const base = stubContext();
+    return {
+      ...base,
+      resolveRpc: async (chainId, url) => {
+        const r = await base.resolveRpc!(chainId, url);
+        if (!r) return r;
+        const client = r.client as unknown as Record<string, unknown>;
+        const getCode = async (a: { address?: string } | undefined) =>
+          String(a?.address ?? "").toLowerCase() === DEMO_ACCOUNT.toLowerCase() ? "0x6080604052" : (client["getCode"] as (x: unknown) => Promise<unknown>)(a);
+        return { ...r, client: { ...client, getCode } as never };
+      },
+    };
+  };
+  const makerJit = (ctx: HandlerContext, id: string, permits: unknown[], input: Record<string, unknown> = {}) =>
+    runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: id, ...input, action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: CST, takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: "1000000000000000000", takingAmount: "50000000000000000", jitMarket: { ...JIT_TASK_PAIR, expiryTimestamp: EXPIRY, recipe: LIQUIDITY_RECIPE, permits } } }, ctx);
+  type Data = { extension: `0x${string}`; execution: unknown; approvals: Array<{ mechanism: string; wallets: string }> };
+
+  it("phoenix/v0.5, no permit yet: contract_maker_pre_rest names BOTH paths (ERC-1271 permit, or create-pool first)", async () => {
+    const env = await makerJit(contractMaker(), "v05-contract-maker-0001", []);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const pre = env.warnings.find((w) => w.code === "contract_maker_pre_rest");
+    expect(pre?.message).toContain("ERC-1271");
+    expect(pre?.message).toContain("create-pool");
+    expect(JSON.stringify((env.data as Data).execution)).toContain("create-pool");
+    expect((env.data as Data).approvals.find((a) => a.mechanism === "erc2612-permit")?.wallets).toBe("eoa+contract");
+  });
+
+  it("phoenix/v0.5, with an ERC-1271 permit over the predicted cST: no create-pool-first push; the bytes carry the signature verbatim", async () => {
+    const env = await makerJit(contractMaker(), "v05-contract-maker-0002", [{ token: CST, value: "1000000000000000000", deadline: EXPIRY, signature: SIG1271 }]);
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    expect(env.warnings.map((w) => w.code)).not.toContain("contract_maker_pre_rest");
+    expect(JSON.stringify((env.data as Data).execution)).not.toContain("create-pool");
+    const back = decodeJitExtensionFor(generationsOf(BUNDLED_DEFAULTS, 42161), (env.data as Data).extension);
+    expect(back?.wire).toBe("nested");
+    expect((back as { permits: PermitParams[] }).permits[0]!.signature).toBe(SIG1271);
+  });
+
+  it("phoenix/v0.4-rc.1: the permit is ECDSA-only, so create-pool first is THE path, even with an ECDSA permit attached", async () => {
+    const env = await makerJit(contractMaker(), "v05-contract-maker-0003", [{ token: CST, value: "1000000000000000000", deadline: EXPIRY, signature: SIG65 }], { generation: V04 });
+    expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
+    const pre = env.warnings.find((w) => w.code === "contract_maker_pre_rest");
+    expect(pre?.message).toMatch(/only an ECDSA permit[\s\S]*create-pool/);
+    expect(pre?.message).not.toContain("ERC-1271");
+    expect(JSON.stringify((env.data as Data).execution)).toContain("create-pool");
   });
 });
 

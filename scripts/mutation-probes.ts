@@ -163,40 +163,84 @@ const CATALOG: Mutant[] = [
   },
   // ── phoenix/v0.5: the bytes JIT permit row and sets that share contracts (2026-10-09) ──
   {
-    // The 0.5.0 adapter's wrapper (market, enableJitMint) in the wrong order.
+    // The 0.4.0 adapter's wrapper (market, enableJitMint) in the wrong order.
     id: "v05-bytes-wrapper-nesting-swapped",
     file: "packages/core/src/market-registry.ts",
-    find: "const JIT_PARAMS_NESTED_BYTES_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: \"enableJitMint\", type: \"bool\" },",
-    replace: "const JIT_PARAMS_NESTED_BYTES_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"enableJitMint\", type: \"bool\" },\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },",
+    find: "const JIT_PARAMS_NESTED_VRS_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: \"enableJitMint\", type: \"bool\" },",
+    replace: "const JIT_PARAMS_NESTED_VRS_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"enableJitMint\", type: \"bool\" },\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },",
+    tests: [T.nested, T.extraData],
+  },
+  {
+    // The nested default turns v/r/s: 0.7.0 SDK callers silently encode the wrong row for 0x960C.
+    id: "permit-nested-default-not-bytes",
+    file: "packages/core/src/market-registry.ts",
+    find: "  return permitWire ?? \"bytes\";",
+    replace: "  return permitWire ?? \"vrs\";",
+    tests: [T.v05],
+  },
+  {
+    // A contract maker's v/r/s JIT permit counts as signable: the incident class ranks again.
+    id: "readiness-vrs-row-treated-as-erc1271",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: "  const makerCanSignJitPermit = jit?.permitWire === \"bytes\" ? true : f.makerCanSignEcdsa;",
+    replace: "  const makerCanSignJitPermit = true;",
+    tests: [T.makerReadiness],
+  },
+  {
+    // The on-chain layout check ignores the permit signature.
+    id: "layout-diff-permit-signature-blind",
+    file: "packages/core/src/market-registry.ts",
+    find: "lc(ep.signature) !== lc(dp.signature)) out.push",
+    replace: "false) out.push",
+    tests: [T.extraData, T.v05, T.nested],
+  },
+  {
+    // The v0.7.0 approval input wire=nested is ignored: 0.7.0 callers are told eoa-only.
+    id: "approvals-v070-wire-ignored",
+    file: "packages/core/src/order-approvals.ts",
+    find: "  return jit?.permitWire ?? (jit?.wire === \"nested\" ? \"bytes\" : \"vrs\");",
+    replace: "  return jit?.permitWire ?? \"vrs\";",
+    tests: [T.approvals],
+  },
+  {
+    // The v/r/s row takes a non-ECDSA signature without refusing.
+    id: "vrs-row-erc1271-not-refused",
+    file: "packages/core/src/market-registry.ts",
+    find: "  if (vrs === null) throw new Error(",
+    replace: "  if (false) throw new Error(",
+    tests: [T.extraData],
+  },
+  {
+    // A contract maker carrying an ERC-1271 permit is still pushed to create-pool first.
+    id: "pre-rest-bytes-permit-ignored",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "!(permitWire === \"bytes\" && permitCoversCst)",
+    replace: "!(false)",
     tests: [T.v05],
   },
   {
     // The bytes row encodes as the v/r/s row: the 0.5.0 adapter misreads every permit.
     id: "v05-bytes-row-ignored-on-encode",
     file: "packages/core/src/market-registry.ts",
-    find: `  if (permitWire === "bytes") {
-    if (wire !== "nested")`,
-    replace: `  if (false) {
-    if (wire !== "nested")`,
-    tests: [T.v05],
+    find: "  if (wire === \"nested\" && row === \"bytes\") {",
+    replace: "  if (false) {",
+    tests: [T.v05, T.extraData],
   },
   {
-    // The bytes row decodes as the v/r/s row.
+    // The v/r/s row decodes as the bytes row: every 0.4.0 order misreads.
     id: "v05-bytes-row-ignored-on-decode",
     file: "packages/core/src/market-registry.ts",
-    find: `  if (permitWire === "bytes") {
-    const out = decodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI`,
-    replace: `  if (false) {
-    const out = decodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI`,
-    tests: [T.v05],
+    find: "  if (wire === \"nested\" && row === \"vrs\") {",
+    replace: "  if (false) {",
+    tests: [T.nested, T.extraData],
   },
   {
-    // A 65-byte signature is carried raw instead of split: decode loses v/r/s.
+    // A 65-byte signature is not split: v/r/s rows and the 0.7.0 helper break.
     id: "v05-bytes-row-65-not-split",
     file: "packages/core/src/market-registry.ts",
-    find: "  if (size(row.signature) === 65) return",
-    replace: "  if (size(row.signature) === 0) return",
-    tests: [T.v05],
+    find: "  if (size(signature) !== 65) return null;",
+    replace: "  if (size(signature) !== 66) return null;",
+    tests: [T.v05, T.extraData],
   },
   {
     // The set's declared row is not read: phoenix/v0.5 encodes v/r/s and refuses ERC-1271.
@@ -2117,12 +2161,12 @@ const CATALOG: Mutant[] = [
   // ── the 0.7.0 `signature` permit input after the adapter revert: every JIT adapter this build
   // targets takes ECDSA v/r/s, so only a 65-byte signature may pass, split exactly.
   {
-    // The length check is dropped: an ERC-1271 signature would be cut into a wrong v/r/s.
+    // The v/r/s row's length check is dropped: an ERC-1271 signature reaches the encoder.
     id: "permit-signature-length-unchecked",
     file: "packages/core/src/handlers/jit.ts",
-    find: "    if (size(p.signature) !== 65) {",
-    replace: "    if (false) {",
-    tests: [T.nested],
+    find: "  if (permitWire === \"vrs\" && size(p.signature) !== 65) {",
+    replace: "  if (false) {",
+    tests: [T.nested, T.v05],
   },
   {
     // Both forms accepted: `signature` silently wins over a disagreeing v/r/s.
@@ -2133,12 +2177,12 @@ const CATALOG: Mutant[] = [
     tests: [T.nested],
   },
   {
-    // The split reads v from the first byte instead of the last (r‖s‖v): every permit misencodes.
+    // v is read from the wrong byte of r‖s‖v.
     id: "permit-signature-split-v-misread",
-    file: "packages/core/src/handlers/jit.ts",
-    find: "v: Number(BigInt(sliceHex(p.signature, 64, 65)))",
-    replace: "v: Number(BigInt(sliceHex(p.signature, 0, 1)))",
-    tests: [T.nested],
+    file: "packages/core/src/market-registry.ts",
+    find: "v: Number(BigInt(sliceHex(signature, 64, 65))) };",
+    replace: "v: Number(BigInt(sliceHex(signature, 63, 64))) };",
+    tests: [T.v05, T.extraData, T.nested],
   },
   // ── the answer grader of the eval task rollover-fill-as-cover-holder: each mutant drops or
   // widens one part of the claim it judges; the pinned right/wrong answers must kill every one.

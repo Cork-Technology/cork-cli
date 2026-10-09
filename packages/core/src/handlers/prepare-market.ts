@@ -148,7 +148,7 @@ export async function handlePrepareMarket(
 const CREATOR_VALUE_SITE: ValueGateSite = { fees: "createNewPool fee percentages", expiryField: "expiryTimestamp", revertActor: "sending this tx" };
 
 /** The smart-account teaching this action exists for, echoed on every successful build. */
-const CREATOR_NOTE = "the smart-account path around EOA-only ERC-2612 JIT permits: batch this tx, then cst.approve(limitOrderProtocol), then the maker order/fill with NO permits (enableJitMint stays false — the pool already exists). The call is idempotent: an existing pool is a lookup returning (poolId, cst, cpt), nothing reverts";
+const CREATOR_NOTE = "the permit-free path (needed by a smart account where the JIT permit is ECDSA-only — phoenix/v0.4-rc.1 and the flat wire; optional on phoenix/v0.5, whose permit a contract wallet signs through ERC-1271): batch this tx, then cst.approve(limitOrderProtocol), then the maker order/fill with NO permits (enableJitMint stays false — the pool already exists). The call is idempotent: an existing pool is a lookup returning (poolId, cst, cpt), nothing reverts";
 
 const creatorScales = (phoenixWire: PhoenixWire) => ({
   constraint: "ABSOLUTE rates, 1e18 = 1.0 (NOT the 1e18=1% fee family)",

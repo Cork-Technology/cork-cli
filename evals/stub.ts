@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, permitSignatureBytes, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, splitPermitSignature, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
@@ -273,12 +273,12 @@ function readContract(args: { address: string; functionName: string; args?: unkn
         const permitWire = block?.jitPermitWire ?? "vrs";
         const d = decodeJitExtraData("nested", bytes, permitWire);
         const { enableJitMint, oracleSalt, ...market } = d.params;
-        const permits = permitWire === "bytes" ? d.permits.map((q) => ({ token: q.token, value: q.value, deadline: q.deadline, signature: permitSignatureBytes(q) })) : d.permits;
+        const permits = permitWire === "bytes" ? d.permits : d.permits.map((q) => ({ token: q.token, value: q.value, deadline: q.deadline, ...splitPermitSignature(q.signature)! }));
         return [{ market: { ...market, oracleSalt: oracleSalt ?? `0x${"00".repeat(32)}` }, enableJitMint }, permits];
       }
       const d = decodeJitExtraData("flat", bytes);
       const { extraData, oracleSalt: _noSalt, ...rest } = d.params;
-      return [{ ...rest, additionalData: extraData }, d.permits];
+      return [{ ...rest, additionalData: extraData }, d.permits.map((q) => ({ token: q.token, value: q.value, deadline: q.deadline, ...splitPermitSignature(q.signature)! }))];
     }
     case "LIMIT_ORDER_PROTOCOL":
       return BUNDLED_DEFAULTS.lopAddresses[String(chainId)] ?? BUNDLED_DEFAULTS.lopAddresses["1"]!;

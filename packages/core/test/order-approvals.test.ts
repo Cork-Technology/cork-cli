@@ -68,6 +68,29 @@ describe("makerApprovalRequirements — the underwriter's grants", () => {
     expect(entries[1]!.unsignedTx!.calldata).toContain(word((1n << 160n) - 1n));
   });
 
+  it("the bytes permit row (phoenix/v0.5): a contract wallet can sign the JIT permit (ERC-1271); the v/r/s row and an undeclared row stay EOA-only", () => {
+    const maker = (permitWire?: "vrs" | "bytes") =>
+      makerApprovalRequirements({ maker: MAKER, makerAsset: CST, makingAmount: AMOUNT, lop: LOP, usePermit2: false, jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: false, predictedCorkSwapToken: CST, ...(permitWire ? { permitWire } : {}) } })[0]!;
+    const taker = (permitWire?: "vrs" | "bytes") =>
+      takerApprovalRequirements({ taker: TAKER, takerAsset: CST, requiredTakingAmount: AMOUNT, lop: LOP, jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, predictedCorkSwapToken: CST, ...(permitWire ? { permitWire } : {}) } })[0]!;
+    expect(maker("bytes")).toMatchObject({ mechanism: "erc2612-permit", wallets: "eoa+contract" });
+    expect(maker("bytes").note).toContain("ERC-1271");
+    expect(taker("bytes")).toMatchObject({ mechanism: "erc2612-permit", wallets: "eoa+contract" });
+    // The v0.7.0 input `wire` keeps its meaning: "nested" was the 0.5.0 adapter (bytes row); an
+    // explicit permitWire wins over it.
+    const legacyInput = (wire: "nested" | "flat", permitWire?: "vrs" | "bytes") =>
+      makerApprovalRequirements({ maker: MAKER, makerAsset: CST, makingAmount: AMOUNT, lop: LOP, usePermit2: false, jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: false, predictedCorkSwapToken: CST, wire, ...(permitWire ? { permitWire } : {}) } })[0]!.wallets;
+    expect(legacyInput("nested")).toBe("eoa+contract");
+    expect(legacyInput("flat")).toBe("eoa-only");
+    expect(legacyInput("nested", "vrs")).toBe("eoa-only");
+    expect(takerApprovalRequirements({ taker: TAKER, takerAsset: CST, requiredTakingAmount: AMOUNT, lop: LOP, jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, predictedCorkSwapToken: CST, wire: "nested" } })[0]!.wallets).toBe("eoa+contract");
+    for (const w of ["vrs", undefined] as const) {
+      expect(maker(w)).toMatchObject({ wallets: "eoa-only" });
+      expect(maker(w).note).toContain("create-pool");
+      expect(taker(w)).toMatchObject({ wallets: "eoa-only" });
+    }
+  });
+
   it("JIT selling the predicted cST: an ERC-2612 permit (EOA-only), never an approve tx", () => {
     const entries = makerApprovalRequirements({
       maker: MAKER, makerAsset: CST, makingAmount: AMOUNT, lop: LOP, usePermit2: false,

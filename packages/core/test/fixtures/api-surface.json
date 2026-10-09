@@ -425,6 +425,10 @@
       "kind": "type"
     },
     {
+      "name": "FlatPermitRow",
+      "kind": "type"
+    },
+    {
       "name": "ForSelfAllowance",
       "kind": "type"
     },
@@ -2469,7 +2473,7 @@
       "kind": "value"
     },
     {
-      "name": "jitAdapterNestedBytesAbi",
+      "name": "jitAdapterNestedVrsAbi",
       "kind": "value"
     },
     {
@@ -2665,11 +2669,11 @@
       "kind": "value"
     },
     {
-      "name": "permitOfBytesRow",
+      "name": "permitOfFlatRow",
       "kind": "value"
     },
     {
-      "name": "permitSignatureBytes",
+      "name": "permitSignatureOfVrs",
       "kind": "value"
     },
     {
@@ -3050,6 +3054,10 @@
     },
     {
       "name": "spenderRoleOf",
+      "kind": "value"
+    },
+    {
+      "name": "splitPermitSignature",
       "kind": "value"
     },
     {
@@ -5743,6 +5751,10 @@
       "kind": "type"
     },
     {
+      "name": "FlatPermitRow",
+      "kind": "type"
+    },
+    {
       "name": "ImplementedMarketRegistryWire",
       "kind": "type"
     },
@@ -5955,7 +5967,7 @@
       "kind": "value"
     },
     {
-      "name": "jitAdapterNestedBytesAbi",
+      "name": "jitAdapterNestedVrsAbi",
       "kind": "value"
     },
     {
@@ -5987,11 +5999,11 @@
       "kind": "value"
     },
     {
-      "name": "permitOfBytesRow",
+      "name": "permitOfFlatRow",
       "kind": "value"
     },
     {
-      "name": "permitSignatureBytes",
+      "name": "permitSignatureOfVrs",
       "kind": "value"
     },
     {
@@ -6036,6 +6048,10 @@
     },
     {
       "name": "simulateLegFailure",
+      "kind": "value"
+    },
+    {
+      "name": "splitPermitSignature",
       "kind": "value"
     },
     {

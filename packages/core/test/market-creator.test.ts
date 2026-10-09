@@ -1,6 +1,6 @@
 // CorkMarketCreator (cork-periphery 0.1.0): the direct pool-creation path — the same pool a JIT
-// fill derives, creatable AHEAD of the fill by a smart-account maker that cannot sign the
-// EOA-only ERC-2612 cST permit. Calldata is pinned against an independently-generated golden
+// fill derives, creatable AHEAD of the fill by a smart-account maker that cannot sign an
+// ECDSA-only cST permit (v/r/s row; phoenix/v0.5's bytes row takes ERC-1271). Calldata is pinned against an independently-generated golden
 // vector (cast, and a live Base eth_call 2026-08-28 that returned the tool's exact predicted
 // (poolId, cst, cpt) triple); handler paths run offline via injected RPC stubs. Live parity
 // runs env-gated in rpc-live.test.ts.

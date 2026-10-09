@@ -250,9 +250,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     let extension = action.extension;
     const warnings: Array<{ code: string; message: string }> = [];
     let jitData: MakerJitReport | LegacyJitReport | undefined;
-    // A CONTRACT maker (a Safe) cannot sign the ECDSA-only ERC-2612 permit a JIT mint needs, so
-    // when its pool does not exist yet the completion path starts with create-pool and the two
-    // allowances. Decided from chain facts (pool existence from the share prediction, maker code
+    // On a v/r/s permit row a CONTRACT maker (a Safe) cannot sign the ECDSA-only ERC-2612 permit a
+    // JIT mint needs, so when its pool does not exist yet the completion path starts with
+    // create-pool and the two allowances; on the bytes row (phoenix/v0.5) it may sign via ERC-1271. Decided from chain facts (pool existence from the share prediction, maker code
     // from getCode); silent when either is unknown.
     let contractMakerPreRest = false;
     if (action.jitMarket) {

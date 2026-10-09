@@ -100,7 +100,7 @@ struct MarketParams {
 }
 ```
 
-`ResolvedConstraint` and `PermitParams` are unchanged. Three things moved with the layout:
+`ResolvedConstraint` is unchanged. `PermitParams` is the set's permit row (see above): `bytes signature` on `phoenix/v0.5`, `v`/`r`/`s` on `phoenix/v0.4-rc.1`. The SDK type carries one `signature` either way and splits it for the v/r/s row. Three things moved with the layout:
 
 - **The registry word is `extraData`.** The tool takes `extraData` on every jitMarket input and
   still accepts `additionalData` as an alias (an info `deprecation_notice`; both present and

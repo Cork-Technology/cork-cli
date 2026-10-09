@@ -366,8 +366,9 @@ export const TASKS: EvalTask[] = [
     expect: { tool: "cork_prepare_market", prelude: ["cork_capabilities", "cork_query"], params: { action: { type: "deploy-oracle" } }, state: "ok", code: "oracle_already_deployed", answer: /already deployed|idempotent|no-op|exists/i, maxCalls: 3 },
   },
   {
-    // The smart-account story create-pool exists for: a contract wallet cannot sign the
-    // EOA-only ERC-2612 cST permit a JIT mint needs, so it creates the pool AHEAD of the fill.
+    // The smart-account story create-pool exists for: where the cST permit is ECDSA-only
+    // (phoenix/v0.4-rc.1, the flat wire) a contract wallet cannot sign it, so it creates the pool
+    // AHEAD of the fill. The prompt states that constraint, so the answer stays create-pool.
     // The prompt states the problem, never a tool name — the agent must find the variant.
     id: "create-pool-smart-account",
     prompt: `I operate a Safe (a smart-contract wallet), so I cannot sign the ERC-2612 permit a just-in-time Cork market order would need. Take the other path: prepare the unsigned transaction that creates the pool itself ahead of the fill, on Arbitrum (chain 42161) — collateral 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2, reference 0xdDb46999F8891663a8F2828d25298f70416d7610, expiry 1791000000 (unix seconds), recipe ${LIQUIDITY_RECIPE}, request id "eval-create-pool-0001". Tell me the pool id it derives and what my Safe does after this transaction lands.`,
