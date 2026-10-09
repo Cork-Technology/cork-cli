@@ -7,6 +7,10 @@ covered.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`finalize-maker-order` says plainly when a signature recovers to no signer at all.** A malformed or tampered signature makes ecrecover throw, and the `signature_or_reconstruction_mismatch` message was the library's raw error ("Point is not on curve: Cannot find square root"). It now reads "the signature does not recover to any signer over the recomputed order hash (…) — it is malformed, or it was not made over this order; NOT finalized", like `cork_submit`. The state and code do not change.
+
 ## [0.7.1-rc.1] — preparation, not yet published
 
 ### Added

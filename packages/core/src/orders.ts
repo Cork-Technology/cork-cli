@@ -492,7 +492,15 @@ export function saltExtensionBinding(salt: bigint, extension: `0x${string}`): { 
 
 export async function finalizeMakerOrder(a: FinalizeMakerOrderArgs): Promise<FinalizedMakerOrder> {
   const { orderHash } = reconstructMakerOrder(a);
-  const recoveredSigner = await recoverAddress({ hash: orderHash, signature: a.signature });
+  let recoveredSigner: `0x${string}`;
+  try {
+    recoveredSigner = await recoverAddress({ hash: orderHash, signature: a.signature });
+  } catch (err) {
+    // A malformed or tampered signature makes ecrecover throw (viem: "Point is not on curve");
+    // say the claim first, the library's reason second, as cork_submit does.
+    const reason = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+    throw new Error(`the signature does not recover to any signer over the recomputed order hash (${reason}) — it is malformed, or it was not made over this order; NOT finalized`);
+  }
   if (!isAddressEqual(recoveredSigner, a.order.maker)) {
     throw new Error(`signature recovers to ${recoveredSigner}, not the order maker ${a.order.maker}`);
   }

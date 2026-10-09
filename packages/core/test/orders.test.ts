@@ -228,6 +228,15 @@ describe("finalizeMakerOrder (recover the external signer; never sign)", () => {
     await expect(finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: orderHash, signature, extension: "0x" })).rejects.toThrow(/not the order maker/);
   });
 
+  it("rejects a signature that recovers to no signer at all, with the claim first and the library's reason after", async () => {
+    // r = 0x0505…05 is not the x-coordinate of any secp256k1 point, so ecrecover throws for every
+    // hash. The agent task eval conflict-finalize-bad-signature hit this and got only viem's
+    // "Point is not on curve" to relay (2026-10-09).
+    const signature = `0x${"05".repeat(32)}${"22".repeat(32)}1b` as `0x${string}`;
+    const failure = finalizeMakerOrder({ chainId: 1, lop: LOP, order, claimedOrderHash: orderHash, signature, extension: "0x" });
+    await expect(failure).rejects.toThrow(/^the signature does not recover to any signer over the recomputed order hash \(Point is not on curve[^)]*\) — .*NOT finalized$/);
+  });
+
   it("rejects an extension whose keccak is not bound into the salt's low 160 bits", async () => {
     // order.salt is not derived from any extension, so any non-empty extension fails the binding.
     const signature = await acct.sign({ hash: orderHash });

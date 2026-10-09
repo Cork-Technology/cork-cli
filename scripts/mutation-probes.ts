@@ -5831,6 +5831,15 @@ const CATALOG: Mutant[] = [
     replace: 'return /^claude-/.test(model)',
     tests: [T.evalGrading],
   },
+  {
+    // finalize relays the library's raw ecrecover error ("Point is not on curve") with no claim:
+    // the agent task eval conflict-finalize-bad-signature failed on exactly that (2026-10-09).
+    id: "finalize-unrecoverable-claim-dropped",
+    file: "packages/core/src/orders.ts",
+    find: "    throw new Error(`the signature does not recover to any signer over the recomputed order hash (${reason}) — it is malformed, or it was not made over this order; NOT finalized`);",
+    replace: "    throw err;",
+    tests: [T.orders],
+  },
   // ── the SDK package surface (2026-08-17): subpath exports + the api-surface drift gate ──────
   // The released-surface gate (2026-10-09): a regenerated api-surface.json hid four removed
   // v0.7.0 exports; this gate compares with the last release instead. Its rules test must see
