@@ -7,6 +7,8 @@ covered.
 
 ## [Unreleased]
 
+## [0.7.1-rc.1] — preparation, not yet published
+
 ### Added
 
 - **Deployment set `phoenix/v0.5` on Arbitrum One and Base, now the primary.** It records the Distribution `phoenix/v0.5-rc.1` (market-registry `0.6.0`). It is a copy of `phoenix/v0.4-rc.1` with one change: the JIT adapter is CorkLimitOrderAdapter `0x960Cd94B31121806b1b0Ff02230D189Ad0310616` (version() `0.5.0`). Every other address is shared by the two sets. A prepare without `generation` now targets `phoenix/v0.5`; pass `generation: "phoenix/v0.4-rc.1"` to target the 0.4.0 adapter. The approved-implementations `jitAdapter` list approves both adapters' code (`0x24a11fba…225d` and `0x2fe70bac…d35a`).
@@ -33,7 +35,11 @@ covered.
 - **Allowlist.** The approved-implementations `jitAdapter` list approves `0x2fe70bac…d35a` (0.4.0) again. The 0.5.0 hash `0x24a11fba…225d` stays approved for the `phoenix/v0.5` set (see Added).
 - **The live suites run through the fail-closed test gate.** `bun run test:live` and both live steps of CI's `live-smoke` job now use `scripts/test-gate.ts`, like the tests step. `live-smoke` also runs `rollover-live.test.ts`, which no job ran before. It now also checks, against the real settler on both chains, that each clone fault reverts with the error `rollover-fill` names. A run in which every test skips is red: `bun run test:live` without `CORK_RPC_LIVE=1` (or `CORK_TEST_RPC`) now exits 1 with "no test executed", where it exited 0 before.
 
-## [0.7.0] — preparation, not yet published
+### Compatibility
+
+Compared with `v0.7.0`, no tool name, input-schema field, type, enum or exit code changes; tool descriptions are reworded only. JSON output changes by additions: `data.generation.alsoIn`, `jit.permitWire`, `sharedWith` on the per-set summary of an account-state positions read. Every `v0.7.0` SDK export keeps its name and shape; the type declarations differ only by new optional parameters and fields and new exports. Behaviour changes on purpose in three places: `phoenix/v0.5` is the primary, so a prepare without `generation` targets the 0.5.0 JIT adapter; `phoenix/v0.4-rc.1` encodes its JIT permits as v/r/s, which its 0.4.0 adapter reads (`v0.7.0` encoded them in the 0.5.0 format, which that adapter misreads); and `previous` skips a set that shares the primary's contracts. A `v0.7.0` binary reading `config/0.7` refuses JIT prepares on `phoenix/v0.4-rc.1` (code not on its allowlist), so it cannot build the misread bytes.
+
+## [0.7.0] — 2026-10-09
 
 Preparation of the 0.7.0 CLI/MCP/SDK version, including the 0.7 changes recorded below and the documentation-and-guidance cleanup since `v0.7.0-rc.2`. It remains **unreviewed and unaudited**. Removing the RC suffix is not a production promotion: existing installations and API-v1 routes are not retired, and hosted services are not deployed. This entry records prepared content only; no `v0.7.0` tag or publication has occurred.
 
