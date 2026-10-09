@@ -91,8 +91,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "gates",
     envelope: "unavailable",
     contract:
-      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses; generation_shared is its INFO sibling: a pool on a pool manager several sets share belongs to all of them, the result names the set it used and how to pass another); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
-    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only", "generation_shared"],
+      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
+    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only"],
   },
   {
     family: "scan honesty",
@@ -630,7 +630,9 @@ Identical addresses across Arbitrum and Base in every Distribution set; bundler3
    manager; the manager that knows the pool wins. \`generation\` narrows the search to one set.
    No manager knows it: \`pool_not_found\`, naming every manager asked. A bundle for a pool on an
    older set targets THAT set's adapter, bundler and whitelist manager. The result carries
-   \`data.generation\` (\`{ label, status, distribution? }\`) and \`provenance.generation\`.
+   \`data.generation\` (\`{ label, status, distribution? }\`) and \`provenance.generation\`. When
+   several sets share the pool manager (phoenix/v0.5 and phoenix/v0.4-rc.1 do), the first set in
+   resolution order answers and \`data.generation.alsoIn\` names the others; name one to bind it.
 3. **An address** seen in calldata, a log, or a venue row (an adapter, a settler, a factory, a pool
    manager) is classified by one function into \`{ label, status, role }\` — decode labels
    (\`jit.generation\`, \`jit.wire\`), event attribution, settler classification and the book's row

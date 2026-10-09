@@ -114,7 +114,7 @@ const deposit = (ctx: HandlerContext, type: "deposit" | "withdraw" = "deposit") 
     ctx,
   );
 
-type Gen = { label: string; status: string };
+type Gen = { label: string; status: string; alsoIn?: string[] };
 
 describe("pool-scoped generation resolution — the manager that HOLDS the pool answers", () => {
   it("cork-pool on a phoenix/v0.3-rc.1 pool while the primary is 10-field: reads THAT manager, 8-field wire, label in data AND provenance", async () => {
@@ -173,15 +173,36 @@ describe("pool-scoped generation resolution — the manager that HOLDS the pool 
   });
 });
 
+describe("data.generation.alsoIn: every pool-scoped result names the other sets on a shared pool manager", () => {
+  it("cork-pool, a compute kind, track marketRef and a phoenix prepare (deposit) all carry it; a pool on an unshared manager, and a named set, carry none", async () => {
+    const ctx = ctxFor(PRIMARY_PM, { wire: "10-field" });
+    const reads = [
+      await corkPool(ctx),
+      await runTool("cork_compute", { chainId: CHAIN, params: { kind: "impairment-floor", poolId: POOL, horizonSeconds: 86_400 }, format: "concise" }, ctx),
+      await runTool("cork_track", { chainId: CHAIN, mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, ctx),
+      await deposit(ctx),
+    ];
+    for (const env of reads) expect((env.data as { generation: Gen }).generation, env.state).toMatchObject({ label: "phoenix/v0.5", alsoIn: ["phoenix/v0.4-rc.1"] });
+    // A pool on the 8-field v0.3 manager: no other set shares it.
+    const v03 = await corkPool(ctxFor(V03_PM));
+    expect((v03.data as { generation: Gen }).generation).not.toHaveProperty("alsoIn");
+    // Naming the set narrows the search to it alone: nothing else was asked, so nothing is named.
+    const named = await runTool("cork_query", { resource: "cork-pool", chainId: CHAIN, generation: "phoenix/v0.4-rc.1", format: "concise", filters: { poolId: POOL } }, ctx);
+    expect((named.data as { generation: Gen }).generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1" });
+  });
+});
+
 describe("10-field reads: fees FROM the tuple, the views compared", () => {
   it("a pool on the 10-field primary: the widened tuple is decoded, fees ride inside market, the scales label says so, views agreeing → no warning", async () => {
     const env = await corkPool(ctxFor(PRIMARY_PM, { wire: "10-field" }));
     expect(env.state).toBe("ok");
     const d = env.data as { generation: Gen; wire: string; market: Record<string, string>; swapFeePercentage: string; scales: Record<string, string> };
     expect(d.generation.label).toBe("phoenix/v0.5");
-    // The pool manager is shared with phoenix/v0.4-rc.1: the result says so, and how to pick it.
-    const shared = env.warnings.find((w) => w.code === "generation_shared");
-    expect(shared?.message).toMatch(/'phoenix\/v0\.5' and 'phoenix\/v0\.4-rc\.1'[\s\S]*generation: 'phoenix\/v0\.4-rc\.1'/);
+    // The pool manager is shared with phoenix/v0.4-rc.1: data.generation names it, with no warning;
+    // provenance keeps the compact ref.
+    expect(d.generation.alsoIn).toEqual(["phoenix/v0.4-rc.1"]);
+    expect(env.warnings.map((w) => w.code)).not.toContain("generation_shared");
+    expect(env.provenance.generation).toEqual({ label: "phoenix/v0.5", status: "active", distribution: "phoenix/v0.5-rc.1" });
     expect(d.wire).toBe("10-field");
     expect(d.market["swapFeePercentage"]).toBe(FEE.toString());
     expect(d.market["unwindSwapFeePercentage"]).toBe(FEE.toString());

@@ -198,6 +198,10 @@ export interface GenerationRef {
   label: GenerationLabel;
   status: GenerationStatus;
   distribution?: string;
+  /** The OTHER sets on this chain that share the pool manager a pool-scoped result read (e.g.
+   *  phoenix/v0.4-rc.1 beside phoenix/v0.5): the same pool belongs to them too. Present only on a
+   *  pool-scoped result's `data.generation`, and only when the manager is shared. */
+  alsoIn?: GenerationLabel[];
 }
 
 // ── Pure functions ──────────────────────────────────────────────────────────────────────────────

@@ -239,7 +239,8 @@ Each chain hosts a **set of contract generations**, one of them primary (`phoeni
 Arbitrum and Base since 2026-10-09, Distribution `phoenix/v0.5-rc.1`; `phoenix/v0.4-rc.1`, the same
 contracts with the 0.4.0 JIT adapter, and the previous `phoenix/v0.3-rc.1` set stay active). A prepare
 targets the primary unless you pass `generation: "<label>"`; a read of an existing pool follows
-the generation the pool lives on and reports it as `data.generation`. `protocol-config` lists a
+the generation the pool lives on and reports it as `data.generation` (with `alsoIn` naming any other
+set that shares the pool manager). `protocol-config` lists a
 chain's generations; `cork_capabilities topic:"generations"` explains the model. To move funds
 between generations, `generation: "previous"` names the older active set, `account-state` without a
 poolId lists your positions across every generation, and `topic:"migration"` is the recipe.

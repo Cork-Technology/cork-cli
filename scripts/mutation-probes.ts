@@ -305,11 +305,27 @@ const CATALOG: Mutant[] = [
     tests: [T.eventAttribution],
   },
   {
-    // A pool on a shared pool manager reports one label silently.
+    // A pool on a shared pool manager names no other set: data.generation.alsoIn stays empty.
     id: "pool-generation-shared-not-reported",
     file: "packages/core/src/generations.ts",
     find: "      const alsoIn = reads.filter((o) => o.g.label !== r.g.label && o.poolManager.toLowerCase() === pm).map((o) => o.g.label);",
     replace: "      const alsoIn: GenerationLabel[] = [];",
+    tests: [T.poolGeneration],
+  },
+  {
+    // The result projection drops alsoIn: partners cannot see which other set holds the pool.
+    id: "generation-data-alsoin-dropped",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "...(g.alsoIn !== undefined && g.alsoIn.length > 0 ? { alsoIn: [...g.alsoIn] } : {})",
+    replace: "",
+    tests: [T.poolGeneration],
+  },
+  {
+    // getPoolDep does not carry alsoIn onto the ref.
+    id: "pool-dep-alsoin-not-carried",
+    file: "packages/core/src/handlers/shared.ts",
+    find: "...(r.alsoIn.length > 0 ? { alsoIn: r.alsoIn } : {}), wire: g.phoenix!.wire };",
+    replace: "wire: g.phoenix!.wire };",
     tests: [T.poolGeneration],
   },
   {
@@ -7438,7 +7454,7 @@ const CATALOG: Mutant[] = [
     // The generation label missing from data.
     id: "poolgen-data-generation-dropped",
     file: "packages/core/src/handlers/shared.ts",
-    find: "  return g ? { generation: generationRefOf(g) } : {};",
+    find: "  return g ? { generation: { ...generationRefOf(g), ...(g.alsoIn !== undefined && g.alsoIn.length > 0 ? { alsoIn: [...g.alsoIn] } : {}) } } : {};",
     replace: "  return {};",
     tests: [T.poolgen],
   },

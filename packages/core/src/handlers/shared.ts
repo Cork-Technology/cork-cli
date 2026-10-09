@@ -190,10 +190,11 @@ export function generationRefOf(g: { label: string; status: GenerationRef["statu
   return { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}) };
 }
 
-/** The `data.generation` block of a pool-scoped result: the ref, or nothing when the call ran
- *  under a ctx.deployment override (no generation model applies). */
+/** The `data.generation` block of a pool-scoped result: the ref plus `alsoIn` when the pool
+ *  manager is shared, or nothing when the call ran under a ctx.deployment override (no generation
+ *  model applies). `provenance.generation` stays the compact ref (generationRefOf). */
 export function generationData(g: GenerationRef | undefined): { generation?: GenerationRef } {
-  return g ? { generation: generationRefOf(g) } : {};
+  return g ? { generation: { ...generationRefOf(g), ...(g.alsoIn !== undefined && g.alsoIn.length > 0 ? { alsoIn: [...g.alsoIn] } : {}) } } : {};
 }
 
 export type PoolDepResolution = {
@@ -257,13 +258,10 @@ export async function getPoolDep(
     return { dep: undefined, depWarn, refusal: unavailable(chainId, r.code, r.message, ctx) };
   }
   const g = r.generation;
-  const ref: GenerationRef & { wire: PhoenixWire } = { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}), wire: g.phoenix!.wire };
+  // A pool on a pool manager several sets share belongs to all of them: `alsoIn` names the others
+  // (only a `generation` label picks another; the pool alone cannot).
+  const ref: GenerationRef & { wire: PhoenixWire } = { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}), ...(r.alsoIn.length > 0 ? { alsoIn: r.alsoIn } : {}), wire: g.phoenix!.wire };
   const shares = { corkPrincipalToken: r.corkPrincipalToken, corkSwapToken: r.corkSwapToken };
-  // A pool on a pool manager several sets share belongs to all of them: say so, name the set the
-  // result used, and say how to pick another (only a label narrows; the pool cannot).
-  if (r.alsoIn.length > 0 && label === undefined) {
-    depWarn.push({ code: "generation_shared", message: `pool ${poolId} lives on pool manager ${r.poolManager}, which deployment sets ${[g.label, ...r.alsoIn].map((l) => `'${l}'`).join(" and ")} share — this result uses '${g.label}' (${g.primary ? "the primary" : "the first in list order"}); the sets differ in other contracts (for phoenix/v0.5 and phoenix/v0.4-rc.1, only the JIT adapter), so pass generation: '${r.alsoIn[0]}' to bind that set instead` });
-  }
   if (opts.purpose === "prepare" && g.status !== "active") {
     const refusal = envelope({
       state: "unavailable",

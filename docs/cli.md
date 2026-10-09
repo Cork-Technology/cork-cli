@@ -51,7 +51,8 @@ Three rules cover every command:
    primary unless you pass `--generation`. The flag takes a label (`phoenix/v0.3-rc.1`), `previous` (the
    newest active non-primary set that has the contracts the command needs) or `primary`.
 3. **Every result names its generation.** Read `data.generation` and `provenance.generation`.
-   Results carry the label, never the alias.
+   Results carry the label, never the alias. A pool-scoped result also lists, in
+   `data.generation.alsoIn`, any other set that shares the pool's manager.
 
 `ch query protocol-config` lists a chain's generations with every address and wire.
 `ch capabilities --topic generations` explains the model. A pool no generation knows is
