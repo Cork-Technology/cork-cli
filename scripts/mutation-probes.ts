@@ -5829,6 +5829,41 @@ const CATALOG: Mutant[] = [
     tests: [T.evalGrading],
   },
   // ── the SDK package surface (2026-08-17): subpath exports + the api-surface drift gate ──────
+  // The released-surface gate (2026-10-09): a regenerated api-surface.json hid four removed
+  // v0.7.0 exports; this gate compares with the last release instead. Its rules test must see
+  // each of these.
+  {
+    // A removed released export passes silently.
+    id: "released-gate-removal-ignored",
+    file: "packages/core/test/api-surface.test.ts",
+    find: "      if (!narrowed(e.kind, now.get(e.name))) continue;",
+    replace: "      continue;",
+    tests: [T.apiSurface],
+  },
+  {
+    // A narrowed kind (value+type → value) counts as kept.
+    id: "released-gate-narrowing-ignored",
+    file: "packages/core/test/api-surface.test.ts",
+    find: "  return [...kindParts(before)].some((part) => !now.has(part));",
+    replace: "  return false;",
+    tests: [T.apiSurface],
+  },
+  {
+    // A Removed line of an OLDER release (or the baseline's own section) excuses a new removal.
+    id: "released-gate-reads-whole-changelog",
+    file: "packages/core/test/api-surface.test.ts",
+    find: "  return changelog.slice(0, heading);",
+    replace: "  return changelog;",
+    tests: [T.apiSurface],
+  },
+  {
+    // A name under any heading, not only Removed/Breaking, excuses a removal.
+    id: "released-gate-any-heading-records",
+    file: "packages/core/test/api-surface.test.ts",
+    find: "    else if (line.startsWith(\"### \")) inRemoval = /^### (Removed|Breaking)\\b/.test(line);",
+    replace: "    else if (line.startsWith(\"### \")) inRemoval = true;",
+    tests: [T.apiSurface],
+  },
   {
     // A tier barrel silently loses a module: every export it carried vanishes from the
     // published subpath AND the root. The api-surface fixture must see the hole.

@@ -15,6 +15,17 @@ reference; the rules below are the ones whose violation cost a release.
 > became set `phoenix/v0.5`. `packages/core/test/market-registry-v05.test.ts` pins each set
 > to its own adapter — if you need to change that test, you are probably making this mistake.
 
+> **STOP — a revert is a change, and a regenerated fixture is not a review.** Before you commit
+> a revert (or any change that regenerates `packages/core/test/fixtures/api-surface.json` or
+> `packages/mcp/test/fixtures/surface.json`), diff the public surface against the LAST RELEASE
+> tag: the SDK exports, the tool schemas, the JSON output. A regeneration that deletes lines
+> removes something a release shipped: restore it, or list it under `### Removed` and treat
+> the bump as breaking. Never regenerate a fixture just to make its gate pass. On 2026-10-09
+> the revert of 1573f600 regenerated `api-surface.json` with 32 deleted lines; four exports
+> of the released v0.7.0 disappeared and were found only in the release diff.
+> `api-surface.test.ts` now compares the SDK surface with `api-surface.released.json` (the last
+> release) and refuses an unrecorded removal; move that baseline forward at each release.
+
 ## Other standing rules
 
 - Run everything with Bun (`mise.toml` pins it), never `node`.

@@ -159,3 +159,88 @@ describe("API-surface drift gate", () => {
     }
   });
 });
+
+// The released-surface gate (2026-10-09). The drift gate above compares the surface with the
+// fixture, and a regenerated fixture passes it whatever it deleted: the 2026-10-09 revert of
+// 1573f600 regenerated api-surface.json with 32 deleted lines, and four exports of the released
+// v0.7.0 disappeared unnoticed until the release diff. This gate compares the surface with the
+// LAST RELEASE instead (api-surface.released.json), and refuses a removed or narrowed entry
+// unless CHANGELOG.md records the name under Removed or Breaking in a section newer than that
+// release. Move the baseline forward at the release commit:
+//   UPDATE_RELEASED_API_SURFACE=<version> bunx vitest run packages/core/test/api-surface.test.ts
+const RELEASED = join(import.meta.dirname, "fixtures", "api-surface.released.json");
+const CHANGELOG = join(repoRoot, "CHANGELOG.md");
+
+/** The CHANGELOG text above the released version's heading, i.e. every section newer than it. */
+function changelogSince(changelog: string, version: string): string {
+  const heading = changelog.indexOf(`\n## [${version}]`);
+  if (heading < 0) throw new Error(`CHANGELOG.md has no "## [${version}]" heading for the released-surface baseline`);
+  return changelog.slice(0, heading);
+}
+
+/** Every name the newer sections list under a Removed or Breaking heading, in backticks. */
+function recordedRemovals(newer: string): Set<string> {
+  const names = new Set<string>();
+  let inRemoval = false;
+  for (const line of newer.split("\n")) {
+    if (line.startsWith("## ")) inRemoval = false;
+    else if (line.startsWith("### ")) inRemoval = /^### (Removed|Breaking)\b/.test(line);
+    else if (inRemoval) for (const m of line.matchAll(/`([A-Za-z_$][\w$]*)`/g)) names.add(m[1]!);
+  }
+  return names;
+}
+
+/** A kind keeps its released meaning when it still has every part it had ("value+type" ⊇ "value"). */
+const kindParts = (kind: string) => new Set(kind.split("+"));
+function narrowed(before: string, after: string | undefined): boolean {
+  if (after === undefined) return true;
+  const now = kindParts(after);
+  return [...kindParts(before)].some((part) => !now.has(part));
+}
+
+/** Released entries that are gone or narrowed and that no newer CHANGELOG section records. */
+function unrecordedRemovals(released: Surface, current: Surface, recorded: Set<string>): string[] {
+  const out: string[] = [];
+  for (const [subpath, exports] of Object.entries(released)) {
+    const now = new Map((current[subpath] ?? []).map((e) => [e.name, e.kind]));
+    for (const e of exports) {
+      if (!narrowed(e.kind, now.get(e.name))) continue;
+      if (recorded.has(e.name)) continue;
+      out.push(now.has(e.name) ? `~ ${subpath} ${e.name} (${e.kind} → ${now.get(e.name)})` : `- ${subpath} ${e.name}`);
+    }
+  }
+  return out;
+}
+
+describe("released-surface gate: nothing a release shipped disappears unrecorded", () => {
+  it("every export of the last release is still there, or CHANGELOG.md records its removal", () => {
+    const version = process.env.UPDATE_RELEASED_API_SURFACE;
+    if (version) {
+      const text = readFileSync(RELEASED, "utf8");
+      const prior = JSON.parse(text) as { $comment: string };
+      writeFileSync(RELEASED, JSON.stringify({ $comment: prior.$comment, version, surface: currentSurface() }, null, 2) + "\n");
+      return; // baseline moved forward deliberately, at a release commit
+    }
+    const baseline = JSON.parse(readFileSync(RELEASED, "utf8")) as { version: string; surface: Surface };
+    const recorded = recordedRemovals(changelogSince(readFileSync(CHANGELOG, "utf8"), baseline.version));
+    const missing = unrecordedRemovals(baseline.surface, currentSurface(), recorded);
+    expect(
+      missing,
+      `${missing.length} export(s) of the released v${baseline.version} are gone or narrowed with no CHANGELOG record: ` +
+        `${missing.slice(0, 15).join("; ")}${missing.length > 15 ? "; …" : ""}. ` +
+        `Restore them, or list each name in backticks under "### Removed" (or "### Breaking") in a section newer than ` +
+        `v${baseline.version} and treat the bump as breaking. Regenerating api-surface.json does not clear this gate.`,
+    ).toEqual([]);
+  });
+
+  it("the rules: a removal or narrowing counts, a recorded one passes, a widening is fine", () => {
+    const released: Surface = { ".": [{ name: "a", kind: "value" }, { name: "b", kind: "type" }, { name: "c", kind: "value+type" }] };
+    const current: Surface = { ".": [{ name: "a", kind: "value+type" }, { name: "c", kind: "value" }] };
+    expect(unrecordedRemovals(released, current, new Set())).toEqual(["- . b", "~ . c (value+type → value)"]);
+    const log = "## [Unreleased]\n\n### Removed\n\n- `b` is gone.\n\n### Added\n\n- `c` stays.\n\n## [1.0.0] — x\n\n### Removed\n\n- `c` old.\n";
+    const recorded = recordedRemovals(changelogSince(log, "1.0.0"));
+    expect([...recorded]).toEqual(["b"]);
+    expect(unrecordedRemovals(released, current, recorded)).toEqual(["~ . c (value+type → value)"]);
+    expect(() => changelogSince(log, "9.9.9")).toThrow(/no "## \[9\.9\.9\]" heading/);
+  });
+});
