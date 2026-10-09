@@ -171,9 +171,12 @@ describe("the JIT maker path on phoenix/v0.5 (the primary) and on phoenix/v0.4-r
 
 describe("the agent note stays where agents read it", () => {
   // Removing the rule from AGENTS.md / CLAUDE.md removes the guard against the 1573f600 mistake.
-  it("AGENTS.md and CLAUDE.md both open with the new-deployment-set rule, naming this test", async () => {
-    const { readFileSync } = await import("node:fs");
-    for (const file of ["AGENTS.md", "CLAUDE.md"]) {
+  it("AGENTS.md (and CLAUDE.md, where the tree has it) opens with the new-deployment-set rule, naming this test", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    // AGENTS.md ships in every tree; CLAUDE.md is private (the public port excludes it).
+    const files = ["AGENTS.md", "CLAUDE.md"].filter((f) => f === "AGENTS.md" || existsSync(new URL(`../../../${f}`, import.meta.url)));
+    expect(files[0]).toBe("AGENTS.md");
+    for (const file of files) {
       const text = readFileSync(new URL(`../../../${file}`, import.meta.url), "utf8");
       const head = text.slice(0, 2500);
       expect(head, file).toContain("a new contract deployment is a NEW deployment set, never an edit of an existing one");
