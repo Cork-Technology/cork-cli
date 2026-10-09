@@ -111,6 +111,10 @@ interface PoolWorld {
   checkError?: Error;
   /** Every pool manager's shares() throws: no manager answered, which is not an absent pool. */
   sharesError?: Error;
+  /** A PartialSettler's accounting for every order: the src cST consumed so far, and the filler
+   *  slots already used, keyed by the filler account (the settler keys them on (BaseFiller,
+   *  bytes32(account))). error: the views revert or fail. */
+  partial?: { consumed?: bigint; filled?: string[]; settled?: string[]; error?: Error };
 }
 const lc = (a: string) => a.toLowerCase();
 const execReverted = (why: string) => new Error(`execution reverted: ${why}`);
@@ -207,6 +211,21 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
       }
       case "balanceOf": return c.address.toLowerCase() === SRC_CST.toLowerCase() ? (o.srcBal ?? 10n ** 18n) : (o.premBal ?? 10n ** 9n);
       case "allowance": { const [owner, spender] = c.args as [string, string]; return o.allow?.[`${c.address}:${owner}:${spender}`.toLowerCase()] ?? 0n; }
+      case "rolloverAccountingOf":
+      case "fillerSlotAccountingOf": {
+        // Only a PartialSettler has these views; the ExactSettler answers no data for them.
+        const partials = [PARTIAL, PREVIOUS.partialSettler as string].map(lc);
+        if (!partials.includes(lc(c.address))) throw execReverted(`${c.address} has no ${c.functionName}`);
+        if (o.partial?.error) throw o.partial.error;
+        if (c.functionName === "rolloverAccountingOf") return { participantSlotCount: o.partial?.filled?.length ?? 0, dstCstEscrowed: 0n, srcCstConsumed: o.partial?.consumed ?? 0n };
+        const [, fillerArg, subFiller] = c.args as [string, string, string];
+        const baseFillers = [BASE_FILLER, PREVIOUS.baseFiller as string].map(lc);
+        if (!baseFillers.includes(lc(fillerArg))) throw new Error(`the slot must be keyed on the BaseFiller (the settler's caller), got ${fillerArg}`);
+        const account = lc(`0x${subFiller.slice(-40)}`);
+        const filled = o.partial?.filled?.some((a) => lc(a) === account) ?? false;
+        const settled = o.partial?.settled?.some((a) => lc(a) === account) ?? false;
+        return { rollover: { dstCstProduced: filled ? 10n ** 18n : 0n, srcCstProvided: filled ? 10n ** 18n : 0n, filledAt: filled ? NOW - 60n : 0n, premiumFired: filled }, settlementDestination: filled ? getAddress(account) : zeroAddress, settled };
+      }
       case "isValidSignature":
         // Only a contract answers ERC-1271: a call to an address without code returns no data.
         if (o.code?.[c.address.toLowerCase()] === undefined) throw new Error(`execution reverted: ${c.address} has no code (returned no data "0x")`);
@@ -378,15 +397,16 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     expect(opened.state).toBe("ok");
   });
 
-  it("the fill size defaults to the venue's remainingSize (string or number); inline on a partial order it defaults to the ORDER size and says so", async () => {
+  it("with the settler's accounting unread, the fill size falls back to the venue's remainingSize (string or number), then to the ORDER size, and says so", async () => {
     const p = await signedOrder({ settler: PARTIAL, allowPartialFills: true });
-    const asString = await fill({ orderDigest: p.digest }, { venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: "250000000000000000", payload: p.payload }, fills: [], slots: [] } }]) });
+    const unread = chain({ partial: { error: NOT_A_REVERT } });
+    const asString = await fill({ orderDigest: p.digest }, { resolveRpc: unread, venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: "250000000000000000", payload: p.payload }, fills: [], slots: [] } }]) });
     expect(asString.state).toBe("ok");
     expect((asString.data as Data).fillerSrcCst).toBe("250000000000000000");
     expect(codes(asString)).not.toContain("invalid_order_terms");
-    const asNumber = await fill({ orderDigest: p.digest }, { venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: 250000000000000, payload: p.payload }, fills: [], slots: [] } }]) });
+    const asNumber = await fill({ orderDigest: p.digest }, { resolveRpc: unread, venueFetch: venue([{ match: `/rollover/v1/orders/${p.digest}`, body: { order: { orderDigest: p.digest, remainingSize: 250000000000000, payload: p.payload }, fills: [], slots: [] } }]) });
     expect((asNumber.data as Data).fillerSrcCst).toBe("250000000000000");
-    const inline = await fill({ orderDigest: p.digest, signedOrder: p.payload });
+    const inline = await fill({ orderDigest: p.digest, signedOrder: p.payload }, { resolveRpc: unread });
     expect(inline.state).toBe("ok");
     expect((inline.data as Data).fillerSrcCst).toBe("1000000000000000000");
     expect(inline.warnings.find((w) => w.code === "invalid_order_terms")!.message).toMatch(/inline path has no remaining-size source/u);
@@ -530,7 +550,7 @@ describe("rollover-fill — the filler's floor (planning#83)", () => {
       const env = await fill({ orderDigest: part.digest, signedOrder: part.payload, fillerSrcCst: "1000000500000000000", ...extra }, { resolveRpc: world });
       expect(env.state, label).toBe("unavailable");
       expect(env.warnings[0]!.code, label).toBe("invalid_order_terms");
-      expect(env.warnings[0]!.message, label).toMatch(/not a multiple of the source pool's share quantum 1000000000000 \(10\^\(18 − 6\) for its 6-decimal collateral\) — the settler reverts LibPhoenixShareQuantum__FillAmountNotQuantumAligned/u);
+      expect(env.warnings[0]!.message, label).toMatch(/the fill 1000000500000000000 is not a multiple of the source share quantum 1000000000000 — the settler reverts LibPhoenixShareQuantum__FillAmountNotQuantumAligned \(10\^\(18 − 6\) for the source pool's 6-decimal collateral\)/u);
       expect(gapOf(env), label).toBe("fill-refused");
     }
     const aligned = await fill({ orderDigest: part.digest, signedOrder: part.payload, fillerSrcCst: "1000001000000000000" });
@@ -609,6 +629,85 @@ describe("rollover-fill — the filler's floor (planning#83)", () => {
     const equal = await at(FLOOR_GIVEN);
     for (const code of ["no_dst_floor", "dst_floor_slack", "would_revert", "dst_floor_derived"]) expect(codes(equal)).not.toContain(code);
     for (const env of [zero, slack, high, equal]) expect((env.data as Data)["minDstPerSrcSource"]).toBe("explicit");
+  });
+});
+
+describe("rollover-fill — the sizes the settler admits (data.fillRange)", () => {
+  const range = (env: { data: unknown }) => (env.data as Data)["fillRange"] as Record<string, unknown>;
+  const partialOrder = (over: Partial<Parameters<typeof buildRolloverIntent>[0]> = {}) => signedOrder({ settler: PARTIAL, allowPartialFills: true, ...over });
+
+  it("a partial order: the default fill is what the PartialSettler says remains, and the range names it", async () => {
+    const o = await partialOrder();
+    const env = await fill({ orderDigest: o.digest, signedOrder: o.payload }, { resolveRpc: chain({ partial: { consumed: 4n * 10n ** 17n } }) });
+    expect(env.state).toBe("ok");
+    expect((env.data as Data).fillerSrcCst).toBe("600000000000000000");
+    expect(range(env)).toEqual({ kind: "partial", remaining: "600000000000000000", min: "1000000000000", max: "600000000000000000", step: "1000000000000", minClearingHolderFloors: null });
+    expect(codes(env)).not.toContain("chain_read_failed");
+    expect(codes(env)).not.toContain("invalid_order_terms");
+  });
+
+  it("the settler outranks the venue: a venue remainingSize that disagrees is named, and the chain's size is used", async () => {
+    const o = await partialOrder();
+    const env = await fill({ orderDigest: o.digest }, { resolveRpc: chain({ partial: { consumed: 4n * 10n ** 17n } }), venueFetch: venue([{ match: `/rollover/v1/orders/${o.digest}`, body: { order: { orderDigest: o.digest, remainingSize: "900000000000000000", payload: o.payload }, fills: [], slots: [] } }]) });
+    expect((env.data as Data).fillerSrcCst).toBe("600000000000000000");
+    expect(env.warnings.find((w) => w.code === "status_mismatch")!.message).toMatch(/venue reports remainingSize 900000000000000000, the PartialSettler 600000000000000000 \(consumed 400000000000000000\)/u);
+  });
+
+  it("a partial fill over what remains, a used slot, and a fully consumed order are refused by the settler's rule", async () => {
+    const o = await partialOrder();
+    const over = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "700000000000000000" }, { resolveRpc: chain({ partial: { consumed: 4n * 10n ** 17n } }) });
+    expect(over.state).toBe("unavailable");
+    expect(over.warnings[0]!.message).toMatch(/exceeds what the order still accepts: 600000000000000000 of 1000000000000000000 \(the PartialSettler has consumed 400000000000000000\) — the settler reverts Settler__RolloverAmountOutOfBounds/u);
+    for (const partial of [{ filled: [FILLER] }, { settled: [FILLER] }]) {
+      const again = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "100000000000000000" }, { resolveRpc: chain({ partial }) });
+      expect(again.state).toBe("unavailable");
+      expect(again.warnings[0]!.message).toMatch(/already filled a leg of this order: the PartialSettler keeps one leg per filler slot \(BaseFiller, bytes32\(.*\)\), so a second fill reverts Settler__AlreadyFilled/u);
+    }
+    // Another account's used slot does not block this one.
+    const other = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "100000000000000000" }, { resolveRpc: chain({ partial: { filled: [PREDICTED_ELSEWHERE] } }) });
+    expect(other.state).toBe("ok");
+    const done = await fill({ orderDigest: o.digest, signedOrder: o.payload }, { resolveRpc: chain({ partial: { consumed: 10n ** 18n } }) });
+    expect(done.state).toBe("unavailable");
+    expect(done.warnings[0]!.message).toMatch(/has consumed the whole order \(1000000000000000000\); nothing remains to fill/u);
+  });
+
+  it("an unreadable accounting falls back to the order size and says so; it never refuses", async () => {
+    const o = await partialOrder();
+    for (const error of [NOT_A_REVERT, execReverted("no such view")]) {
+      const env = await fill({ orderDigest: o.digest, signedOrder: o.payload }, { resolveRpc: chain({ partial: { error } }) });
+      expect(env.state).toBe("ok");
+      expect(env.warnings.find((w) => w.code === "chain_read_failed")!.message).toMatch(/PartialSettler's accounting could not be read/u);
+      expect(env.warnings.find((w) => w.code === "invalid_order_terms")!.message).toMatch(/defaulted to the ORDER size .*consumed size was not read \(the read failed\).*rolloverAccountingOf\(orderDigest\)\.srcCstConsumed/u);
+      expect(range(env)).toMatchObject({ kind: "partial", remaining: null, max: null });
+    }
+  });
+
+  it("a fill that leaves a residual off the quantum is refused (LibPhoenixShareQuantum__ResidualNotQuantumAligned)", async () => {
+    // An order size off the quantum leaves such a residual after any aligned fill.
+    const o = await signedOrder({ allowUnderfill: true, orderSize: 10n ** 18n + 5n * 10n ** 11n });
+    const env = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "1000000000000000000" });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]!.message).toMatch(/leaves 500000000000 of the order, which is not a multiple of the source share quantum 1000000000000 — the settler reverts LibPhoenixShareQuantum__ResidualNotQuantumAligned/u);
+  });
+
+  it("exact orders: one admissible size, or any quantum step up to the order with underfill", async () => {
+    const exact = await signedOrder();
+    expect(range(await fill({ orderDigest: exact.digest, signedOrder: exact.payload }))).toEqual({ kind: "exact", remaining: "1000000000000000000", min: "1000000000000000000", max: "1000000000000000000", step: null, minClearingHolderFloors: null });
+    const under = await signedOrder({ allowUnderfill: true });
+    expect(range(await fill({ orderDigest: under.digest, signedOrder: under.payload }))).toEqual({ kind: "exact-underfill", remaining: "1000000000000000000", min: "1000000000000", max: "1000000000000000000", step: "1000000000000", minClearingHolderFloors: null });
+  });
+
+  it("the holder's floors apply to EACH fill: a fill they do not clear is named, with the smallest fill that does", async () => {
+    const shares = await partialOrder({ minSharesOut: 2n * 10n ** 17n });
+    const small = await fill({ orderDigest: shares.digest, signedOrder: shares.payload, fillerSrcCst: "100000000000000000" });
+    expect(small.warnings.find((w) => w.code === "would_revert")!.message).toMatch(/minSharesOut 200000000000000000, and the deposit of this fill mints 100000000000000000 — the clone reverts CorkRolloverContract__UnwindDepositShortfall; the floor applies to EACH fill, so fill at least 200000000000000000 src cST/u);
+    expect(range(small)["minClearingHolderFloors"]).toBe("200000000000000000");
+    const ca = await partialOrder({ minCaReceived: 300_000n });
+    const thin = await fill({ orderDigest: ca.digest, signedOrder: ca.payload, fillerSrcCst: "100000000000000000" });
+    expect(thin.warnings.find((w) => w.code === "would_revert")!.message).toMatch(/minCaReceived 300000, and the unwind of this fill returns 100000 — the clone reverts CorkRolloverContract__UnwindMintShortfall; .*fill at least 300000000000000000 src cST/u);
+    // A fill that clears both is quiet.
+    const clear = await fill({ orderDigest: shares.digest, signedOrder: shares.payload, fillerSrcCst: "200000000000000000" });
+    expect(codes(clear)).not.toContain("would_revert");
   });
 });
 

@@ -7,6 +7,19 @@ covered.
 
 ## [Unreleased]
 
+### Added
+
+- **The valid ranges of a rollover order and of each fill.** We read the rules from the deployed settlers (rollover v0.2.0, tag `fa247696`, and v0.1.0-rc.2; they enforce the same ones) and teach them in one place: `cork_capabilities topic:"rollover"` (aliases `rollover-ranges`, `settlers`, `fill-sizes`). It names the two parties, compares the ExactSettler and the PartialSettler, and gives a table of every order field and fill input with its valid range and the settler error.
+- **`rollover-intent` checks the settler's open-time rules before anyone signs.** It reads the settler's own pool manager (`CORK_POOL_MANAGER`) and refuses an order the settler can never open: a pool that is not on that pool manager (`Settler__SrcCstNotCanonical`, `Settler__DstCstNotCanonical`), an `orderSize` off the source share quantum (`OrderSizeNotQuantumAligned`), or a `fillDeadline` that is not strictly before both pools' expiry (`Settler__FillDeadlineExceedsPoolExpiry`). A just-in-time destination that does not exist yet is accepted. A read that fails is reported, and the order still builds. `data.ranges` gives the pool manager, the quantum, the deadline bound and the fill sizes.
+- **`rollover-fill` reads what a partial order has consumed from the settler.** `PartialSettler.rolloverAccountingOf(digest).srcCstConsumed` now sets the default fill size; it outranks the venue's `remainingSize`, and a difference is reported (`status_mismatch`, info). A fill over what remains, and a second fill from the same account (`Settler__AlreadyFilled`), are refused. `data.fillRange` gives the admissible sizes: kind, remaining, min, max, step, and the smallest fill that clears the holder's floors.
+- **The holder's floors are now taught per fill.** The clone checks `minCaReceived` and `minSharesOut` on EACH fill. `rollover-intent` names the smallest fill that clears them on a partial order, and `rollover-fill` warns `would_revert` when this fill does not clear them.
+
+### Fixed
+
+- **`premiumPaymentMode` was described wrongly.** The schema said `0=upfront, 1=on-settle`. In both live settler generations, 0 means atomic only (the premium is paid inside the fill), and 1 means atomic or separate: a filler may also pay the premium in a later call, and an unpaid slot can be reclaimed after `fillDeadline`. `rollover-intent` and `cork_submit rollover-order` now say so.
+- **`rollover-fill` claimed the settler has no consumed-size view.** The PartialSettler has one (`rolloverAccountingOf`), and the tool now reads it.
+- **The rollover floors notice pointed to the wrong computation.** It told the holder to price `minCaReceived` with `cork_compute unwind-rate`, which prices `unwindSwap`. The clone runs `unwindMint`, which converts 1:1. The notice now gives the 1:1 values and says the floors bind each fill.
+
 ### Security
 
 - **`rollover-fill` no longer signs a fill with no price floor by default.** `minDstPerSrc` defaulted to `"0"`, and with 0 the settler checks no mint rate. The holder controls its clone's attesters (the trust-config timelock delay is 0 on both chains) and the hooks it signs, so a holder could attest its own mid-roll hook, keep the unwound collateral, and leave the filler with nothing for its src cST and premium. We proved this on a Base fork (planning#83, case C). Now an omitted `minDstPerSrc` is derived from `previewUnwindMint` on the source pool and `previewDeposit` on the destination, with no tolerance (`dst_floor_derived`, `data.dstFloor`). Phoenix converts both ways at exactly 1:1 after decimal normalization, with no fee, so the honest rate is exact; we verified this live on both pool-manager generations on Arbitrum and Base. A just-in-time destination is priced on the source pool when both share a pool manager and a collateral. An explicit 0 warns `no_dst_floor`, a floor below the honest rate warns `dst_floor_slack`, and a floor above it warns `would_revert`.

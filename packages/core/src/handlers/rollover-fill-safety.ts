@@ -21,6 +21,7 @@ import { erc20Abi, marketAbiFor } from "../chain/abis.ts";
 import { resolveGenerations } from "../config-remote.ts";
 import { type PoolGenerationResolution, resolvePoolGeneration } from "../generations.ts";
 import { isContractRevert } from "../chain/rpc.ts";
+import { fillQuantumViolation, shareQuantum } from "./rollover-ranges.ts";
 import { revertReason } from "./shared.ts";
 
 type Address = `0x${string}`;
@@ -88,7 +89,7 @@ export type DstFloor =
        *  deposit rule the new pool will share (same contract, same collateral). */
       depositPreviewedOn: "destination" | "source (just-in-time destination, same pool manager)";
     }
-  | { ok: false; gap: DstFloorGap; reason: string };
+  | { ok: false; gap: DstFloorGap; reason: string; /** set once the source side was read */ quantum?: bigint };
 
 /** The destination a just-in-time fill creates: its collateral, and the pool manager that will
  *  host it (the rollover generation's). */
@@ -97,7 +98,7 @@ export interface JitDestination {
   poolManager: Address;
 }
 
-const gap = (g: DstFloorGap, reason: string): DstFloor => ({ ok: false, gap: g, reason });
+const gap = (g: DstFloorGap, reason: string, quantum?: bigint): DstFloor => ({ ok: false, gap: g, reason, ...(quantum !== undefined ? { quantum } : {}) });
 
 /** A pool the order names, resolved across every configured pool manager — or why not. A pool no
  *  manager knows because every read THREW is a read failure, not an absent pool. */
@@ -114,7 +115,19 @@ async function locate(client: PublicClient, chainId: number, poolId: Address, at
  *  cannot be priced. */
 export async function deriveDstFloor(
   client: PublicClient,
-  p: { chainId: number; srcPoolId: Address; dstPoolId: Address; srcCstToken: Address; dstCstToken: Address; fillerSrcCst: bigint; jitDestination?: JitDestination; atBlock?: bigint },
+  p: {
+    chainId: number;
+    srcPoolId: Address;
+    dstPoolId: Address;
+    srcCstToken: Address;
+    dstCstToken: Address;
+    fillerSrcCst: bigint;
+    /** What the order still holds after this fill (orderSize − consumed − fill) when the consumed
+     *  size is known; the settler requires it quantum-aligned too. Omitted: not checked. */
+    residual?: bigint;
+    jitDestination?: JitDestination;
+    atBlock?: bigint;
+  },
 ): Promise<DstFloor> {
   const at = p.atBlock !== undefined ? { blockNumber: p.atBlock } : {};
   const marketOf = (r: FoundPool, poolId: Address) =>
@@ -127,32 +140,31 @@ export async function deriveDstFloor(
     const { collateralAsset } = await marketOf(src, p.srcPoolId);
     const decimals = Number(await client.readContract({ address: collateralAsset, abi: erc20Abi, functionName: "decimals", ...at }));
     if (decimals > 18) return gap("fill-refused", `the source collateral has ${decimals} decimals; the clone refuses more than 18 (LibPhoenixShareQuantum__UnsupportedCollateralDecimals)`);
-    const quantum = 10n ** BigInt(18 - decimals);
-    if (p.fillerSrcCst % quantum !== 0n) {
-      return gap("fill-refused", `fillerSrcCst ${p.fillerSrcCst} is not a multiple of the source pool's share quantum ${quantum} (10^(18 − ${decimals}) for its ${decimals}-decimal collateral) — the settler reverts LibPhoenixShareQuantum__FillAmountNotQuantumAligned`);
-    }
+    const quantum = shareQuantum(decimals);
+    const misaligned = fillQuantumViolation(p.fillerSrcCst, p.residual ?? 0n, quantum);
+    if (misaligned !== null) return gap("fill-refused", `${misaligned} (10^(18 − ${decimals}) for the source pool's ${decimals}-decimal collateral)`, quantum);
     const collateralOut = (await client.readContract({ address: src.poolManager, abi: poolPreviewAbi, functionName: "previewUnwindMint", args: [p.srcPoolId, p.fillerSrcCst], ...at })) as bigint;
-    if (collateralOut === 0n) return gap("source-closed", `previewUnwindMint(${p.srcPoolId}, ${p.fillerSrcCst}) answers 0: the source pool's unwind is paused or the pool expired, so the clone's unwindMint reverts`);
+    if (collateralOut === 0n) return gap("source-closed", `previewUnwindMint(${p.srcPoolId}, ${p.fillerSrcCst}) answers 0: the source pool's unwind is paused or the pool expired, so the clone's unwindMint reverts`, quantum);
 
     // ── the destination side: the deposit ──
     const dst = await locate(client, p.chainId, p.dstPoolId, p.atBlock);
     let previewOn: { pm: Address; poolId: Address; where: "destination" | "source (just-in-time destination, same pool manager)" };
     if (dst.found) {
-      if (!isAddressEqual(dst.corkSwapToken, p.dstCstToken)) return gap("token-mismatch", `the destination pool's cST is ${dst.corkSwapToken}, not the order's dstCstToken ${p.dstCstToken}`);
+      if (!isAddressEqual(dst.corkSwapToken, p.dstCstToken)) return gap("token-mismatch", `the destination pool's cST is ${dst.corkSwapToken}, not the order's dstCstToken ${p.dstCstToken}`, quantum);
       const dstMarket = await marketOf(dst, p.dstPoolId);
-      if (!isAddressEqual(dstMarket.collateralAsset, collateralAsset)) return gap("cross-collateral", `the source collateral ${collateralAsset} differs from the destination collateral ${dstMarket.collateralAsset}: the roll converts one into the other inside a mid-roll hook, and no preview prices that conversion`);
+      if (!isAddressEqual(dstMarket.collateralAsset, collateralAsset)) return gap("cross-collateral", `the source collateral ${collateralAsset} differs from the destination collateral ${dstMarket.collateralAsset}: the roll converts one into the other inside a mid-roll hook, and no preview prices that conversion`, quantum);
       previewOn = { pm: dst.poolManager, poolId: p.dstPoolId, where: "destination" };
     } else if (dst.readFailed) {
-      return gap("read-failed", `every pool-manager read for the destination pool failed (${dst.message})`);
+      return gap("read-failed", `every pool-manager read for the destination pool failed (${dst.message})`, quantum);
     } else if (p.jitDestination !== undefined) {
-      if (!isAddressEqual(p.jitDestination.collateralAsset, collateralAsset)) return gap("cross-collateral", `the just-in-time destination's collateral ${p.jitDestination.collateralAsset} differs from the source collateral ${collateralAsset}: the roll converts one into the other inside a mid-roll hook, and no preview prices that conversion`);
-      if (!isAddressEqual(p.jitDestination.poolManager, src.poolManager)) return gap("destination-pool-unknown", `the just-in-time destination is created on pool manager ${p.jitDestination.poolManager}, not on the source pool's ${src.poolManager}, so no live pool shares its deposit rule`);
+      if (!isAddressEqual(p.jitDestination.collateralAsset, collateralAsset)) return gap("cross-collateral", `the just-in-time destination's collateral ${p.jitDestination.collateralAsset} differs from the source collateral ${collateralAsset}: the roll converts one into the other inside a mid-roll hook, and no preview prices that conversion`, quantum);
+      if (!isAddressEqual(p.jitDestination.poolManager, src.poolManager)) return gap("destination-pool-unknown", `the just-in-time destination is created on pool manager ${p.jitDestination.poolManager}, not on the source pool's ${src.poolManager}, so no live pool shares its deposit rule`, quantum);
       previewOn = { pm: src.poolManager, poolId: p.srcPoolId, where: "source (just-in-time destination, same pool manager)" };
     } else {
-      return gap("destination-pool-unknown", `the destination pool ${p.dstPoolId} is unknown to every pool manager asked, so previewDeposit has no pool to price`);
+      return gap("destination-pool-unknown", `the destination pool ${p.dstPoolId} is unknown to every pool manager asked, so previewDeposit has no pool to price`, quantum);
     }
     const expectedDstCst = (await client.readContract({ address: previewOn.pm, abi: poolPreviewAbi, functionName: "previewDeposit", args: [previewOn.poolId, collateralOut], ...at })) as bigint;
-    if (expectedDstCst === 0n) return gap("destination-closed", `previewDeposit(${previewOn.poolId}, ${collateralOut}) on the ${previewOn.where} answers 0: deposits are paused or the pool expired, so the clone's deposit reverts`);
+    if (expectedDstCst === 0n) return gap("destination-closed", `previewDeposit(${previewOn.poolId}, ${collateralOut}) on the ${previewOn.where} answers 0: deposits are paused or the pool expired, so the clone's deposit reverts`, quantum);
     return { ok: true, floor: (expectedDstCst * 10n ** 18n) / p.fillerSrcCst, srcBurned: p.fillerSrcCst, quantum, collateralOut, expectedDstCst, collateralAsset, depositPreviewedOn: previewOn.where };
   } catch (err) {
     return gap("read-failed", `a preview read ${isContractRevert(err) ? "reverted" : "failed"} (${revertReason(err)})`);

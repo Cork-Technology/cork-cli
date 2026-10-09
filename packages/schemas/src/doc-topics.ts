@@ -26,6 +26,9 @@ export const SIGNING_TOPIC_REFERENCE = 'cork_capabilities topic:"signing"' as co
  *  prompt-engineering surface — it should demonstrate the correct form, not just reject). */
 export const UNITS_TOPIC_REFERENCE = 'cork_capabilities topic:"units"' as const;
 
+/** The rollover rules (parties, settlers, valid ranges, the filler's floor) in one place. */
+export const ROLLOVER_TOPIC_REFERENCE = 'cork_capabilities topic:"rollover"' as const;
+
 /** Referenced from the reach/group teaching (private_order, allowedSender, the group key) so a
  *  refusal routes to the whole vocabulary — one term per concept — instead of re-teaching inline. */
 export const ORDERS_TOPIC_REFERENCE = 'cork_capabilities topic:"orders"' as const;
@@ -1002,23 +1005,9 @@ with \`cork_submit\` (topic:"signing").
    BaseFiller pulls against (source cST and premium token). The destination cST and every refund
    go to the caller: the job carries no recipient.
 
-   BaseFiller decides WHERE the value goes; the holder's clone decides HOW MUCH. The clone runs
-   hooks the holder signed, under attesters the holder chose (the trust-config timelock delay is
-   0 on both chains), and a mid-roll hook can keep the unwound collateral. The settler's only
-   check on value is \`minDstPerSrc\` (dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18),
-   else Settler__InsufficientMintRate). Phoenix deposits and unwinds at exactly 1:1, so an honest
-   same-collateral roll mints one dst cST per src cST. Omit \`minDstPerSrc\` and the tool derives
-   that rate from \`previewUnwindMint\` on the source pool and \`previewDeposit\` on the
-   destination, with no tolerance (\`dst_floor_derived\`, \`data.dstFloor\`; a just-in-time
-   destination is priced on the source pool when both share a pool manager and a collateral).
-   When it cannot (no RPC, different collaterals, a destination no live pool can price) it
-   refuses \`dst_floor_underivable\` with \`data.gap\`, and you pass it. An explicit 0 warns
-   \`no_dst_floor\`, a floor below the honest rate \`dst_floor_slack\`. \`data.trust\` compares the
-   clone's attesters with the factory defaults (\`rollover_trust_custom\`), reports a queued
-   change (\`rollover_trust_pending\`) and checks every hook against the defaults for its phase
-   (\`hook_not_vetted\`). A session-key policy that pins only (BaseFiller, execute) routes the
-   value safely but cannot enforce the floor: the wallet must set or keep it. Simulate before you
-   sign; BaseFiller refunds the unspent premium cap.
+   BaseFiller decides where the value goes; the holder's clone decides how much. Keep the floor
+   \`rollover-fill\` derives (\`minDstPerSrc\`), read \`data.fillRange\` and \`data.trust\`, and simulate
+   before you sign. \`cork_capabilities topic:"rollover"\` has the rules, the valid ranges and why.
 
 **Path (b): the cST holder opens the RFQ.** Agreed on 2026-10-09 for cST holders that cannot
 sign off-chain.
@@ -1053,6 +1042,73 @@ cork-indexing-api#121.
   \`implementation_not_approved\`.`,
     searchText:
       "migration migrate move funds move my funds previous generation old pool new pool old generation current generation both generations at the same time withdraw from old deposit into new list my positions what do I hold where positions across generations account-state without poolId generation previous generation primary generation all exit old pool enter new pool rollover to new generation upgrade to new contracts rollover rfq rollover quote price to roll premium per share accept a quote quoteRef",
+  },
+  rollover: {
+    name: "rollover",
+    aliases: ["rollover-ranges", "roll", "settlers", "exact-settler", "partial-settler", "base-filler", "fill-sizes"],
+    summary:
+      "A rollover has two parties: the cPT holder signs the order (rollover-intent) and receives the premium; the source cST holder fills it (rollover-fill), pays the premium and receives the destination cST. The ExactSettler fills an order once at its size (any quantum step with allowUnderfill); the PartialSettler admits one fill per filler until the order is consumed. orderSize and every fill are multiples of the source share quantum 10^(18 − collateral decimals), fillDeadline is strictly before both pools' expiry, and the holder's floors bind EACH fill. minDstPerSrc is the filler's only protection on value: omitted, rollover-fill signs the honest rate (Phoenix converts 1:1). data.ranges and data.fillRange name the valid sizes.",
+    body: `# Rollover: the parties, the settlers and the valid ranges
+
+A rollover moves a cover position from a pool that expires to a later pool. Two parties take part:
+
+- The **cPT holder** signs the order (\`rollover-intent\`) and receives the premium.
+- The **source cST holder** fills it (\`rollover-fill\`). It brings the source cST, pays the premium, and receives the destination cST.
+
+Either party can open the rollover RFQ (topic \`migration\`, paths (a) and (b)). This topic gives the rules each order and each fill must meet. The settlers enforce them on chain; the tool checks them before anyone signs.
+
+## Two settlers
+
+The order's \`allowPartialFills\` flag picks the settler, and the settler refuses the other kind.
+
+| | ExactSettler | PartialSettler |
+|---|---|---|
+| \`allowPartialFills\` | false | true |
+| Fills per order | one | one per filler, until the order is consumed |
+| Fill size | exactly \`orderSize\`; with \`allowUnderfill\`, any quantum step up to it | any quantum step up to what remains |
+| What remains | the whole order while it is open | \`orderSize\` minus \`rolloverAccountingOf(digest).srcCstConsumed\` |
+| Same filler twice | the order is settled after one fill | refused, \`Settler__AlreadyFilled\` (one slot per BaseFiller and filler) |
+
+The **share quantum** is \`10^(18 − d)\`, where d is the source collateral's decimals. A 6-decimal collateral has a quantum of 1e12 src cST.
+
+## The order: rules at open
+
+| Field | Valid range | Settler error |
+|---|---|---|
+| \`orderSize\` | greater than 0, and a multiple of the source share quantum | \`Settler__ZeroOrderSize\`, \`LibPhoenixShareQuantum__OrderSizeNotQuantumAligned\` |
+| \`openDeadline\` | at most \`fillDeadline\`, and not past when the order opens | \`Settler__OpenDeadlineAfterFillDeadline\`, \`Settler__OpenAfterOpenDeadline\` |
+| \`fillDeadline\` | strictly before the expiry of BOTH pools | \`Settler__FillDeadlineExceedsPoolExpiry\` |
+| \`srcPoolId\`, \`dstPoolId\` | different pools, both on the settler's own pool manager (\`CORK_POOL_MANAGER\`); a just-in-time destination is created by the fill | \`Settler__SamePoolId\`, \`Settler__SrcCstNotCanonical\`, \`Settler__DstCstNotCanonical\` |
+| \`minPremiumPerShare\` | greater than 0; base units of the premium token per 1e18 dst cST | \`Settler__ZeroPremiumRate\` |
+| \`premiumToken\` | not zero, and neither cST | \`Settler__SrcCstEqualsPremiumToken\`, \`Settler__DstCstEqualsPremiumToken\` |
+| \`premiumPaymentMode\` | 0 or 1 (see below) | \`Settler__InvalidPremiumPaymentMode\` |
+| \`exclusiveFiller\` | not the settler | \`Settler__SelfExclusiveFiller\` |
+
+\`premiumPaymentMode\` 0 (the default) pays the premium inside the fill. Mode 1 also lets a filler roll first and pay the premium in a later call; the settler escrows the dst cST until the premium is paid, and an unpaid slot can be reclaimed after \`fillDeadline\`. \`BaseFiller.execute\` always pays in the same transaction.
+
+The holder's two slippage floors, \`minCaReceived\` and \`minSharesOut\`, are checked on EACH fill (\`CorkRolloverContract__UnwindMintShortfall\`, \`CorkRolloverContract__UnwindDepositShortfall\`). Phoenix unwinds and deposits at exactly 1:1: a fill of F src cST returns F / 10^(18 − d) collateral and, on the same collateral, mints F dst shares. So on a partial order, set the floors for the smallest fill you accept. A floor set for the whole order makes every smaller fill revert.
+
+\`rollover-intent\` reads these facts from the settler's pool manager and refuses an order that can never open. Its \`data.ranges\` gives the quantum, the deadline bound and the fill sizes.
+
+## The fill: rules and the price floor
+
+| Input | Valid range | Error |
+|---|---|---|
+| \`fillerSrcCst\` | the sizes in \`data.fillRange\`: a quantum step, at most what remains, and leaving a quantum-aligned remainder | \`Settler__RolloverAmountOutOfBounds\`, \`LibPhoenixShareQuantum__FillAmountNotQuantumAligned\`, \`LibPhoenixShareQuantum__ResidualNotQuantumAligned\` |
+| \`minDstPerSrc\` | at most the honest rate; 1e18 for a same-collateral roll | \`Settler__InsufficientMintRate\` |
+| \`premiumCap\` | at least ceil(dst cST produced × \`minPremiumPerShare\` / 1e18); BaseFiller refunds the rest | \`Settler__PremiumExceedsCap\` |
+
+\`minDstPerSrc\` is the filler's only protection on value. BaseFiller pays only its caller, but the holder's clone decides how many dst cST the roll mints. The clone runs hooks the holder signed, under attesters the holder chose, and a mid-roll hook can keep the unwound collateral. When you omit \`minDstPerSrc\`, \`rollover-fill\` signs the honest rate from \`previewUnwindMint\` and \`previewDeposit\`, with no tolerance (\`dst_floor_derived\`). When it cannot derive the rate, it refuses \`dst_floor_underivable\` and you pass the floor yourself. \`data.trust\` compares the clone's attesters with the factory defaults and checks every hook against them (\`rollover_trust_custom\`, \`rollover_trust_pending\`, \`hook_not_vetted\`).
+
+A session-key policy that allows only the call (BaseFiller, execute) routes the value safely, but it cannot enforce the floor. The wallet must set or keep \`minDstPerSrc\`.
+
+## What the results tell you
+
+- \`rollover-intent\`: \`data.ranges\` (the settler's pool manager, quantum, \`fillDeadlineBefore\`, fill sizes and the smallest fill that clears your floors).
+- \`rollover-fill\`: \`data.fillRange\` (kind, remaining, min, max, step, \`minClearingHolderFloors\`), \`data.dstFloor\` (the honest roll) and \`data.trust\`.
+- A value of null means the chain did not answer. It is never a guess.`,
+    searchText:
+      "rollover roll over roll my cover forward extend expiry exact settler partial settler allowPartialFills allowUnderfill fill size fillerSrcCst how much can I fill remaining size share quantum order size multiple fillDeadline pool expiry minCaReceived minSharesOut per fill floor minDstPerSrc premiumCap premium payment mode reclaim BaseFiller execute session key valid range ranges fill range already filled one fill per filler",
   },
   warnings: {
     name: "warnings",

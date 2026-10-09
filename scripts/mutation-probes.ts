@@ -142,6 +142,7 @@ const T = {
   trackForSelfAdapter: "packages/core/test/track-forself-adapter.test.ts",
   phoenixApprovals: "packages/core/test/phoenix-approvals.test.ts",
   rolloverFill: "packages/core/test/rollover-fill.test.ts",
+  rolloverIntent: "packages/core/test/rollover.test.ts",
   rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
   cover: "packages/core/test/cover.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
@@ -789,8 +790,8 @@ const CATALOG: Mutant[] = [
     // A fill off the share quantum reverts at the settler (FillAmountNotQuantumAligned).
     id: "rollover-fill-floor-quantum-check-dropped",
     file: "packages/core/src/handlers/rollover-fill-safety.ts",
-    find: "    if (p.fillerSrcCst % quantum !== 0n) {",
-    replace: "    if (false) {",
+    find: "    if (misaligned !== null) return gap(\"fill-refused\",",
+    replace: "    if (false) return gap(\"fill-refused\",",
     tests: [T.rolloverFill],
   },
   {
@@ -984,6 +985,166 @@ const CATALOG: Mutant[] = [
     find: ".sort((a, b) => Number(b.phase === \"mid\") - Number(a.phase === \"mid\"))",
     replace: "",
     tests: [T.rolloverFill],
+  },
+  {
+    // A source pool off the settler's pool manager can never open (Settler__SrcCstNotCanonical).
+    id: "rollover-range-src-pool-unchecked",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (!isAddressEqual(f.src.cst, t.srcCstToken)) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // Only a just-in-time order may name a destination that does not exist yet.
+    id: "rollover-range-missing-dst-admitted",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (f.dst === null && t.jit === undefined) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // A just-in-time order's destination does not exist before the fill creates it.
+    id: "rollover-range-jit-dst-refused",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (f.dst === null && t.jit === undefined) {",
+    replace: "  if (f.dst === null) {",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // orderSize is a multiple of the source share quantum (OrderSizeNotQuantumAligned).
+    id: "rollover-range-order-size-quantum-unchecked",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (f.src.quantum !== null && t.orderSize % f.src.quantum !== 0n) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // fillDeadline must be STRICTLY before both expiries: equal reverts.
+    id: "rollover-range-deadline-not-strict",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (firstExpiry !== null && t.fillDeadline >= firstExpiry) {",
+    replace: "  if (firstExpiry !== null && t.fillDeadline > firstExpiry) {",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // The deadline bound is the EARLIER of the two expiries.
+    id: "rollover-range-deadline-against-later-expiry",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "(m === null || e < m ? e : m), null);\n  if (firstExpiry",
+    replace: "(m === null || e > m ? e : m), null);\n  if (firstExpiry",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // The residual a fill leaves must be quantum-aligned too (ResidualNotQuantumAligned).
+    id: "rollover-range-residual-unchecked",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (residual % quantum !== 0n) return",
+    replace: "  if (false) return",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An exact order without underfill admits ONE size: no step.
+    id: "rollover-range-exact-step-reported",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  if (p.kind === \"exact\") return { kind: \"exact\", remaining, min: remaining, max: remaining, step: null,",
+    replace: "  if (p.kind === \"exact\") return { kind: \"exact\", remaining, min: remaining, max: remaining, step: p.quantum?.toString() ?? null,",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The smallest clearing fill rounds UP to a quantum step: a floor is a minimum.
+    id: "rollover-range-floor-fill-rounded-down",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  return ceilDiv(need, p.quantum) * p.quantum;",
+    replace: "  return (need / p.quantum) * p.quantum;",
+    tests: [T.rolloverFill, T.rolloverIntent],
+  },
+  {
+    // A fill must clear BOTH floors: the larger requirement binds.
+    id: "rollover-range-floor-fill-takes-smaller",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "  const need = forCa > forShares ? forCa : forShares;",
+    replace: "  const need = forCa < forShares ? forCa : forShares;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Across collaterals the share floor cannot be priced: no hint, never an assumed 1:1.
+    id: "rollover-range-cross-collateral-assumed-par",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "f.dst?.collateral == null || !isAddressEqual(f.src.collateral, f.dst.collateral)) return null;",
+    replace: "f.dst?.collateral == null) return null;",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // A partial fill over what remains reverts Settler__RolloverAmountOutOfBounds.
+    id: "rollover-fill-remaining-unchecked",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  if (remaining !== null && consumed !== null && fillerSrcCst > remaining) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A PartialSettler keeps one leg per filler slot (Settler__AlreadyFilled).
+    id: "rollover-fill-own-slot-unchecked",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "      if (own.rollover.dstCstProduced !== 0n || own.settled) {",
+    replace: "      if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The settler's consumed size outranks the venue's remainingSize [K7].
+    id: "rollover-fill-venue-outranks-chain",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "(remaining ?? venueRemaining ?? order.orderSize)",
+    replace: "(venueRemaining ?? remaining ?? order.orderSize)",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The derivation checks the residual this fill leaves.
+    id: "rollover-fill-residual-not-passed",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "...(remaining !== null ? { residual: remaining - fillerSrcCst } : {}), ",
+    replace: "",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The holder's minSharesOut binds each fill (UnwindDepositShortfall).
+    id: "rollover-fill-holder-share-floor-unchecked",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  } else if (derived?.ok && derived.expectedDstCst < minSharesOut) {",
+    replace: "  } else if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The holder's minCaReceived binds each fill (UnwindMintShortfall).
+    id: "rollover-fill-holder-collateral-floor-unchecked",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  if (derived?.ok && derived.collateralOut < minCaReceived) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An order the settler can never open is refused before anyone signs.
+    id: "rollover-intent-range-refusal-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "        if (broken) return unavailable(",
+    replace: "        if (false) return unavailable(",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // A just-in-time order's missing destination is admitted.
+    id: "rollover-intent-jit-flag-dropped",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "...(isJit ? { jit: { expiry: act.jitMarket !== undefined ? BigInt(act.jitMarket.expiryTimestamp) : null } } : {})",
+    replace: "",
+    tests: [T.rolloverIntent],
+  },
+  {
+    // The per-fill floor notice is for partial orders: an exact order fills once.
+    id: "rollover-intent-per-fill-notice-on-exact",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "    if (act.allowPartialFills && minFill !== null && poolFacts?.src.quantum != null && minFill > poolFacts.src.quantum) {",
+    replace: "    if (minFill !== null && poolFacts?.src.quantum != null && minFill > poolFacts.src.quantum) {",
+    tests: [T.rolloverIntent],
   },
   {
     // A settled/expired/cancelled order is terminal on chain (Settler__OrderInTerminalState).

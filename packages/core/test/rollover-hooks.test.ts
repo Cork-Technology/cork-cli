@@ -54,7 +54,7 @@ describe("standardRolloverHooks — the two canonical modules, encoded from thei
 
 describe("runTool rollover-intent with hooks", () => {
   const prepare = (extra: Record<string, unknown>) =>
-    runTool("cork_prepare_orders", { chainId: CHAIN, account: HOLDER, clientRequestId: "hooks-0002", action: { type: "rollover-intent", settler: EXACT, rolloverContract: CLONE, srcPoolId: base.srcPoolId, dstPoolId: base.dstPoolId, srcCstToken: SRC_CST, dstCstToken: DST_CST, premiumToken: PREMIUM, orderSize: "1000000000000000000", minPremiumPerShare: "62", openDeadline: (NOW + 600n).toString(), fillDeadline: (NOW + 1200n).toString(), ...extra } }, { nowSeconds: NOW });
+    runTool("cork_prepare_orders", { chainId: CHAIN, account: HOLDER, clientRequestId: "hooks-0002", action: { type: "rollover-intent", settler: EXACT, rolloverContract: CLONE, srcPoolId: base.srcPoolId, dstPoolId: base.dstPoolId, srcCstToken: SRC_CST, dstCstToken: DST_CST, premiumToken: PREMIUM, orderSize: "1000000000000000000", minPremiumPerShare: "62", openDeadline: (NOW + 600n).toString(), fillDeadline: (NOW + 1200n).toString(), ...extra } }, { nowSeconds: NOW, resolveRpc: async () => null });
   type Data = { intentHooks: { pre: number; mid: number; post: number; premiumPhase: number; standard?: boolean; modules?: unknown }; venuePost: { intent: { preRolloverHooks: unknown[]; postRolloverHooks: unknown[] } }; rolloverIntentHash: string; typedData: { message: { rolloverIntentHash: string } } };
   const codes = (env: { warnings: Array<{ code: string }> }) => env.warnings.map((w) => w.code);
 

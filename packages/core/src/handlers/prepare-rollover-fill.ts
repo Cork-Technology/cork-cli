@@ -17,7 +17,7 @@
 // exception is the price floor (rollover-fill-safety.ts): an omitted minDstPerSrc that cannot be
 // derived — no RPC, or a read that failed — builds no bytes, because the alternative signs a
 // fill the holder's hooks can empty.
-import { isAddressEqual, zeroAddress, zeroHash } from "viem";
+import { isAddressEqual, pad, zeroAddress, zeroHash } from "viem";
 import { type ChainId, Envelope, executionEthTransaction, type PrepareOrdersInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { erc20Abi } from "../chain/abis.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
@@ -29,6 +29,7 @@ import { checkContractMakerSignature, probeMakerCode, recoverEoaSigner } from ".
 import { type CloneAdmission, cloneAdmission, rolloverCloneAbi } from "./rollover-clone-admission.ts";
 import { chainStatusName, settlerStatusAbi } from "../rollover-verify.ts";
 import { resolveJitBytesInput } from "./jit.ts";
+import { fillRange, minFillClearingFloors, partialSettlerAccountingAbi } from "./rollover-ranges.ts";
 import { chooseFloor, type DstFloor, deriveDstFloor, type FloorChoice, floorWarnings, type JitDestination, readRolloverTrust, type RolloverTrust, trustWarnings } from "./rollover-fill-safety.ts";
 import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
@@ -178,11 +179,43 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     fillerAuth = "unverified";
   }
 
+  // ── what the order has consumed ──
+  // An open exact order has consumed nothing (its one fill settles it). A PartialSettler keeps
+  // the consumed size and one leg per (BaseFiller, bytes32(filler)) slot, and its own accounting
+  // outranks the venue's remainingSize [K7]. Read best-effort: an unread size falls back to the
+  // venue's, and says so.
+  const resolved = await getRpc(ctx, chainId);
+  let consumed: bigint | null = cls.kind === "EXACT" ? 0n : null;
+  const consumedNotes: Warning[] = [];
+  if (cls.kind === "PARTIAL" && resolved) {
+    try {
+      const at = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
+      const [acc, slot] = await Promise.all([
+        resolved.client.readContract({ address: order.settler, abi: partialSettlerAccountingAbi, functionName: "rolloverAccountingOf", args: [localDigest], ...at }),
+        resolved.client.readContract({ address: order.settler, abi: partialSettlerAccountingAbi, functionName: "fillerSlotAccountingOf", args: [localDigest, baseFiller as `0x${string}`, pad(account)], ...at }),
+      ]);
+      consumed = (acc as { srcCstConsumed: bigint }).srcCstConsumed;
+      const own = slot as { rollover: { dstCstProduced: bigint }; settled: boolean };
+      if (own.rollover.dstCstProduced !== 0n || own.settled) {
+        return refuse("invalid_order_terms", `${account} already filled a leg of this order: the PartialSettler keeps one leg per filler slot (BaseFiller, bytes32(${account})), so a second fill reverts Settler__AlreadyFilled`);
+      }
+    } catch (err) {
+      consumedNotes.push({ code: "chain_read_failed", message: `the PartialSettler's accounting could not be read (${revertReason(err)}) — the consumed size and this account's slot are unchecked` });
+    }
+  }
   // ── amounts ──
   const venueRemaining = remainingSizeOf(venueRow);
-  const fillerSrcCst = action.fillerSrcCst !== undefined ? BigInt(action.fillerSrcCst) : (venueRemaining ?? order.orderSize);
+  const remaining = consumed !== null ? order.orderSize - consumed : null;
+  if (remaining === 0n) return refuse("invalid_order_terms", `the PartialSettler has consumed the whole order (${order.orderSize}); nothing remains to fill`);
+  const fillerSrcCst = action.fillerSrcCst !== undefined ? BigInt(action.fillerSrcCst) : (remaining ?? venueRemaining ?? order.orderSize);
   if (fillerSrcCst === 0n) return refuse("invalid_order_terms", "fillerSrcCst is zero — nothing to roll (Settler__RolloverAmountOutOfBounds)");
   if (fillerSrcCst > order.orderSize) return refuse("invalid_order_terms", `fillerSrcCst ${fillerSrcCst} exceeds the order's size ${order.orderSize} (Settler__RolloverAmountOutOfBounds)`);
+  if (remaining !== null && consumed !== null && fillerSrcCst > remaining) {
+    return refuse("invalid_order_terms", `fillerSrcCst ${fillerSrcCst} exceeds what the order still accepts: ${remaining} of ${order.orderSize} (the PartialSettler has consumed ${consumed}) — the settler reverts Settler__RolloverAmountOutOfBounds`);
+  }
+  if (remaining !== null && venueRemaining !== undefined && venueRemaining !== remaining && cls.kind === "PARTIAL") {
+    consumedNotes.push({ code: "status_mismatch", message: `the venue reports remainingSize ${venueRemaining}, the PartialSettler ${remaining} (consumed ${consumed}) — the chain outranks the venue, and this fill uses ${remaining}` });
+  }
   if (cls.kind === "EXACT" && !order.allowUnderfill && fillerSrcCst !== order.orderSize) {
     return refuse("invalid_order_terms", `an ExactSettler order without allowUnderfill fills only at its full size ${order.orderSize}; fillerSrcCst ${fillerSrcCst} reverts Settler__ExactFillRequiresFullOrderSize`);
   }
@@ -195,8 +228,8 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   if (premiumCap < premiumEstimate) {
     amountNotices.push({ code: "would_revert", message: `premiumCap ${premiumCap} is below ceil(fillerSrcCst × minPremiumPerShare / 1e18) = ${premiumEstimate}, the premium the settler charges at a 1:1 dst/src mint — the fill reverts Settler__PremiumExceedsCap unless the destination pool mints fewer shares per src share than that` });
   }
-  if (action.fillerSrcCst === undefined && venueRemaining === undefined && cls.kind === "PARTIAL") {
-    amountNotices.push({ code: "invalid_order_terms", message: `fillerSrcCst defaulted to the ORDER size ${order.orderSize}: ${venueRow ? "the venue row carries no remainingSize" : "the inline path has no remaining-size source"}, and the settler exposes no consumed-size view — on a partially filled PartialSettler order this overfills (Settler__RolloverAmountOutOfBounds / CorkRolloverContract__OverfillCeiling); pass fillerSrcCst = the remaining size` });
+  if (action.fillerSrcCst === undefined && remaining === null && venueRemaining === undefined && cls.kind === "PARTIAL") {
+    amountNotices.push({ code: "invalid_order_terms", message: `fillerSrcCst defaulted to the ORDER size ${order.orderSize}: the PartialSettler's consumed size was not read (${resolved ? "the read failed" : "no RPC"}) and ${venueRow ? "the venue row carries no remainingSize" : "the inline path has no remaining-size source"} — on a partially filled order this overfills (Settler__RolloverAmountOutOfBounds); pass fillerSrcCst = the remaining size (PartialSettler.rolloverAccountingOf(orderDigest).srcCstConsumed is what the order has consumed)` });
   }
   if (premiumCapEstimated) {
     amountNotices.push({ code: "premium_cap_estimated", message: `premiumCap defaulted to ${premiumEstimate} = ceil(fillerSrcCst × minPremiumPerShare / 1e18): exact when the destination pool mints one dst cST per src cST consumed; a destination pool minting MORE shares per collateral charges more (ceil(dstCstProduced × rate / 1e18)) and reverts Settler__PremiumExceedsCap above the cap — simulate, and raise the cap if the simulation names that error; BaseFiller refunds the unspent part either way` });
@@ -255,7 +288,6 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   }
 
   // ── chain pre-flights (best-effort; a transport failure discloses, never refuses) ──
-  const resolved = await getRpc(ctx, chainId);
   let chainStatus: string | null = null;
   // The settler's clone admission for the address the order names (rollover-clone-admission.ts);
   // null when no RPC resolved or the reads failed in transport.
@@ -379,7 +411,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     // pool manager, so the deposit rule is read there.
     const jitPoolManager = jitParams !== undefined ? (await resolveGenerations(chainId)).generations.find((g) => g.label === generation.label)?.phoenix?.poolManager : undefined;
     const jitDestination: JitDestination | undefined = jitParams !== undefined && jitPoolManager !== undefined ? { collateralAsset: jitParams.collateralAsset as `0x${string}`, poolManager: jitPoolManager as `0x${string}` } : undefined;
-    derived = await deriveDstFloor(resolved.client, { chainId, srcPoolId: order.rolloverParams.srcPoolId as `0x${string}`, dstPoolId: order.rolloverParams.dstPoolId as `0x${string}`, srcCstToken: order.srcCstToken, dstCstToken: order.dstCstToken, fillerSrcCst, ...(jitDestination !== undefined ? { jitDestination } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    derived = await deriveDstFloor(resolved.client, { chainId, srcPoolId: order.rolloverParams.srcPoolId as `0x${string}`, dstPoolId: order.rolloverParams.dstPoolId as `0x${string}`, srcCstToken: order.srcCstToken, dstCstToken: order.dstCstToken, fillerSrcCst, ...(remaining !== null ? { residual: remaining - fillerSrcCst } : {}), ...(jitDestination !== undefined ? { jitDestination } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
     const choice = chooseFloor(explicitFloor, derived);
     if (!choice.ok) {
       return envelope({
@@ -401,7 +433,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
         warnings.push({ code: "chain_read_failed", message: `the clone's trust configuration could not be read (${revertReason(err)}) — the holder's attesters and hook attestations are unchecked; the minDstPerSrc floor is your protection either way` });
       }
     }
-    warnings.push(...amountNotices);
+    warnings.push(...consumedNotes, ...amountNotices);
     if (balances.srcCst !== undefined && BigInt(balances.srcCst) < fillerSrcCst) warnings.push({ code: "would_revert", message: `you hold ${balances.srcCst} of the src cST ${order.srcCstToken} but the fill pulls ${fillerSrcCst} — BaseFiller's transferFrom reverts; you need the SOURCE pool's cST (the cover being rolled), not the destination's` });
     if (balances.premiumToken !== undefined && BigInt(balances.premiumToken) < premiumCap) warnings.push({ code: "would_revert", message: `you hold ${balances.premiumToken} of the premium token ${order.premiumToken} but the fill pulls the whole cap ${premiumCap} up front (the surplus comes back in the same tx) — BaseFiller's transferFrom reverts` });
   } else {
@@ -413,9 +445,19 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const approvalWarn = approvalMissingWarning(approvals, "before broadcasting this fill");
   if (approvalWarn) warnings.push(approvalWarn);
 
-  // ── the floor ──
+  // ── the floor, and the holder's own per-fill floors ──
   const minDstPerSrc = floor.value;
   warnings.push(...floorWarnings(floor, derived, { fillerSrcCst, premiumCap }));
+  // The clone checks the holder's signed floors on EACH fill: the unwind must return
+  // minCaReceived and the deposit mint minSharesOut, or the leg reverts.
+  const { minCaReceived, minSharesOut } = order.rolloverParams;
+  const clearing = derived?.ok ? minFillClearingFloors({ minCaReceived, minSharesOut, srcBurned: derived.srcBurned, collateralOut: derived.collateralOut, expectedDstCst: derived.expectedDstCst, quantum: derived.quantum }) : null;
+  if (derived?.ok && derived.collateralOut < minCaReceived) {
+    warnings.push({ code: "would_revert", message: `the holder signed minCaReceived ${minCaReceived}, and the unwind of this fill returns ${derived.collateralOut} — the clone reverts CorkRolloverContract__UnwindMintShortfall; the floor applies to EACH fill, so fill at least ${clearing} src cST` });
+  } else if (derived?.ok && derived.expectedDstCst < minSharesOut) {
+    warnings.push({ code: "would_revert", message: `the holder signed minSharesOut ${minSharesOut}, and the deposit of this fill mints ${derived.expectedDstCst} — the clone reverts CorkRolloverContract__UnwindDepositShortfall; the floor applies to EACH fill, so fill at least ${clearing} src cST` });
+  }
+  const range = fillRange({ kind: cls.kind === "PARTIAL" ? "partial" : order.allowUnderfill ? "exact-underfill" : "exact", orderSize: order.orderSize, consumed, quantum: derived?.ok ? derived.quantum : derived?.quantum ?? null, minClearingHolderFloors: clearing });
   if (trust !== null) warnings.push(...trustWarnings(trust, minDstPerSrc > 0n));
 
   // ── the bytes ──
@@ -449,6 +491,8 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       dstPoolId: order.rolloverParams.dstPoolId,
       orderSize: order.orderSize.toString(),
       fillerSrcCst: fillerSrcCst.toString(),
+      // The fill sizes this order admits now (the settler's rules; see rollover-ranges.ts).
+      fillRange: range,
       minPremiumPerShare: order.minPremiumPerShare.toString(),
       premiumCap: premiumCap.toString(),
       premiumCapEstimated,
@@ -472,6 +516,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       approvals,
       scales: {
         fillerSrcCst: "src cST shares, 18 decimals",
+        fillRange: "src cST shares, 18 decimals (remaining, min, max, step, minClearingHolderFloors)",
         orderSize: "src cST shares, 18 decimals",
         premiumCap: "base units of premiumToken (its own decimals)",
         premiumAtOneToOne: "base units of premiumToken (its own decimals)",

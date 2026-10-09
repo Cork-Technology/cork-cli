@@ -154,8 +154,8 @@ const OracleSaltWire = Bytes32.optional().describe("nested-wire generations (mar
 // Rollover teaching strings shared between the prepare (rollover-intent) and submit
 // (rollover-order) shapes — three of them were maintained as identical copies at both sites.
 const RolloverOrderSizeWire = TokenAmount.describe("src cST shares to roll — cST is always 18 decimals");
-const RolloverMinCaWire = TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)");
-const RolloverMinSharesWire = TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals");
+const RolloverMinCaWire = TokenAmount.describe("slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18). The clone checks it on EACH fill (CorkRolloverContract__UnwindMintShortfall); Phoenix returns fill / 10^(18 − collateral decimals), so on a partial-fill order set it for the smallest fill you accept");
+const RolloverMinSharesWire = TokenAmount.describe("slippage floor on the dst share pairs minted — shares are always 18 decimals. The clone checks it on EACH fill (CorkRolloverContract__UnwindDepositShortfall); a same-collateral roll mints one dst share per src share, so on a partial-fill order set it for the smallest fill you accept");
 // rc.2 (rollover v0.1.0-rc.2, 2026-08-13): RolloverParams carries a trailing jitMarketHash that
 // is PART OF THE SIGNED DIGEST either way — zero means "no JIT market", and an omitted field
 // must produce the same digest the wallet signed over a zeroed one, so the default is the zero
@@ -722,11 +722,11 @@ export const OrdersAction = z.discriminatedUnion("type", [
     srcCstToken: Address,
     dstCstToken: Address,
     premiumToken: Address.optional().describe("the token the premium is paid in — required unless quoteRef supplies it (the quoted premium_token)"),
-    orderSize: RolloverOrderSizeWire.optional().describe("src cST shares to roll (cST is always 18 decimals) — required unless quoteRef supplies it (the quote's shares_max, at most the RFQ's source.shares)"),
+    orderSize: RolloverOrderSizeWire.optional().describe("src cST shares to roll (cST is always 18 decimals) — required unless quoteRef supplies it (the quote's shares_max, at most the RFQ's source.shares). Must be a multiple of the source share quantum 10^(18 − collateral decimals), or the settler reverts LibPhoenixShareQuantum__OrderSizeNotQuantumAligned at open"),
     minPremiumPerShare: PremiumPerShareRate.optional().describe("premium floor RATE: base units of the premium asset per 1e18 dst shares — required unless quoteRef supplies it (the quoted premium_per_share; a value below it breaks the quote)"),
     quoteRef: QuoteRef.optional().describe("accept a rollover RFQ quote: the RFQ is read and the order held to the venue's quote rules (your account is the requester, the RFQ's source pool, the quoted destination — an existing pool with no jitMarket, or the quoted just-in-time market whose hash must match —, the quoted premium token, a premium per share at least the quoted one, no more shares than quoted); every term above left out is taken from the quote, and an explicit term that breaks a rule is refused. Pass the same quoteRef to cork_submit rollover-order so the venue records the acceptance"),
-    openDeadline: UnixSeconds,
-    fillDeadline: UnixSeconds,
+    openDeadline: UnixSeconds.describe("the last time the order can be opened; at most fillDeadline (Settler__OpenDeadlineAfterFillDeadline)"),
+    fillDeadline: UnixSeconds.describe("the last time the order can be filled; strictly before BOTH pools' expiry (Settler__FillDeadlineExceedsPoolExpiry) — for a just-in-time destination, before jitMarket.expiryTimestamp"),
     minCaReceived: RolloverMinCaWire.optional(),
     minSharesOut: RolloverMinSharesWire.optional(),
     jitMarketHash: RolloverJitMarketHashWire.optional().describe("pre-computed JIT market commitment to sign over — pass `jitMarket` instead to have it computed locally; omitted = zero hash (no JIT market). Mutually exclusive with jitMarket"),
@@ -734,8 +734,8 @@ export const OrdersAction = z.discriminatedUnion("type", [
       .optional()
       .describe("negotiated just-in-time market instruction this order commits to, hashed locally into rolloverParams.jitMarketHash — for a rollover whose DESTINATION pool may not exist at fill time: the filler creates it in-fill, and dstPoolId must be the pool this instruction derives (cork_query derive-cork-pool reports it, plus the predicted dst cST). Mutually exclusive with jitMarketHash"),
     allowPartialFills: z.boolean().default(false).describe("must match the settler kind: true requires PartialSettler, false requires ExactSettler"),
-    allowUnderfill: z.boolean().default(false),
-    premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0=upfront, 1=on-settle"),
+    allowUnderfill: z.boolean().default(false).describe("true lets a fill consume less than it asked for (the holder's src cPT ran short) and lets an ExactSettler order fill below its size, in steps of the source share quantum; false requires an ExactSettler fill of exactly orderSize (Settler__ExactFillRequiresFullOrderSize)"),
+    premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).optional().describe("0 (the default) = atomic only: the premium is paid inside the fill. 1 = atomic or separate: a filler may also roll in one call and pay the premium in a later one (the settler escrows the dst cST until it is paid), and an unpaid slot can be reclaimed after fillDeadline. BaseFiller.execute always pays in the same transaction"),
     fillerHint: Address.optional(),
     exclusiveFiller: Address.optional(),
     orderSalt: Uint64Str.optional().describe("pin for byte-stable retries; omitted = derived from clientRequestId"),
@@ -756,7 +756,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
       })
       .optional()
       .describe("explicit intent hooks per phase (delegatecall-only, zero value, allowFailure false — the clone refuses anything else) for a holder composing its own modules; prefer `standardHooks`"),
-  }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign"),
+  }).describe("signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign. The valid ranges (orderSize quantum, fillDeadline before both pool expiries, per-fill floors) are in data.ranges and cork_capabilities topic:\"rollover\""),
   A("rollover-fill", {
     orderDigest: Bytes32.describe("the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it; a disagreement is a conflict, never filled"),
     signedOrder: z
@@ -768,13 +768,13 @@ export const OrdersAction = z.discriminatedUnion("type", [
       })
       .optional()
       .describe("fill from a payload you ALREADY HOLD (the `payload` object of cork_query rollover-orders filters.orderDigest, or what the holder handed you) — the venue is not contacted. Must hash to `orderDigest`"),
-    fillerSrcCst: RolloverOrderSizeWire.optional().describe("src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to the order's remaining size. An ExactSettler needs the full size unless the order allows underfill"),
+    fillerSrcCst: RolloverOrderSizeWire.optional().describe("src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to what the order still accepts, read from the PartialSettler's accounting (an ExactSettler order: its size). An ExactSettler needs the full size unless the order allows underfill; a PartialSettler admits one fill per filler, up to what remains. Every fill, and what it leaves of the order, is a multiple of the source share quantum. data.fillRange names the admissible sizes"),
     premiumCap: TokenAmount.optional().describe("the most premium (in the order's premiumToken, its own base units) this fill will pay — the settler charges ceil(dstCstProduced × minPremiumPerShare / 1e18) and reverts Settler__PremiumExceedsCap above the cap; BaseFiller refunds the unspent part. Defaults to ceil(fillerSrcCst × minPremiumPerShare / 1e18), exact at a 1:1 dst/src mint ratio — a destination pool minting more shares per collateral needs a higher cap (premium_cap_estimated says so; simulate)"),
     minDstPerSrc: UintStr.optional().describe("floor on dst cST per src cST, 1e18 = 1.0 (the settler checks dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18) and reverts Settler__InsufficientMintRate below it). This is the filler's ONLY protection on value: the holder's clone runs hooks the holder signed under attesters the holder chose, and a mid-roll hook can keep the unwound collateral. Omitted = derived from previewUnwindMint on the source pool and previewDeposit on the destination with no tolerance, since Phoenix converts both ways at exactly 1:1 (dst_floor_derived); no derivation (no RPC, a destination no live pool can price, different collaterals) refuses dst_floor_underivable. 0 = no floor (no_dst_floor); below the honest rate = slack the hooks can keep (dst_floor_slack). A session-key policy that pins only (BaseFiller, execute) cannot enforce it — the wallet must set or keep it").meta({ "x-units": X_UNITS.wad }),
     fillerAuthSig: Hex.optional().describe("when the order names an exclusiveFiller that is NOT your account: that filler's signature over FillerAuth(orderDigest, destination = your account, subFiller = your account) under the settler domain; without it a reserved order refuses here"),
     jitMarket: RolloverJitMarketWire.optional().describe("REQUIRED when the order's rolloverParams.jitMarketHash is non-zero: the destination-market instruction the holder committed to, encoded for BaseFiller.executeWithMarket on the settler generation's wire — its hash must equal the signed commitment (checked locally; the contract reverts BaseFiller__JitMarketHashMismatch otherwise) and dstPoolId must be the pool it derives"),
     maxPages: z.number().int().min(1).max(50).default(10).describe("hard bound on venue pages searched when the order is not served by its digest route; ignored with `signedOrder`"),
-  }).describe("unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; the minDstPerSrc floor is derived from the pools' previews when omitted, and the clone's attesters and every hook are checked against the factory's default attesters (data.trust); simulate before signing"),
+  }).describe("unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; the minDstPerSrc floor is derived from the pools' previews when omitted, and the clone's attesters and every hook are checked against the factory's default attesters (data.trust); data.fillRange names the fill sizes the settler admits and cork_capabilities topic:\"rollover\" the rules; simulate before signing"),
   A("deploy-rollover-contract", {
     owner: Address.optional().describe("the account the clone belongs to; defaults to `account`. The factory deploys for msg.sender ONLY, so the transaction must be sent by this owner"),
   }).describe("unsigned CorkRolloverContractFactory.deployRolloverContract() calldata: the per-account rollover clone every roll order names as `rolloverContract` (one per owner, CREATE2; the predicted address is reported, and an already-deployed clone makes the tx a refusal on chain — reported as already existing instead). Targets the selected generation's factory (primary by default)"),
@@ -964,7 +964,7 @@ const RolloverOrderWire = z.strictObject({
   minPremiumPerShare: PremiumPerShareRate,
   allowPartialFills: z.boolean(),
   allowUnderfill: z.boolean(),
-  premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).describe("0=upfront, 1=on-settle — must match what the signature covers"),
+  premiumPaymentMode: z.union([z.literal(0), z.literal(1)]).describe("0 (the default) = atomic only: the premium is paid inside the fill. 1 = atomic or separate: a filler may also roll in one call and pay the premium in a later one (the settler escrows the dst cST until it is paid), and an unpaid slot can be reclaimed after fillDeadline. BaseFiller.execute always pays in the same transaction — must match what the signature covers"),
   rolloverIntentHash: Bytes32.describe("EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed"),
   rolloverParams: RolloverParamsWire,
 });

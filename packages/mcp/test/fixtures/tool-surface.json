@@ -2758,7 +2758,7 @@
                     "$ref": "#/$defs/Address"
                   },
                   "orderSize": {
-                    "description": "src cST shares to roll (cST is always 18 decimals) — required unless quoteRef supplies it (the quote's shares_max, at most the RFQ's source.shares)",
+                    "description": "src cST shares to roll (cST is always 18 decimals) — required unless quoteRef supplies it (the quote's shares_max, at most the RFQ's source.shares). Must be a multiple of the source share quantum 10^(18 − collateral decimals), or the settler reverts LibPhoenixShareQuantum__OrderSizeNotQuantumAligned at open",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "minPremiumPerShare": {
@@ -2787,17 +2787,19 @@
                     "description": "accept a rollover RFQ quote: the RFQ is read and the order held to the venue's quote rules (your account is the requester, the RFQ's source pool, the quoted destination — an existing pool with no jitMarket, or the quoted just-in-time market whose hash must match —, the quoted premium token, a premium per share at least the quoted one, no more shares than quoted); every term above left out is taken from the quote, and an explicit term that breaks a rule is refused. Pass the same quoteRef to cork_submit rollover-order so the venue records the acceptance"
                   },
                   "openDeadline": {
+                    "description": "the last time the order can be opened; at most fillDeadline (Settler__OpenDeadlineAfterFillDeadline)",
                     "$ref": "#/$defs/UnixSeconds"
                   },
                   "fillDeadline": {
+                    "description": "the last time the order can be filled; strictly before BOTH pools' expiry (Settler__FillDeadlineExceedsPoolExpiry) — for a just-in-time destination, before jitMarket.expiryTimestamp",
                     "$ref": "#/$defs/UnixSeconds"
                   },
                   "minCaReceived": {
-                    "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)",
+                    "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18). The clone checks it on EACH fill (CorkRolloverContract__UnwindMintShortfall); Phoenix returns fill / 10^(18 − collateral decimals), so on a partial-fill order set it for the smallest fill you accept",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "minSharesOut": {
-                    "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals",
+                    "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals. The clone checks it on EACH fill (CorkRolloverContract__UnwindDepositShortfall); a same-collateral roll mints one dst share per src share, so on a partial-fill order set it for the smallest fill you accept",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "jitMarketHash": {
@@ -2909,8 +2911,9 @@
                     "description": "must match the settler kind: true requires PartialSettler, false requires ExactSettler"
                   },
                   "allowUnderfill": {
+                    "type": "boolean",
                     "default": false,
-                    "type": "boolean"
+                    "description": "true lets a fill consume less than it asked for (the holder's src cPT ran short) and lets an ExactSettler order fill below its size, in steps of the source share quantum; false requires an ExactSettler fill of exactly orderSize (Settler__ExactFillRequiresFullOrderSize)"
                   },
                   "premiumPaymentMode": {
                     "anyOf": [
@@ -2923,7 +2926,7 @@
                         "const": 1
                       }
                     ],
-                    "description": "0=upfront, 1=on-settle"
+                    "description": "0 (the default) = atomic only: the premium is paid inside the fill. 1 = atomic or separate: a filler may also roll in one call and pay the premium in a later one (the settler escrows the dst cST until it is paid), and an unpaid slot can be reclaimed after fillDeadline. BaseFiller.execute always pays in the same transaction"
                   },
                   "fillerHint": {
                     "$ref": "#/$defs/Address"
@@ -3107,7 +3110,7 @@
                   "fillDeadline"
                 ],
                 "additionalProperties": false,
-                "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign"
+                "description": "signable rollover ERC-7683 OrderData under the CorkSettler EIP-712 domain (sign, then cork_submit rollover-order). Carry the hooks (standardHooks) — they are part of what you sign. The valid ranges (orderSize quantum, fillDeadline before both pool expiries, per-fill floors) are in data.ranges and cork_capabilities topic:\"rollover\""
               },
               {
                 "type": "object",
@@ -3160,7 +3163,7 @@
                     "description": "fill from a payload you ALREADY HOLD (the `payload` object of cork_query rollover-orders filters.orderDigest, or what the holder handed you) — the venue is not contacted. Must hash to `orderDigest`"
                   },
                   "fillerSrcCst": {
-                    "description": "src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to the order's remaining size. An ExactSettler needs the full size unless the order allows underfill",
+                    "description": "src cST this fill provides — the SOURCE pool's cST you hold (the cover you are rolling with the holder); defaults to what the order still accepts, read from the PartialSettler's accounting (an ExactSettler order: its size). An ExactSettler needs the full size unless the order allows underfill; a PartialSettler admits one fill per filler, up to what remains. Every fill, and what it leaves of the order, is a multiple of the source share quantum. data.fillRange names the admissible sizes",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "premiumCap": {
@@ -3288,7 +3291,7 @@
                   "orderDigest"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; the minDstPerSrc floor is derived from the pools' previews when omitted, and the clone's attesters and every hook are checked against the factory's default attesters (data.trust); simulate before signing"
+                "description": "unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; the minDstPerSrc floor is derived from the pools' previews when omitted, and the clone's attesters and every hook are checked against the factory's default attesters (data.trust); data.fillRange names the fill sizes the settler admits and cork_capabilities topic:\"rollover\" the rules; simulate before signing"
               },
               {
                 "type": "object",
@@ -5299,7 +5302,7 @@
                             "const": 1
                           }
                         ],
-                        "description": "0=upfront, 1=on-settle — must match what the signature covers"
+                        "description": "0 (the default) = atomic only: the premium is paid inside the fill. 1 = atomic or separate: a filler may also roll in one call and pay the premium in a later one (the settler escrows the dst cST until it is paid), and an unpaid slot can be reclaimed after fillDeadline. BaseFiller.execute always pays in the same transaction — must match what the signature covers"
                       },
                       "rolloverIntentHash": {
                         "description": "EIP-712 struct hash of the zero-digest RolloverIntent — recomputed locally before relay; a mismatch is a conflict, not relayed",
@@ -5315,11 +5318,11 @@
                             "$ref": "#/$defs/Address"
                           },
                           "minCaReceived": {
-                            "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18)",
+                            "description": "slippage floor on the collateral returned by the src-side unwind — the COLLATERAL asset's native base units (read its decimals; not necessarily 18). The clone checks it on EACH fill (CorkRolloverContract__UnwindMintShortfall); Phoenix returns fill / 10^(18 − collateral decimals), so on a partial-fill order set it for the smallest fill you accept",
                             "$ref": "#/$defs/TokenAmount"
                           },
                           "minSharesOut": {
-                            "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals",
+                            "description": "slippage floor on the dst share pairs minted — shares are always 18 decimals. The clone checks it on EACH fill (CorkRolloverContract__UnwindDepositShortfall); a same-collateral roll mints one dst share per src share, so on a partial-fill order set it for the smallest fill you accept",
                             "$ref": "#/$defs/TokenAmount"
                           },
                           "srcPoolId": {

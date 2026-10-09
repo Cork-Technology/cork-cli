@@ -25,6 +25,8 @@ import {
 import { rolloverFactoryAbi } from "../src/rollover-fill.ts";
 import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
 import { deriveDstFloor, readRolloverTrust } from "../src/handlers/rollover-fill-safety.ts";
+import { partialSettlerAccountingAbi, readRollPools, settlerPoolManagerAbi } from "../src/handlers/rollover-ranges.ts";
+import { resolveGenerations } from "../src/config-remote.ts";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -281,5 +283,52 @@ describe.skipIf(!LIVE)("rollover-fill safety reads — live (both chains)", () =
       }
       console.log(`chain ${chainId}: 1:1 previews verified on ${[...byManager.keys()].join(", ")}`);
     }, 120_000);
+  }
+});
+
+// The range reads (rollover-ranges.ts) against the deployed settlers: each settler's immutable
+// CORK_POOL_MANAGER is the pool manager its configured generation names, the PartialSettler's
+// accounting views decode (an unknown digest answers zeros), and readRollPools reads a live pool
+// on the settler's own manager.
+describe.skipIf(!LIVE)("rollover range reads — live (both chains)", () => {
+  for (const chainId of [42161, 8453] as const) {
+    it(`chain ${chainId}: every configured settler's pool manager is its generation's; the PartialSettler's accounting decodes`, async () => {
+      const { rollover } = await resolveRollover(chainId);
+      const { generations } = await resolveGenerations(chainId);
+      const client = (await resolveRpc(chainId, undefined))!.client;
+      const live = (rollover!.generations ?? []).filter((g) => g.retired === undefined);
+      expect(live.length).toBeGreaterThan(0);
+      for (const g of live) {
+        const pm = generations.find((x) => x.label === g.label)!.phoenix!.poolManager;
+        for (const settler of [g.exactSettler, g.partialSettler] as `0x${string}`[]) {
+          const onChain = await client.readContract({ address: settler, abi: settlerPoolManagerAbi, functionName: "CORK_POOL_MANAGER" });
+          expect(onChain.toLowerCase(), `${g.label} settler ${settler}`).toBe(pm.toLowerCase());
+        }
+        const unknown = `0x${"5a".repeat(32)}` as const;
+        const acc = await client.readContract({ address: g.partialSettler as `0x${string}`, abi: partialSettlerAccountingAbi, functionName: "rolloverAccountingOf", args: [unknown] });
+        expect(acc).toEqual({ participantSlotCount: 0, dstCstEscrowed: 0n, srcCstConsumed: 0n });
+        const slot = await client.readContract({ address: g.partialSettler as `0x${string}`, abi: partialSettlerAccountingAbi, functionName: "fillerSlotAccountingOf", args: [unknown, g.baseFiller as `0x${string}`, `0x${"00".repeat(12)}${KNOWN_CLONE.slice(2)}`] });
+        expect(slot).toMatchObject({ rollover: { dstCstProduced: 0n, srcCstProvided: 0n, filledAt: 0n, premiumFired: false }, settled: false });
+      }
+    }, 90_000);
+
+    it(`chain ${chainId}: readRollPools reads a live pool from the settler's own pool manager`, async () => {
+      const { rollover } = await resolveRollover(chainId);
+      const client = (await resolveRpc(chainId, undefined))!.client;
+      const settler = rollover!.exactSettler as `0x${string}`;
+      const pm = (await client.readContract({ address: settler, abi: settlerPoolManagerAbi, functionName: "CORK_POOL_MANAGER" })).toLowerCase();
+      const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});
+      type Row = { poolId: `0x${string}`; poolManagerAddress: string; expiry: string; swapToken: { address: string }; collateralToken: { address: string; decimals: number } };
+      const soon = new Date(Date.now() + 86_400_000).toISOString();
+      const row = ((env.data as { items: Row[] }).items ?? []).find((r) => r.poolManagerAddress.toLowerCase() === pm && r.expiry > soon);
+      expect(row, `no unexpired pool on the primary settler's pool manager ${pm}`).toBeDefined();
+      const f = await readRollPools(client, { chainId, settler, srcPoolId: row!.poolId, dstPoolId: `0x${"5a".repeat(32)}` });
+      expect(f.poolManager.toLowerCase()).toBe(pm);
+      expect(f.src.cst.toLowerCase()).toBe(row!.swapToken.address.toLowerCase());
+      expect(f.src.collateral?.toLowerCase()).toBe(row!.collateralToken.address.toLowerCase());
+      expect(f.src.quantum).toBe(10n ** BigInt(18 - row!.collateralToken.decimals));
+      expect(f.src.expiry).toBe(BigInt(Math.floor(Date.parse(row!.expiry) / 1000)));
+      expect(f.dst).toBeNull();
+    }, 90_000);
   }
 });

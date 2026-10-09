@@ -84,13 +84,25 @@ const migrationPoolOf = (chainId: number, address: string, poolId: unknown) => {
   const m = MIGRATION_POOLS[poolId.toLowerCase() === MIGRATION_OLD_POOL ? MIGRATION_OLD_POOL : poolId.toLowerCase() === MIGRATION_NEW_POOL ? MIGRATION_NEW_POOL : ""];
   return m && m.pm.toLowerCase() === address.toLowerCase() ? m : undefined;
 };
-/** The resting roll order's two pools (rollover-fill task), on the 42161 primary's pool manager
- *  ONLY: the source pool's cST is SUSDE, the destination's VBUSDC (the fixture order's own token
- *  fields), both on MARKET's collateral, SUSDE (18 decimals) — so the previews below are Phoenix's
- *  1:1 conversion and the fill derives the honest floor 1e18. */
+/** The rollover fixtures' two pools (rollover-intent and rollover-fill tasks): the source pool's
+ *  cST is SUSDE, the destination's VBUSDC (the fixture orders' own token fields), both on MARKET's
+ *  collateral, SUSDE (18 decimals) — so the previews below are Phoenix's 1:1 conversion and a
+ *  fill derives the honest floor 1e18. A settler rolls only pools on ITS pool manager
+ *  (CORK_POOL_MANAGER), and the fixtures bind settlers of two generations (the rc.2 ExactSettler
+ *  of prepare-rollover, the primary's of rollover-fill), so the pools answer on each fixture
+ *  settler's pool manager. */
 const ROLL_POOLS: Record<string, string> = { [`0x${"11".repeat(32)}`]: SUSDE, [`0x${"22".repeat(32)}`]: VBUSDC };
+/** Each rollover settler's pool manager: its own generation's phoenix block. */
+const ROLL_SETTLER_PMS = new Map(
+  ROLLOVERS_42161.flatMap((g) => {
+    const pm = GENERATIONS_42161.find((x) => x.label === g.label)?.phoenix?.poolManager;
+    return pm ? [g.exactSettler, g.partialSettler].map((s) => [s.toLowerCase(), pm] as const) : [];
+  }),
+);
 const rollPoolOf = (chainId: number, address: string, poolId: unknown) =>
-  chainId === 42161 && typeof poolId === "string" && address.toLowerCase() === primaryPhoenix(42161)!.poolManager.toLowerCase() ? ROLL_POOLS[poolId.toLowerCase()] : undefined;
+  chainId === 42161 && typeof poolId === "string" && [...ROLL_SETTLER_PMS.values()].some((pm) => pm.toLowerCase() === address.toLowerCase()) ? ROLL_POOLS[poolId.toLowerCase()] : undefined;
+/** The fixture pools expire when MARKET (the market() these pools answer) says, after every fixture fillDeadline. */
+const ROLL_POOL_EXPIRY_OF = () => MARKET.expiryTimestamp;
 /** The rollover trust surface as it reads live (2026-10-09, both chains): the factory's one
  *  default attester at threshold 1, the Rhinestone ERC-7484 registry, the trust-config timelock
  *  with delay 0, and the fixture clone trusting exactly the defaults with nothing queued. */
@@ -181,6 +193,14 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // as not-ready). Every other (owner, spender) answers 0 — the confirmed-missing fixture
       // the approval_missing tasks grade.
       return String(args.args?.[0]).toLowerCase() === RESTING_MAKER.address.toLowerCase() ? 10n ** 24n : 0n;
+    case "CORK_POOL_MANAGER": {
+      const pm = ROLL_SETTLER_PMS.get(args.address.toLowerCase());
+      if (pm === undefined) throw reverted(`${args.address} is no rollover settler`);
+      return pm;
+    }
+    case "expiry":
+      if (!Object.values(ROLL_POOLS).some((t) => t.toLowerCase() === args.address.toLowerCase())) throw reverted(`${args.address} is no fixture pool share`);
+      return ROLL_POOL_EXPIRY_OF();
     // The roll's two previews, Phoenix's formula on an 18-decimal collateral (quantum 1): the
     // unwind returns shares / 10^(18 − d), the deposit mints c × 10^(18 − d).
     case "previewUnwindMint":

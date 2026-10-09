@@ -35,10 +35,11 @@ import {
   type OrderDataStruct,
   activeSettlersTeaching,
   classifyRolloverSettler,
+  resolveGenerations,
   resolveRollover,
   retiredSettlerTeaching,
 } from "@cork/core";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, type StubCall } from "./helpers.ts";
 
 // Live rc.2 rollover deployment — identical addresses on 42161 + 8453 (verified on-chain
 // 2026-08-19; cork-defaults.json `rollover`).
@@ -62,7 +63,45 @@ const SRC_POOL = "0x111111111111111111111111111111111111111111111111111111111111
 const DST_POOL = "0x2222222222222222222222222222222222222222222222222222222222222222" as const;
 
 const NOW = 1_790_000_000n;
-const ctx: HandlerContext = { nowSeconds: NOW };
+// No RPC: these tests build offline, and a test without a resolver would otherwise reach the
+// committed default endpoints.
+const ctx: HandlerContext = { nowSeconds: NOW, resolveRpc: async () => null };
+
+/** The settlers' own pool facts as the chain answers them (rollover-ranges.ts reads them at
+ *  prepare): each settler's CORK_POOL_MANAGER is its generation's pool manager (from config),
+ *  SRC_POOL and DST_POOL live there with an 18-decimal collateral, and both cSTs expire well after
+ *  every deadline in this file. `missing` drops a pool (a just-in-time destination). */
+const SETTLER_PMS = await (async () => {
+  const { rollover } = await resolveRollover(42161);
+  const { generations } = await resolveGenerations(42161);
+  const out = new Map<string, string>();
+  for (const g of rollover!.generations ?? []) {
+    const pm = generations.find((x) => x.label === g.label)?.phoenix?.poolManager;
+    if (pm) for (const s of [g.exactSettler, g.partialSettler]) out.set(s.toLowerCase(), pm.toLowerCase());
+  }
+  return out;
+})();
+const COLLATERAL_18 = "0x00000000000000000000000000000000000000ca" as const;
+const POOL_EXPIRY = NOW + 30n * 86_400n;
+function settlerWorld(c: StubCall, o: { missing?: string[]; expiry?: Record<string, bigint>; decimals?: number; dstCollateral?: string } = {}): { answered: true; value: unknown } | { answered: false } {
+  const lc = (a: string) => a.toLowerCase();
+  const pools: Record<string, string> = { [SRC_POOL]: SRC_CST, [DST_POOL]: DST_CST };
+  const onPm = [...SETTLER_PMS.values()].includes(lc(c.address));
+  const zero = "0x0000000000000000000000000000000000000000";
+  switch (c.functionName) {
+    case "CORK_POOL_MANAGER": { const pm = SETTLER_PMS.get(lc(c.address)); if (!pm) throw new Error(`execution reverted: ${c.address} is no settler`); return { answered: true, value: pm }; }
+    case "shares": {
+      if (!onPm) return { answered: false };
+      const id = String(c.args?.[0]);
+      const cst = o.missing?.includes(id) ? undefined : pools[id];
+      return { answered: true, value: cst ? ["0x00000000000000000000000000000000000000c0", cst] : [zero, zero] };
+    }
+    case "market": return onPm ? { answered: true, value: { collateralAsset: String(c.args?.[0]) === DST_POOL && o.dstCollateral ? o.dstCollateral : COLLATERAL_18 } } : { answered: false };
+    case "decimals": return lc(c.address) === lc(COLLATERAL_18) ? { answered: true, value: o.decimals ?? 18 } : { answered: false };
+    case "expiry": { const e = o.expiry?.[lc(c.address)]; return [SRC_CST, DST_CST].map(lc).includes(lc(c.address)) ? { answered: true, value: e ?? POOL_EXPIRY } : { answered: false }; }
+    default: return { answered: false };
+  }
+}
 
 function intentArgs(overrides: Record<string, unknown> = {}) {
   return {
@@ -824,7 +863,9 @@ describe("runTool rollover-intent — the JIT commitment wire follows the SETTLE
     // phoenix/v0.3-rc.1 (flat wire, 8-field manager). Each derives its own pool id; a dstPoolId
     // from the other width warns.
     const ORACLE_02 = "0x2ba2103a37c4cff9dbb96e6f74513923d960d757";
-    const registryStub = (c: { functionName: string }) => {
+    const registryStub = (c: StubCall) => {
+      const world = settlerWorld(c, { missing: [DST_POOL] });
+      if (world.answered) return world.value;
       if (c.functionName === "isRecipe") return true;
       if (c.functionName === "source") return 1;
       if (c.functionName === "lookupWrapper") return ORACLE_02;
@@ -1056,7 +1097,9 @@ describe("rollover jitMarket — venue-gap notice, far-future expiry, and the po
     },
     "8-field",
   );
-  const registryStub = (c: { functionName: string }) => {
+  const registryStub = (c: StubCall) => {
+    const world = settlerWorld(c, { missing: [DST_POOL] });
+    if (world.answered) return world.value;
     if (c.functionName === "MARKET_REGISTRY") return "0xa78dd18B10dCae13801237E5A0cAe98a1a2811F1";
     if (c.functionName === "isRecipe") return true;
     if (c.functionName === "source") return 1; // PRICE
@@ -1125,5 +1168,78 @@ describe("rollover jitMarket — venue-gap notice, far-future expiry, and the po
     );
     expect(env.state).toBe("ok");
     expect(env.warnings.some((w) => w.code === "expiry_far_future")).toBe(true);
+  });
+});
+
+describe("runTool rollover-intent — the settler's open-time ranges, read from its own pool manager", () => {
+  const order = (over: Record<string, unknown> = {}) => ({
+    chainId: 42161,
+    account: CLONE,
+    clientRequestId: "test-roll-range-1",
+    action: { type: "rollover-intent", settler: CANDIDATE_EXACT, rolloverContract: CLONE, srcPoolId: SRC_POOL, dstPoolId: DST_POOL, srcCstToken: SRC_CST, dstCstToken: DST_CST, premiumToken: PREMIUM, orderSize: "250000000000000000000", minPremiumPerShare: "12000000000000000", openDeadline: String(NOW + 3_600n), fillDeadline: String(NOW + 86_400n), minCaReceived: "0", minSharesOut: "0", ...over },
+  });
+  const world = (o: Parameters<typeof settlerWorld>[1] = {}) => stubRpc((c: StubCall) => {
+    const w = settlerWorld(c, o);
+    if (w.answered) return w.value;
+    throw new Error(`no stub for ${c.functionName} on ${c.address}`);
+  });
+  const refusal = async (o: Parameters<typeof settlerWorld>[1], over: Record<string, unknown> = {}) => {
+    const env = await runTool("cork_prepare_orders", order(over), { nowSeconds: NOW, resolveRpc: world(o) });
+    expect(env.state).toBe("unavailable");
+    return env.warnings[0]!.message;
+  };
+
+  it("an order within every range builds and reports the ranges: the settler's pool manager, the quantum, the deadline bound, the fill sizes", async () => {
+    const env = await runTool("cork_prepare_orders", order(), { nowSeconds: NOW, resolveRpc: world({ decimals: 6 }) });
+    expect(env.state).toBe("ok");
+    expect((env.data as Record<string, unknown>)["ranges"]).toMatchObject({
+      poolManager: SETTLER_PMS.get(CANDIDATE_EXACT.toLowerCase()),
+      quantum: "1000000000000",
+      fillDeadlineBefore: POOL_EXPIRY.toString(),
+      fill: { kind: "exact", remaining: "250000000000000000000", min: "250000000000000000000", max: "250000000000000000000", step: null },
+    });
+    expect(env.warnings.map((w) => w.code)).not.toContain("chain_read_failed");
+  });
+
+  it("each open-time rule the settler enforces is refused by its error, before anyone signs", async () => {
+    expect(await refusal({ missing: [SRC_POOL] })).toMatch(/source pool is unknown to the settler's pool manager .*reverts Settler__SrcCstNotCanonical when the order opens, so it can never fill/u);
+    expect(await refusal({}, { srcCstToken: DST_CST, dstCstToken: SRC_CST })).toMatch(/source pool's cST on the settler's pool manager .* is 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497, not the order's srcCstToken .*Settler__SrcCstNotCanonical/u);
+    expect(await refusal({ missing: [DST_POOL] })).toMatch(/destination pool is unknown to the settler's pool manager .*no just-in-time market.*Settler__DstCstNotCanonical/u);
+    expect(await refusal({ decimals: 6 }, { orderSize: "250000000000500000000" })).toMatch(/orderSize 250000000000500000000 is not a multiple of the source share quantum 1000000000000 .*LibPhoenixShareQuantum__OrderSizeNotQuantumAligned/u);
+    expect(await refusal({ expiry: { [DST_CST.toLowerCase()]: NOW + 86_400n } })).toMatch(/fillDeadline 1790086400 is not strictly before both pools' expiry \(source 1792592000, destination 1790086400\) .*Settler__FillDeadlineExceedsPoolExpiry/u);
+  });
+
+  it("a read that fails builds the order and says the ranges are unchecked", async () => {
+    const broken = stubRpc(() => { throw new Error("header not found"); });
+    const env = await runTool("cork_prepare_orders", order(), { nowSeconds: NOW, resolveRpc: broken });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.find((w) => w.code === "chain_read_failed")!.message).toMatch(/settler's pool facts could not be read .*unchecked/u);
+    expect((env.data as Record<string, unknown>)["ranges"]).toBeNull();
+  });
+
+  it("on a partial-fill order the holder's floors bind EACH fill: the smallest fill that clears them is named", async () => {
+    const env = await runTool("cork_prepare_orders", order({ settler: CANDIDATE_PARTIAL, allowPartialFills: true, minCaReceived: "50000000000000000000", minSharesOut: "80000000000000000000" }), { nowSeconds: NOW, resolveRpc: world() });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.find((w) => w.message.startsWith("your floors apply to EACH fill"))!.message).toMatch(/a fill below 80000000000000000000 src cST .*CorkRolloverContract__UnwindMintShortfall \/ UnwindDepositShortfall/u);
+    expect(((env.data as Record<string, unknown>)["ranges"] as { fill: Record<string, unknown> }).fill).toMatchObject({ kind: "partial", min: "1", step: "1", minClearingHolderFloors: "80000000000000000000" });
+    // Floors above the whole order: no fill can ever clear them.
+    const never = await runTool("cork_prepare_orders", order({ settler: CANDIDATE_PARTIAL, allowPartialFills: true, minSharesOut: "300000000000000000000" }), { nowSeconds: NOW, resolveRpc: world() });
+    expect(never.warnings.find((w) => w.message.startsWith("your floors apply to EACH fill"))!.message).toMatch(/at 300000000000000000000 no fill of this 250000000000000000000 order can clear them/u);
+    // A floor between quantum steps rounds the clearing fill UP (6-decimal collateral: quantum 1e12).
+    const between = await runTool("cork_prepare_orders", order({ settler: CANDIDATE_PARTIAL, allowPartialFills: true, minSharesOut: "200000000000000001" }), { nowSeconds: NOW, resolveRpc: world({ decimals: 6 }) });
+    expect(((between.data as Record<string, unknown>)["ranges"] as { fill: Record<string, unknown> }).fill["minClearingHolderFloors"]).toBe("200001000000000000");
+    // Across collaterals the share floor cannot be priced here: no hint, never an assumed 1:1.
+    const cross = await runTool("cork_prepare_orders", order({ settler: CANDIDATE_PARTIAL, allowPartialFills: true, minSharesOut: "80000000000000000000" }), { nowSeconds: NOW, resolveRpc: world({ dstCollateral: "0x00000000000000000000000000000000000000cb" }) });
+    expect(((cross.data as Record<string, unknown>)["ranges"] as { fill: Record<string, unknown> }).fill["minClearingHolderFloors"]).toBeNull();
+    expect(cross.warnings.some((w) => w.message.startsWith("your floors apply to EACH fill"))).toBe(false);
+    // An exact order fills once, at its size: no per-fill notice.
+    const exact = await runTool("cork_prepare_orders", order({ minSharesOut: "250000000000000000000" }), { nowSeconds: NOW, resolveRpc: world() });
+    expect(exact.warnings.some((w) => w.message.startsWith("your floors apply to EACH fill"))).toBe(false);
+  });
+
+  it("a just-in-time order admits a destination that does not exist yet, bounded by the instruction's expiry", async () => {
+    const env = await runTool("cork_prepare_orders", order({ jitMarketHash: `0x${"ab".repeat(32)}` }), { nowSeconds: NOW, resolveRpc: world({ missing: [DST_POOL] }) });
+    expect(env.state).toBe("ok");
+    expect((env.data as Record<string, unknown>)["ranges"]).toMatchObject({ fillDeadlineBefore: POOL_EXPIRY.toString() });
   });
 });

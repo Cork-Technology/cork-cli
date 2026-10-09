@@ -13,6 +13,7 @@ import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder, VENUE_OPEN_ORDERS_PER_POOL } from "../datasources/venue.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { fillRange, openRangeViolation, readRollPools, type RollPoolFacts, sameCollateralMinFill } from "./rollover-ranges.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeRule, resolveJitBytesInput, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
@@ -772,7 +773,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // may mean it on a pool it knows, so nothing refuses — but it is never silent (2026-10-02).
     const unfloored = [...(act.minCaReceived === undefined ? ["minCaReceived (the collateral the src-side unwind returns)"] : []), ...(act.minSharesOut === undefined ? ["minSharesOut (the dst share pairs minted)"] : [])];
     if (unfloored.length > 0) {
-      warnings.push({ code: "invalid_order_terms", message: `no slippage floor: ${unfloored.join(" and ")} ${unfloored.length > 1 ? "are" : "is"} not set and will be SIGNED as 0, so a filler may complete this roll at whatever rate the two pools give at fill time — pass the floor${unfloored.length > 1 ? "s" : ""} you would accept (cork_compute unwind-rate prices the collateral leg at today's rate)` });
+      warnings.push({ code: "invalid_order_terms", message: `no slippage floor: ${unfloored.join(" and ")} ${unfloored.length > 1 ? "are" : "is"} not set and will be SIGNED as 0, so a filler may complete this roll at whatever rate the two pools give at fill time — pass the floor${unfloored.length > 1 ? "s" : ""} you would accept. Phoenix unwinds and deposits at exactly 1:1: a fill of F src cST returns F / 10^(18 − collateral decimals) collateral and, on the same collateral, mints F dst shares. The clone checks both floors on EACH fill${act.allowPartialFills ? ", so on this partial-fill order set them for the smallest fill you accept" : ""}` });
     }
 
     // Deterministic venue-admission battery, shared with submit (the two surfaces must
@@ -794,6 +795,33 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       ...(act.exclusiveFiller !== undefined ? { exclusiveFiller: act.exclusiveFiller } : {}),
     });
     if (violation) return unavailable(chainId, "invalid_order_terms", `${violation} — the venue would reject the signed order with the same complaint`, ctx);
+
+    // The settler's open-time rules that need the chain (rollover-ranges.ts): both pools on the
+    // SETTLER's own pool manager, orderSize a multiple of the source share quantum, and the fill
+    // deadline strictly before both pools' expiry. A definitive answer refuses — an order that can
+    // never open is not worth signing; a read that fails is disclosed and the order builds.
+    const isJit = act.jitMarket !== undefined || (jitMarketHash !== undefined && jitMarketHash !== ZERO_JIT_MARKET_HASH);
+    let poolFacts: RollPoolFacts | null = null;
+    if (cls.status === "active") {
+      const resolved = await getRpc(ctx, chainId);
+      if (resolved) {
+        try {
+          poolFacts = await readRollPools(resolved.client, { chainId, settler: act.settler, srcPoolId: act.srcPoolId, dstPoolId: act.dstPoolId, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+        } catch (err) {
+          warnings.push({ code: "chain_read_failed", message: `the settler's pool facts could not be read (${revertReason(err)}) — that both pools live on its pool manager, the order size's quantum and the deadline against the pool expiries are unchecked` });
+        }
+      }
+      if (poolFacts !== null) {
+        const broken = openRangeViolation(poolFacts, { srcCstToken: act.srcCstToken, dstCstToken: act.dstCstToken, orderSize, fillDeadline, ...(isJit ? { jit: { expiry: act.jitMarket !== undefined ? BigInt(act.jitMarket.expiryTimestamp) : null } } : {}) });
+        if (broken) return unavailable(chainId, "invalid_order_terms", `${broken.message} — settler ${act.settler} reverts ${broken.settlerError} when the order opens, so it can never fill`, ctx);
+      }
+    }
+    // The floors the holder signs are checked on EACH fill: on a partial-fill order a floor set
+    // for the whole order makes every smaller fill revert.
+    const minFill = poolFacts !== null ? sameCollateralMinFill(poolFacts, { minCaReceived: BigInt(act.minCaReceived ?? "0"), minSharesOut: BigInt(act.minSharesOut ?? "0") }) : null;
+    if (act.allowPartialFills && minFill !== null && poolFacts?.src.quantum != null && minFill > poolFacts.src.quantum) {
+      warnings.push({ code: "invalid_order_terms", message: `your floors apply to EACH fill: a fill below ${minFill} src cST returns less than minCaReceived or mints less than minSharesOut, and the clone reverts it (CorkRolloverContract__UnwindMintShortfall / UnwindDepositShortfall). On a partial-fill order, set the floors for the smallest fill you accept${minFill > orderSize ? ` — at ${minFill} no fill of this ${orderSize} order can clear them` : ""}` });
+    }
 
     // The accepted quote, held to the venue's rule with the order's final terms: an explicit term
     // that breaks it (a lower premium, a bigger size, another destination) is refused here.
@@ -862,6 +890,18 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         ...(cls.status === "active" ? { settlerKind: cls.kind, settlerGeneration: cls.generation.label } : {}),
         /** The JITMarketParams layout `rolloverParams.jitMarketHash` is (or must be) computed on — the settler generation's rollover wire. */
         ...(jitWire !== undefined ? { jitMarketWire: jitWire } : {}),
+        // The ranges the settler enforces on this order and its fills, from the settler's own pool
+        // manager; null when no RPC resolved or the reads failed (rollover-ranges.ts).
+        ranges:
+          poolFacts === null
+            ? null
+            : {
+                poolManager: poolFacts.poolManager,
+                quantum: poolFacts.src.quantum?.toString() ?? null,
+                fillDeadlineBefore: [poolFacts.src.expiry, poolFacts.dst?.expiry ?? (act.jitMarket !== undefined ? BigInt(act.jitMarket.expiryTimestamp) : null)].filter((e): e is bigint => e !== null).reduce<bigint | null>((m, e) => (m === null || e < m ? e : m), null)?.toString() ?? null,
+                fill: fillRange({ kind: cls.status === "active" && cls.kind === "PARTIAL" ? "partial" : act.allowUnderfill ? "exact-underfill" : "exact", orderSize, consumed: 0n, quantum: poolFacts.src.quantum, minClearingHolderFloors: minFill }),
+                scales: { quantum: "src cST shares, 18 decimals", fillDeadlineBefore: "unix seconds", fill: "src cST shares, 18 decimals", unitsTopic: UNITS_TOPIC_REFERENCE },
+              },
         typedData: { domain: built.domain, types: built.types, primaryType: built.primaryType, message: built.order },
         orderDigest: built.orderDigest,
         rolloverIntentHash: built.rolloverIntentHash,
