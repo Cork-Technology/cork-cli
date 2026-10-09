@@ -948,10 +948,23 @@ provenance of a prepared artifact is exact.
 
 ## Ask for a rollover price first: rollover RFQs
 
-A cPT holder who does not know what a roll is worth can ask for a price (venue RFQ v2, kind
-\`rollover\`). The requester is the party that signs the rollover order, so it is the cPT holder:
-the premium is what a cover holder pays THEM to roll the cover along. Every write is signed: build it with \`cork_prepare_orders\` \`rfq-write\`, sign the
-typed data, relay it with \`cork_submit\` (topic:"signing").
+Either party can ask what a roll is worth (venue RFQ v2, kind \`rollover\`): the venue does not
+check what the requester holds. The contracts fix only who signs and who fills: the cPT holder
+signs the rollover order and receives the premium; the source cST holder fills it and pays the
+premium. So there are two paths, and they differ in who opens the RFQ:
+
+- **(a) The cPT holder opens it** and accepts a quote by citing it (\`quoteRef\`) in the order it
+  signs. Steps 1 to 6 below.
+- **(b) The source cST holder opens it** — for example a Safe that cannot sign off-chain. A cPT
+  holder answers, then signs and rests an order that does NOT cite the RFQ, and the cST holder
+  fills it by its terms. See "Path (b)" after the steps.
+
+Every write is proven, by a signature or by an API key. A signature: build the body with
+\`cork_prepare_orders\` \`rfq-write\`, sign the typed data, and pass \`auth {method:'signature',
+signature}\`. An API key: pass \`auth {method:'apiKey'}\`; the key comes from \`CORK_RFQ_API_KEY\` or
+\`ch auth set-key\`, never from the input. The hosted HTTP MCP refuses API-key writes (the server's
+keys are its operator's), so API-key writes run on a local \`ch\` or a local \`ch mcp\`. Relay
+with \`cork_submit\` (topic:"signing").
 
 1. **Ask.** \`cork_submit\` \`rfq-open\` with \`kind: "rollover"\`, \`source {poolId, shares}\` (the
    pool your position is in, and how many shares; the pool must exist and not be expired) and
@@ -981,6 +994,26 @@ typed data, relay it with \`cork_submit\` (topic:"signing").
    \`orderDigest\`. It returns unsigned \`BaseFiller.execute\` calldata and the two allowances
    BaseFiller pulls against (source cST and premium token). The destination cST and every refund
    go to the caller: the job carries no recipient.
+
+**Path (b): the cST holder opens the RFQ.** Agreed on 2026-10-09 for cST holders that cannot
+sign off-chain.
+
+1. **Ask.** The cST holder opens the rollover RFQ with \`auth {method:'apiKey'}\` (same fields
+   as step 1), and counters with \`rfq-counter\` the same way. Its \`premiumToken\` names the
+   tokens it is ready to pay the premium in.
+2. **Quote and order.** A cPT holder answers with \`rfq-answer\`, then signs a \`rollover-intent\`
+   WITHOUT \`quoteRef\` and relays it with \`cork_submit\` \`rollover-order\`. The order cannot cite
+   this RFQ: \`quoteRef\` requires the order's user to be the requester, and here the requester is
+   the cST holder (cork-indexing-api#121).
+3. **Match.** The cST holder finds the order by its terms — source pool, destination, premium
+   token, \`minPremiumPerShare\` — with \`cork_query\` \`rollover-orders\`. \`filters.rfqId\` does not
+   find it: that filter lists only orders that cite the RFQ.
+4. **Fill.** \`rollover-fill\` as in step 6, on OPEN orders only: an order that names an
+   \`exclusiveFiller\` needs a \`FillerAuth\` signature, which a wallet that cannot sign off-chain
+   cannot produce.
+
+Nothing on chain or on the venue records that this fill answered the RFQ; the venue gap is
+cork-indexing-api#121.
 
 ## Two standing facts (2026-09-22)
 

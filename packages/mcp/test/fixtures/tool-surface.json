@@ -4079,7 +4079,7 @@
                                 "description": "any of these premium tokens, each named once"
                               }
                             ],
-                            "description": "rollover only, required there: the token(s) you accept the rollover premium in — every quote and counter must name one of them"
+                            "description": "rollover only, required there: the token(s) the rollover premium may be paid in (you receive it when you hold the cPT, you pay it when you hold the cover) — every quote and counter must name one of them"
                           }
                         },
                         "required": [
@@ -5865,7 +5865,7 @@
                         "description": "any of these premium tokens, each named once"
                       }
                     ],
-                    "description": "rollover only, required there: the token(s) you accept the rollover premium in — every quote and counter must name one of them"
+                    "description": "rollover only, required there: the token(s) the rollover premium may be paid in (you receive it when you hold the cPT, you pay it when you hold the cover) — every quote and counter must name one of them"
                   },
                   "auth": {
                     "oneOf": [

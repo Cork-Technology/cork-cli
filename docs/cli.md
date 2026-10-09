@@ -559,8 +559,11 @@ mode authorizes the venue write; this tool still checks quoted order signatures 
 Sign the body returned by `rfq-write`, not a separately assembled body. Reuse the same
 `clientRequestId` for a retry of the same intent; a changed body needs a fresh id.
 
-A rollover takes two parties. The cPT holder opens the rollover RFQ, signs the order and receives
-the premium. The source cST holder answers, fills with `rollover-fill` and pays the premium.
+A rollover takes two parties. The cPT holder signs the order and receives the premium. The
+source cST holder fills with `rollover-fill` and pays the premium. Either party can open the
+rollover RFQ: when the cPT holder opens it, its order cites the quote with `quoteRef`; when the
+cST holder opens it (with `auth {method:"apiKey"}`), the cPT holder answers and rests an order
+that cannot cite it, and the cST holder fills that order by its terms (cork-indexing-api#121).
 A rollover RFQ uses `source { poolId, shares }` and `premiumToken`, not new-position
 modes/packageIds/notionalAssets. Options name an existing destination pool or a just-in-time
 market; prices are raw premium-token units per 1e18 destination shares. `rollover-intent`

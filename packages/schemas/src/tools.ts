@@ -471,7 +471,7 @@ const RfqOpenFields = {
       z.strictObject({ one_of: z.array(Address).min(1).max(8) }).describe("any of these premium tokens, each named once"),
     ])
     .optional()
-    .describe("rollover only, required there: the token(s) you accept the rollover premium in — every quote and counter must name one of them"),
+    .describe("rollover only, required there: the token(s) the rollover premium may be paid in (you receive it when you hold the cPT, you pay it when you hold the cover) — every quote and counter must name one of them"),
 };
 const RfqAnswerFields = {
   rfqId: z.string().min(1),

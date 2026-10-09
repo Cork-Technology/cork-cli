@@ -151,9 +151,11 @@ describe("docs freshness: docs/cli.md's staging config.json example parses and m
 
 // ── Rollover roles ─────────────────────────────────────────────────────────────────────────────
 // A rollover takes two parties, and the contracts fix who is who. The cPT holder owns the clone,
-// signs the order and is paid the premium; the RFQ requester is that signer (quoteRef holds the
-// order's user to the requester). The source cST holder fills through BaseFiller: brings the
-// source cST, pays the premium, receives the destination cST. The 0.7.0-rc.2 docs named the cST
+// signs the order and is paid the premium. The source cST holder fills through BaseFiller: brings
+// the source cST, pays the premium, receives the destination cST. Who ASKS is not a role: the
+// venue lets either party open, answer or counter a rollover RFQ (2026-10-09; a cover holder that
+// opens one fills an order that cannot cite it, cork-indexing-api#121), so asking, requesting and
+// opening an RFQ are judged against nobody. The 0.7.0-rc.2 docs named the cST
 // holder as the signer and the requester in four places, and claimed the tool could not build
 // the fill months after `rollover-fill` shipped. Prose has no type checker, so this block reads
 // the roles from the schemas, then holds every prose surface to them clause by clause.
@@ -203,13 +205,10 @@ const clauses = (text: string): string[] => sentences(text).flat();
 /** Objects that are not the order: what a filler signs on the way to a fill. */
 const NOT_THE_ORDER = /\b(transactions?|tx|approv\w*|permits?|FillerAuth|calldata)\b|\bthe fill\b/i;
 
-/** What only the order's SIGNER does: sign the order, ask for the price, receive the premium. */
+/** What only the order's SIGNER does: sign the order, receive the premium. Asking for a price is
+ *  not here: either party may ask. */
 function signerAct(c: string): boolean {
   if (/\bsigns?\b|\bsigned\b(?! by)/.test(c) && !NOT_THE_ORDER.test(c)) return true;
-  if (/\b(asks?|asked|requests?|requested) for (a |the )?(price|quote)\b/i.test(c)) return true;
-  if (/\brequests? (a |the )?(price|quote)\b/i.test(c)) return true;
-  if (/\brequesters?\b/i.test(c)) return true;
-  if (/\bopens? (a |an |the )?(rollover )?(RFQ|request for quote)\b|\brfq-open\b/i.test(c)) return true;
   if (/\b(receives?|collects?|gets?|earns?|is paid) the premium\b/i.test(c)) return true;
   // Naming the intent as the party's own instrument ("rolls cover with a rollover-intent").
   return /\brollover-intent\b/.test(c) && !fillerAct(c);
@@ -239,7 +238,7 @@ const NO_ACTOR = /^no\b/i;
 
 /** A passive puts its agent in a role directly: "the order is signed by a cST holder". */
 function passiveViolation(c: string): boolean {
-  if (/\b(signed|requested|opened) by (the |a |an )?(source )?cST holders?\b/.test(c) && !NOT_THE_ORDER.test(c)) return true;
+  if (/\bsigned by (the |a |an )?(source )?cST holders?\b/.test(c) && !NOT_THE_ORDER.test(c)) return true;
   if (/\bpremium\b.*\b(paid|goes) to (the |a |an )?(source )?cST holders?\b/.test(c)) return true;
   return /\b(filled|paid) by (the |a |an )?(source )?cPT holders?\b/.test(c);
 }
@@ -275,7 +274,7 @@ const ROLE_SURFACES: Array<[string, string]> = [
   ...REGISTRY.map((t): [string, string] => [`schema:${t.name}`, JSON.stringify(inputJsonSchema(t.name))]),
 ];
 
-describe("docs freshness: rollover roles — the cPT holder signs and asks, the cST holder fills", () => {
+describe("docs freshness: rollover roles — the cPT holder signs, the cST holder fills, either may ask", () => {
   // Read from the ADVERTISED contract (the JSON Schema every MCP client and `--explain` see), so
   // the roles are anchored to what an agent is told, not to zod's internal object shape.
   type JsonNode = { description?: string; properties?: Record<string, JsonNode>; oneOf?: JsonNode[]; const?: string };
@@ -300,15 +299,14 @@ describe("docs freshness: rollover roles — the cPT holder signs and asks, the 
     // The fill's caller brings the source cST and pays the premium; the signature it carries is the cPT holder's.
     expect(fill.description).toMatch(/you bring the SOURCE cST, pay the premium/);
     expect(descriptionAt(fill, "signedOrder", "signature")).toMatch(/^the cPT holder's signature/);
-    // The rollover RFQ's requester is the one paid: it names the tokens it accepts the premium in.
-    expect(descriptionAt(open, "premiumToken")).toMatch(/the token\(s\) you accept the rollover premium in/);
+    // Either party may open the rollover RFQ, so its premium token is named for both sides.
+    expect(descriptionAt(open, "premiumToken")).toMatch(/you receive it when you hold the cPT, you pay it when you hold the cover/);
   });
 
   it("the detector flags each sentence the docs once shipped, and the symmetric mistake, and passes the corrected forms", () => {
     for (const wrong of [
       "a rollover-intent src→dst for a cST holder",
       "a cST holder rolling cover to a successor expiry signs a `rollover-intent`",
-      "A cST holder who does not know what a roll is worth can ask for a price",
       "A cST holder rolls cover with a `rollover-intent`.",
       "The cPT holder fills the order with `rollover-fill`.",
       "the cPT holder pays the premium",
@@ -322,8 +320,6 @@ describe("docs freshness: rollover roles — the cPT holder signs and asks, the 
       "The order is filled by the cPT holder.",
       "The premium is paid by the cPT holder.",
       "The premium goes to the cST holder.",
-      "The cST holder is the requester of a rollover RFQ.",
-      "The cST holder opens a rollover RFQ.",
       "The cST holder collects the premium.",
       "The cST holder signs it.", // strict on purpose: an unnamed object counts as the order
       "A cST holder who never fills orders signs the rollover order.", // the negation governs another verb
@@ -331,6 +327,11 @@ describe("docs freshness: rollover roles — the cPT holder signs and asks, the 
     for (const right of [
       "the cPT holder signs a rollover-intent src→dst and the source cST holder fills it with rollover-fill",
       "The cPT holder opens the rollover RFQ, signs the order and receives the premium.",
+      // Either party may ask (2026-10-09): a cover holder that opens the RFQ is no role violation.
+      "A cST holder who does not know what a roll is worth can ask for a price.",
+      "The cST holder is the requester of a rollover RFQ.",
+      "The cST holder opens a rollover RFQ with an API key and fills the order by its terms.",
+      "The rollover RFQ is opened by a cST holder.",
       "A source cST holder answers, fills with `rollover-fill` and pays the premium.",
       "The cST holder pays the premium to the cPT holder.", // the first-named holder is the subject
       // An aside is its own sentence: its subject does not leak into the main clause, and the

@@ -2256,11 +2256,12 @@ const CATALOG: Mutant[] = [
   // holder fills. Each mutant puts back one statement the 0.7.0-rc.2 docs shipped, or drops a
   // guard the detector needs; the docs-freshness suite must kill every one.
   {
-    // The migration topic's RFQ section names the cST holder as the requester again.
-    id: "docs-rollover-requester-cst",
+    // The migration topic's RFQ section names the cST holder as the order's signer. (Asking is no
+    // role since 2026-10-09: either party may open a rollover RFQ.)
+    id: "docs-rollover-signer-cst",
     file: "packages/schemas/src/doc-topics.ts",
-    find: "A cPT holder who does not know what a roll is worth can ask for a price",
-    replace: "A cST holder who does not know what a roll is worth can ask for a price",
+    find: "The contracts fix only who signs and who fills: the cPT holder",
+    replace: "The contracts fix only who signs and who fills: the cST holder",
     tests: [T.docsFreshness],
   },
   {
@@ -2275,8 +2276,8 @@ const CATALOG: Mutant[] = [
     // The symmetric error: the cPT holder is told to fill.
     id: "docs-rollover-cpt-fills",
     file: "docs/cli.md",
-    find: "The source cST holder answers, fills with `rollover-fill` and pays the premium.",
-    replace: "The source cPT holder answers, fills with `rollover-fill` and pays the premium.",
+    find: "source cST holder fills with `rollover-fill` and pays the premium.",
+    replace: "source cPT holder fills with `rollover-fill` and pays the premium.",
     tests: [T.docsFreshness],
   },
   {
