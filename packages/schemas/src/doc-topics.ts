@@ -147,6 +147,13 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     ],
   },
   {
+    family: "rollover filler safety",
+    envelope: "mixed",
+    contract:
+      "what protects the filler of a rollover order (cork_prepare_orders rollover-fill): BaseFiller pays only the caller, but the VALUE is decided in the holder's clone, by hooks the holder signed and attesters the holder chose — dst_floor_derived (info) says minDstPerSrc was derived from previewUnwindMint and previewDeposit with no tolerance (Phoenix converts both ways at exactly 1:1); dst_floor_underivable (unavailable, no bytes) says it was omitted and could not be derived, data.gap names why — pass it explicitly; no_dst_floor (info) says an explicit 0 removes the settler's mint-rate check; dst_floor_slack (info) says an explicit floor below the honest rate lets the hooks keep the difference; rollover_trust_custom (info) says the clone trusts attesters other than the factory defaults; rollover_trust_pending (info) says the holder queued a trust change; hook_not_vetted (info) names every intent hook the default attesters do not vouch for, a mid-roll hook first",
+    codes: ["dst_floor_derived", "dst_floor_underivable", "no_dst_floor", "dst_floor_slack", "rollover_trust_custom", "rollover_trust_pending", "hook_not_vetted"],
+  },
+  {
     family: "bundle guards",
     envelope: "ok",
     contract:
@@ -994,6 +1001,24 @@ with \`cork_submit\` (topic:"signing").
    \`orderDigest\`. It returns unsigned \`BaseFiller.execute\` calldata and the two allowances
    BaseFiller pulls against (source cST and premium token). The destination cST and every refund
    go to the caller: the job carries no recipient.
+
+   BaseFiller decides WHERE the value goes; the holder's clone decides HOW MUCH. The clone runs
+   hooks the holder signed, under attesters the holder chose (the trust-config timelock delay is
+   0 on both chains), and a mid-roll hook can keep the unwound collateral. The settler's only
+   check on value is \`minDstPerSrc\` (dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18),
+   else Settler__InsufficientMintRate). Phoenix deposits and unwinds at exactly 1:1, so an honest
+   same-collateral roll mints one dst cST per src cST. Omit \`minDstPerSrc\` and the tool derives
+   that rate from \`previewUnwindMint\` on the source pool and \`previewDeposit\` on the
+   destination, with no tolerance (\`dst_floor_derived\`, \`data.dstFloor\`; a just-in-time
+   destination is priced on the source pool when both share a pool manager and a collateral).
+   When it cannot (no RPC, different collaterals, a destination no live pool can price) it
+   refuses \`dst_floor_underivable\` with \`data.gap\`, and you pass it. An explicit 0 warns
+   \`no_dst_floor\`, a floor below the honest rate \`dst_floor_slack\`. \`data.trust\` compares the
+   clone's attesters with the factory defaults (\`rollover_trust_custom\`), reports a queued
+   change (\`rollover_trust_pending\`) and checks every hook against the defaults for its phase
+   (\`hook_not_vetted\`). A session-key policy that pins only (BaseFiller, execute) routes the
+   value safely but cannot enforce the floor: the wallet must set or keep it. Simulate before you
+   sign; BaseFiller refunds the unspent premium cap.
 
 **Path (b): the cST holder opens the RFQ.** Agreed on 2026-10-09 for cST holders that cannot
 sign off-chain.

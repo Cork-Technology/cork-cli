@@ -3168,8 +3168,7 @@
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "minDstPerSrc": {
-                    "default": "0",
-                    "description": "floor on dst cST per src cST, 1e18 = 1.0 (the settler checks dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18)); 0 = no floor",
+                    "description": "floor on dst cST per src cST, 1e18 = 1.0 (the settler checks dstProduced >= floor(srcConsumed × minDstPerSrc / 1e18) and reverts Settler__InsufficientMintRate below it). This is the filler's ONLY protection on value: the holder's clone runs hooks the holder signed under attesters the holder chose, and a mid-roll hook can keep the unwound collateral. Omitted = derived from previewUnwindMint on the source pool and previewDeposit on the destination with no tolerance, since Phoenix converts both ways at exactly 1:1 (dst_floor_derived); no derivation (no RPC, a destination no live pool can price, different collaterals) refuses dst_floor_underivable. 0 = no floor (no_dst_floor); below the honest rate = slack the hooks can keep (dst_floor_slack). A session-key policy that pins only (BaseFiller, execute) cannot enforce it — the wallet must set or keep it",
                     "x-units": "D18{1}",
                     "$ref": "#/$defs/UintStr"
                   },
@@ -3289,7 +3288,7 @@
                   "orderDigest"
                 ],
                 "additionalProperties": false,
-                "description": "unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; simulate before signing"
+                "description": "unsigned BaseFiller.execute (or executeWithMarket) calldata that FILLS a resting rollover order as its counterparty: you bring the SOURCE cST, pay the premium (both pulled by BaseFiller against your allowances to it), and receive the DESTINATION cST minted in the holder's clone — approvals, the digest recomputation, the settler's status, deadlines, exclusivity and the JIT commitment are pre-flighted; the minDstPerSrc floor is derived from the pools' previews when omitted, and the clone's attesters and every hook are checked against the factory's default attesters (data.trust); simulate before signing"
               },
               {
                 "type": "object",

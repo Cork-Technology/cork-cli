@@ -84,6 +84,23 @@ const migrationPoolOf = (chainId: number, address: string, poolId: unknown) => {
   const m = MIGRATION_POOLS[poolId.toLowerCase() === MIGRATION_OLD_POOL ? MIGRATION_OLD_POOL : poolId.toLowerCase() === MIGRATION_NEW_POOL ? MIGRATION_NEW_POOL : ""];
   return m && m.pm.toLowerCase() === address.toLowerCase() ? m : undefined;
 };
+/** The resting roll order's two pools (rollover-fill task), on the 42161 primary's pool manager
+ *  ONLY: the source pool's cST is SUSDE, the destination's VBUSDC (the fixture order's own token
+ *  fields), both on MARKET's collateral, SUSDE (18 decimals) — so the previews below are Phoenix's
+ *  1:1 conversion and the fill derives the honest floor 1e18. */
+const ROLL_POOLS: Record<string, string> = { [`0x${"11".repeat(32)}`]: SUSDE, [`0x${"22".repeat(32)}`]: VBUSDC };
+const rollPoolOf = (chainId: number, address: string, poolId: unknown) =>
+  chainId === 42161 && typeof poolId === "string" && address.toLowerCase() === primaryPhoenix(42161)!.poolManager.toLowerCase() ? ROLL_POOLS[poolId.toLowerCase()] : undefined;
+/** The rollover trust surface as it reads live (2026-10-09, both chains): the factory's one
+ *  default attester at threshold 1, the Rhinestone ERC-7484 registry, the trust-config timelock
+ *  with delay 0, and the fixture clone trusting exactly the defaults with nothing queued. */
+const ROLL_DEFAULT_ATTESTER = "0x3BbA97CDCb1593A16Fba8E7AE79a424386F3a600";
+const ROLL_REGISTRY = "0x000000000069E2a187AEFFb852bF3cCdC95151B2";
+const ROLL_TRUST_TIMELOCK = "0x81954908bA5EB09caa9B39b3dD732fdDcbB32Dd7";
+/** Every stubbed token's decimals: VBUSDC is a 6-decimal token, the rest 18. */
+const tokenDecimals = (address: string) => (address.toLowerCase() === VBUSDC.toLowerCase() ? 6 : 18);
+const isRollFactory = (address: string) => ROLLOVERS_42161.some((g) => g.factory.toLowerCase() === address.toLowerCase());
+const reverted = (why: string) => Object.assign(new Error(`execution reverted: ${why}`), { shortMessage: `execution reverted: ${why}` });
 export const LIQUIDITY_RECIPE = MR_42161.recipes!.liquidity!;
 export const IMPAIRMENT_RECIPE = MR_42161.recipes!.impairment!;
 export const FIXED_RECIPE = MR_42161.recipes!.fixed!;
@@ -115,11 +132,13 @@ function readContract(args: { address: string; functionName: string; args?: unkn
   // unresolvable (observed 2026-08-17: it honestly refused to guess between three identical
   // chains). Registry/recipe reads are functionName-keyed and stay chain-agnostic.
   const migration = migrationPoolOf(chainId, args.address, poolId);
+  const rollCst = rollPoolOf(chainId, args.address, poolId);
   const known = ((typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase()) && chainId === 1) || migration !== undefined;
   switch (args.functionName) {
     case "market":
       // A 10-field manager answers the widened tuple (fees inside the identity).
       if (migration) return migration.wire === "10-field" ? { ...MARKET, swapFeePercentage: WAD, unwindSwapFeePercentage: WAD } : MARKET;
+      if (rollCst) return { ...MARKET, swapFeePercentage: 0n, unwindSwapFeePercentage: 0n };
       return known ? MARKET : { ...MARKET, collateralAsset: "0x0000000000000000000000000000000000000000", referenceAsset: "0x0000000000000000000000000000000000000000", rateOracle: "0x0000000000000000000000000000000000000000", expiryTimestamp: 0n };
     case "constraints":
       return [800_000_000_000_000_000n, NOW - 86_400n, 7_000_000_000_000_000n];
@@ -136,6 +155,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // creation SIMULATION below (observed 2026-08-27: an agent that probed derive-cork-pool
       // was told the pool already existed and graded down for believing it).
       if (migration) return [migration.cpt, migration.cst];
+      if (rollCst) return [CPT, rollCst];
       return known ? [CPT, CST] : ["0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"];
     case "rate":
       // A FixedRateOracle answers the rate it was deployed at; every pair oracle answers 0.8.
@@ -146,7 +166,7 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // to answer it).
       throw new Error('execution reverted: the contract function "lostAssets" reverted');
     case "decimals":
-      return args.address.toLowerCase() === VBUSDC.toLowerCase() ? 6 : 18;
+      return tokenDecimals(args.address);
     case "issuedAt":
       return NOW - 604_800n;
     case "balanceOf": {
@@ -161,6 +181,36 @@ function readContract(args: { address: string; functionName: string; args?: unkn
       // as not-ready). Every other (owner, spender) answers 0 — the confirmed-missing fixture
       // the approval_missing tasks grade.
       return String(args.args?.[0]).toLowerCase() === RESTING_MAKER.address.toLowerCase() ? 10n ** 24n : 0n;
+    // The roll's two previews, Phoenix's formula on an 18-decimal collateral (quantum 1): the
+    // unwind returns shares / 10^(18 − d), the deposit mints c × 10^(18 − d).
+    case "previewUnwindMint":
+    case "previewDeposit": {
+      if (!rollCst) throw reverted("NotInitialized()");
+      const quantum = 10n ** BigInt(18 - tokenDecimals(MARKET.collateralAsset));
+      const amount = BigInt(String(args.args?.[1]));
+      return args.functionName === "previewDeposit" ? amount * quantum : amount / quantum;
+    }
+    case "defaultAttesters":
+      if (!isRollFactory(args.address)) throw reverted("not a rollover factory");
+      return [ROLL_DEFAULT_ATTESTER];
+    case "DEFAULT_TRUST_THRESHOLD":
+      if (!isRollFactory(args.address)) throw reverted("not a rollover factory");
+      return 1;
+    case "trustConfigTimelock":
+      if (!isRollFactory(args.address)) throw reverted("not a rollover factory");
+      return ROLL_TRUST_TIMELOCK;
+    case "pendingTrustConfig":
+      if (!isRollFactory(args.address)) throw reverted("not a rollover factory");
+      return [0, [], 0n];
+    case "getMinDelay":
+      if (args.address.toLowerCase() !== ROLL_TRUST_TIMELOCK.toLowerCase()) throw reverted("not the trust-config timelock");
+      return 0n;
+    case "rolloverContractSnapshot":
+      if (![...ROLLOVER_CLONES.values()].some((c) => c.toLowerCase() === args.address.toLowerCase())) throw reverted(`${args.address} is not a rollover clone`);
+      return { erc7484Registry: ROLL_REGISTRY, liveTrustThreshold: 1, liveTrustAttesters: [ROLL_DEFAULT_ATTESTER] };
+    case "check":
+      // The fixture order runs no hooks, so no registry check is asked of it.
+      throw reverted("no attestation fixture");
     // The rollover factory + clone views the fill pre-flight reads, from ROLLOVER_CLONES alone.
     case "isDeployedRolloverContract":
       return [...ROLLOVER_CLONES.values()].some((c) => c.toLowerCase() === String(args.args?.[0]).toLowerCase());

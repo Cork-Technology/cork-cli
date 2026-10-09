@@ -762,6 +762,230 @@ const CATALOG: Mutant[] = [
     tests: [T.rolloverFill],
   },
   {
+    // The floor IS the previewed rate: Phoenix converts 1:1 with no fee, so a 1% tolerance is collateral a skimming hook keeps for free.
+    id: "rollover-fill-floor-tolerance-reintroduced",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "floor: (expectedDstCst * 10n ** 18n) / p.fillerSrcCst,",
+    replace: "floor: (expectedDstCst * 99n * 10n ** 16n) / p.fillerSrcCst,",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The floor follows the chain's previews, not an assumed 1:1 constant.
+    id: "rollover-fill-floor-constant-not-chain",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "floor: (expectedDstCst * 10n ** 18n) / p.fillerSrcCst,",
+    replace: "floor: 10n ** 18n,",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The rate is dst cST per src cST burned, not per collateral unit.
+    id: "rollover-fill-floor-rate-wrong-denominator",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "floor: (expectedDstCst * 10n ** 18n) / p.fillerSrcCst,",
+    replace: "floor: (expectedDstCst * 10n ** 18n) / collateralOut,",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A fill off the share quantum reverts at the settler (FillAmountNotQuantumAligned).
+    id: "rollover-fill-floor-quantum-check-dropped",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "    if (p.fillerSrcCst % quantum !== 0n) {",
+    replace: "    if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A source pool whose unwind answers 0 (paused or expired) is named as such.
+    id: "rollover-fill-floor-source-closed-ignored",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "    if (collateralOut === 0n) return gap(",
+    replace: "    if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A destination whose deposit answers 0 must never derive a floor of 0.
+    id: "rollover-fill-floor-destination-closed-ignored",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "    if (expectedDstCst === 0n) return gap(",
+    replace: "    if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Different collaterals convert inside a hook no preview prices — no derived floor.
+    id: "rollover-fill-floor-cross-collateral-dropped",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "      if (!isAddressEqual(dstMarket.collateralAsset, collateralAsset)) return gap(",
+    replace: "      if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The destination pool must mint the order's dst cST.
+    id: "rollover-fill-floor-dst-token-unchecked",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "      if (!isAddressEqual(dst.corkSwapToken, p.dstCstToken)) return gap(",
+    replace: "      if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A just-in-time destination on another collateral cannot be priced.
+    id: "rollover-fill-floor-jit-collateral-unchecked",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "      if (!isAddressEqual(p.jitDestination.collateralAsset, collateralAsset)) return gap(",
+    replace: "      if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A just-in-time destination is priced only by a live pool on its OWN pool manager.
+    id: "rollover-fill-floor-jit-manager-unchecked",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "      if (!isAddressEqual(p.jitDestination.poolManager, src.poolManager)) return gap(",
+    replace: "      if (false) return gap(",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Every pool-manager read throwing is a read failure, not an absent pool.
+    id: "rollover-fill-floor-read-failure-as-absent-pool",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  const readFailed = r.causes !== undefined && r.causes.length === r.asked.length && r.asked.length > 0;",
+    replace: "  const readFailed = false;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A stated floor is the caller's decision; the derived one never replaces it.
+    id: "rollover-fill-floor-derived-overrides-explicit",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (explicit !== undefined) return { ok: true, floor: { value: explicit, source: \"explicit\" } };\n  if (derived?.ok) return { ok: true, floor: { value: derived.floor, source: \"derived\" } };",
+    replace: "  if (derived?.ok) return { ok: true, floor: { value: derived.floor, source: \"derived\" } };\n  if (explicit !== undefined) return { ok: true, floor: { value: explicit, source: \"explicit\" } };",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An omitted floor that cannot be derived builds no bytes — never a silent 0.
+    id: "rollover-fill-floor-underivable-signs-zero",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  const why = derived === null ?",
+    replace: "  if (derived !== null || derived === null) return { ok: true, floor: { value: 0n, source: \"derived\" } };\n  const why = derived === null ?",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A fill the settler refuses is refused whatever floor the caller states.
+    id: "rollover-fill-floor-fill-refusal-only-when-omitted",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (derived !== null && !derived.ok && derived.gap === \"fill-refused\") return",
+    replace: "  if (explicit === undefined && derived !== null && !derived.ok && derived.gap === \"fill-refused\") return",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An explicit 0 says what it gives up.
+    id: "rollover-fill-floor-zero-unwarned",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (floor.value === 0n) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A stated floor below the honest rate names the collateral the hooks can keep.
+    id: "rollover-fill-floor-slack-unwarned",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (floor.value < honest.floor) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Slack is measured the settler's way, on the src cST consumed.
+    id: "rollover-fill-floor-slack-measured-on-shares",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "    const accepted = (honest.srcBurned * floor.value) / 10n ** 18n;",
+    replace: "    const accepted = (honest.expectedDstCst * floor.value) / 10n ** 18n;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A stated floor equal to the honest rate is quiet; only one above it reverts.
+    id: "rollover-fill-floor-equal-floor-warns",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (floor.value > honest.floor) {",
+    replace: "  if (floor.value >= honest.floor) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The bytes carry the chosen floor.
+    id: "rollover-fill-floor-not-signed",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "  const minDstPerSrc = floor.value;",
+    replace: "  const minDstPerSrc = explicitFloor ?? 0n;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A just-in-time fill passes its destination so the floor can be priced.
+    id: "rollover-fill-floor-jit-destination-not-passed",
+    file: "packages/core/src/handlers/prepare-rollover-fill.ts",
+    find: "...(jitDestination !== undefined ? { jitDestination } : {}), ",
+    replace: "",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A clone that trusts other attesters than the defaults is named.
+    id: "rollover-fill-trust-compare-dropped",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "cloneMatchesDefaults: defaults.threshold === clone.threshold && sameSet(defaults.attesters, clone.attesters)",
+    replace: "cloneMatchesDefaults: true",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Hooks are checked against the DEFAULT attesters, never the clone's own (a holder passes its own check).
+    id: "rollover-fill-hooks-checked-against-clone-trust",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "args: [e.target, HOOK_MODULE_TYPES[e.phase], defaults.attesters, BigInt(defaults.threshold)]",
+    replace: "args: [e.target, HOOK_MODULE_TYPES[e.phase], clone.attesters, BigInt(clone.threshold)]",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The mid phase is module type 6 (pre 5, post 7, premium 8).
+    id: "rollover-fill-hook-phase-type-swapped",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "export const HOOK_MODULE_TYPES = { pre: 5n, mid: 6n, post: 7n, premium: 8n } as const;",
+    replace: "export const HOOK_MODULE_TYPES = { pre: 5n, mid: 5n, post: 7n, premium: 8n } as const;",
+    tests: [T.rolloverFill],
+  },
+  {
+    // Only a revert is the registry's answer; any other failure is no verdict.
+    id: "rollover-fill-hook-no-verdict-as-unvetted",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "vettedByDefaults: isContractRevert(err) ? false : null",
+    replace: "vettedByDefaults: false",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A registry revert IS the verdict: the defaults do not vouch for the module.
+    id: "rollover-fill-hook-revert-as-no-verdict",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "vettedByDefaults: isContractRevert(err) ? false : null",
+    replace: "vettedByDefaults: null",
+    tests: [T.rolloverFill],
+  },
+  {
+    // An applied change (the queued set cleared) is not pending.
+    id: "rollover-fill-trust-pending-applied-shown",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  const pending = pAttesters.length > 0 ?",
+    replace: "  const pending = true ?",
+    tests: [T.rolloverFill],
+  },
+  {
+    // A queued trust change is named.
+    id: "rollover-fill-trust-pending-unwarned",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: "  if (t.pending !== null) {",
+    replace: "  if (false) {",
+    tests: [T.rolloverFill],
+  },
+  {
+    // The mid hook leads the warning: that is where the collateral can leave.
+    id: "rollover-fill-hook-warning-mid-not-first",
+    file: "packages/core/src/handlers/rollover-fill-safety.ts",
+    find: ".sort((a, b) => Number(b.phase === \"mid\") - Number(a.phase === \"mid\"))",
+    replace: "",
+    tests: [T.rolloverFill],
+  },
+  {
     // A settled/expired/cancelled order is terminal on chain (Settler__OrderInTerminalState).
     id: "rollover-fill-terminal-status-ignored",
     file: "packages/core/src/handlers/prepare-rollover-fill.ts",

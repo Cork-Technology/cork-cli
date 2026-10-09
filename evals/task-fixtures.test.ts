@@ -98,7 +98,9 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
     const env = await runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: "eval-rollfill-0001", action: { type: "rollover-fill", orderDigest: ROLL_FILL_DIGEST } }, stubContext());
     expect(env.state, JSON.stringify(env.warnings)).toBe(task.expect.state);
     const d = env.data as Record<string, unknown>;
-    expect(d).toMatchObject({ kind: "rollover-fill", orderDigest: ROLL_FILL_DIGEST, cloneVerified: true, holderSignature: "eoa-verified" });
+    expect(d).toMatchObject({ kind: "rollover-fill", orderDigest: ROLL_FILL_DIGEST, cloneVerified: true, holderSignature: "eoa-verified", minDstPerSrcSource: "derived", minDstPerSrc: "1000000000000000000" });
+    expect(d["dstFloor"]).toMatchObject({ honestRate: "1000000000000000000", expectedDstCst: (100n * 10n ** 18n).toString(), depositPreviewedOn: "destination" });
+    expect((d["trust"] as { cloneMatchesDefaults: boolean; changeDelaySeconds: string }).cloneMatchesDefaults).toBe(true);
     expect(String(d.destination).toLowerCase()).toBe(DEMO_ACCOUNT.toLowerCase());
     // No clone refusal and no other order-terms finding on the admitted path.
     expect(env.warnings.some((w) => w.code === "invalid_order_terms")).toBe(false);

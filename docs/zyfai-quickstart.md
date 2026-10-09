@@ -631,6 +631,15 @@ ch prepare order rollover-fill --chain-id 8453 --account <safe> --client-request
   full size unless it allows underfill; a partial order takes `--filler-src-cst` for a slice.
 - An order reserved for another filler needs that filler's signature, `--filler-auth-sig`. The
   result explains how to get it.
+- BaseFiller decides where the value goes; the user's clone decides how much. The clone runs the
+  hooks its owner signed, under attesters its owner chose, and a mid-roll hook can keep the
+  unwound collateral. `minDstPerSrc` is the settler's only check on value. Phoenix deposits and
+  unwinds at exactly 1:1, so omit it and `ch` derives the honest rate from the two pools'
+  previews, with no tolerance (`dst_floor_derived`); when it cannot, it refuses
+  `dst_floor_underivable` and you pass `--min-dst-per-src`. Never send 0. A session-key
+  policy that pins only (BaseFiller, execute) cannot enforce this floor, so your stack must keep
+  it. `data.trust` reports the clone's attesters and warns on any hook the default attesters do
+  not vouch for.
 - Simulate with `ch track simulate` before you sign. The tool builds no bytes for an order whose
   fill deadline passed, or one the settler reports as settled, expired or cancelled.
 

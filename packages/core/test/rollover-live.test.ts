@@ -20,9 +20,11 @@ import {
   ORDER_DATA_TYPEHASH,
   resolveRollover,
   resolveRpc,
+  runTool,
 } from "@cork/core";
 import { rolloverFactoryAbi } from "../src/rollover-fill.ts";
 import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
+import { deriveDstFloor, readRolloverTrust } from "../src/handlers/rollover-fill-safety.ts";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -229,5 +231,55 @@ describe.skipIf(!LIVE)("the settler's clone admission, mirrored — live (both c
       expect(Object.values(SETTLER_ERRORS)).not.toContain(own);
       expect(cloneAdmission(await facts(cloneOwner, KNOWN_CLONE), "live")).toEqual({ ok: true });
     }, 90_000);
+  }
+});
+
+// The rollover-fill safety reads (planning#83) against the deployed contracts: the trust ABIs
+// decode, the ERC-7484 check vets a module for its OWN phase only, and every deployed pool-manager
+// generation previews deposits and unwinds at exactly 1:1 — the premise of a floor with no
+// tolerance. The pool is found through the venue each run (unexpired, unpaused), so no pool id
+// in this file can expire under the test.
+describe.skipIf(!LIVE)("rollover-fill safety reads — live (both chains)", () => {
+  for (const chainId of [42161, 8453] as const) {
+    it(`chain ${chainId}: the clone's trust reads decode, and a standard module is vetted for its own phase only`, async () => {
+      const { rollover } = await resolveRollover(chainId);
+      const client = (await resolveRpc(chainId, undefined))!.client;
+      const modules = rollover!.modules!;
+      const pull = modules.ownerTokenPull!;
+      const post = modules.postRolloverDstCptTransfer!;
+      const t = await readRolloverTrust(client, { factory: rollover!.factory as `0x${string}`, clone: KNOWN_CLONE, hooks: { pre: [{ target: pull }], mid: [{ target: pull }], post: [{ target: post }], premium: [] } });
+      expect(t.defaults.attesters.length).toBeGreaterThan(0);
+      expect(t.defaults.threshold).toBeGreaterThan(0);
+      expect(t.changeDelaySeconds).toMatch(/^[0-9]+$/u);
+      expect(t.registry).toMatch(/^0x[0-9a-fA-F]{40}$/u);
+      expect(t.hooks).toEqual([
+        { phase: "pre", index: 0, target: pull, vettedByDefaults: true },
+        { phase: "mid", index: 0, target: pull, vettedByDefaults: false },
+        { phase: "post", index: 0, target: post, vettedByDefaults: true },
+      ]);
+      console.log(`chain ${chainId}: defaults [${t.defaults.attesters.join(",")}] threshold ${t.defaults.threshold}; trust-config delay ${t.changeDelaySeconds} s; known clone matches defaults: ${t.cloneMatchesDefaults}; pending: ${JSON.stringify(t.pending)}`);
+    }, 90_000);
+
+    it(`chain ${chainId}: every pool manager with a live pool previews 1:1, so the derived floor is exactly 1e18`, async () => {
+      const client = (await resolveRpc(chainId, undefined))!.client;
+      const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});
+      expect(env.state).toBe("ok");
+      const soon = new Date(Date.now() + 86_400_000).toISOString();
+      type Row = { poolId: `0x${string}`; poolManagerAddress: string; expiry: string; swapToken: { address: string }; isDepositPaused: boolean; isUnwindDepositPaused: boolean; collateralToken: { decimals: number } };
+      const rows = ((env.data as { items: Row[] }).items ?? []).filter((r) => r.expiry > soon && !r.isDepositPaused && !r.isUnwindDepositPaused);
+      const byManager = new Map<string, Row>();
+      for (const r of rows) if (!byManager.has(r.poolManagerAddress.toLowerCase())) byManager.set(r.poolManagerAddress.toLowerCase(), r);
+      expect(byManager.size, "no unexpired, unpaused pool on the venue for this chain").toBeGreaterThan(0);
+      for (const [pm, r] of byManager) {
+        const quantum = 10n ** BigInt(18 - r.collateralToken.decimals);
+        const size = quantum * 1_000_003n;
+        const cst = r.swapToken.address as `0x${string}`;
+        const d = await deriveDstFloor(client, { chainId, srcPoolId: r.poolId, dstPoolId: r.poolId, srcCstToken: cst, dstCstToken: cst, fillerSrcCst: size });
+        expect(d, `pool manager ${pm}, pool ${r.poolId}`).toMatchObject({ ok: true, floor: 10n ** 18n, srcBurned: size, quantum, collateralOut: 1_000_003n, expectedDstCst: size });
+        const off = await deriveDstFloor(client, { chainId, srcPoolId: r.poolId, dstPoolId: r.poolId, srcCstToken: cst, dstCstToken: cst, fillerSrcCst: size + 1n });
+        expect(off.ok ? "ok" : off.gap, `pool manager ${pm}`).toBe(quantum === 1n ? "ok" : "fill-refused");
+      }
+      console.log(`chain ${chainId}: 1:1 previews verified on ${[...byManager.keys()].join(", ")}`);
+    }, 120_000);
   }
 });

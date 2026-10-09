@@ -13,11 +13,14 @@
 // dispatcher (no cycle); the dispatcher calls it. Chain reads are best-effort disclosures except
 // where a verdict needs them (the digest recomputation is pure; the settler status, the clone
 // ownership and the allowances are read when an RPC resolves and disclosed as unverified when
-// none does — a fill is never REFUSED on a transport blip, only on a definitive answer).
+// none does — a fill is never REFUSED on a transport blip, only on a definitive answer). The one
+// exception is the price floor (rollover-fill-safety.ts): an omitted minDstPerSrc that cannot be
+// derived — no RPC, or a read that failed — builds no bytes, because the alternative signs a
+// fill the holder's hooks can empty.
 import { isAddressEqual, zeroAddress, zeroHash } from "viem";
 import { type ChainId, Envelope, executionEthTransaction, type PrepareOrdersInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { erc20Abi } from "../chain/abis.ts";
-import { resolveRollover } from "../config-remote.ts";
+import { resolveGenerations, resolveRollover } from "../config-remote.ts";
 import { getRolloverOrder } from "../datasources/venue.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, erc20ApproveTx } from "../order-approvals.ts";
 import { activeSettlersTeaching, classifyRolloverSettler, computeOrderDigest, hashJitMarketParams, type JitMarketParamsStruct, retiredSettlerTeaching, type RolloverGeneration, RolloverJitWireError } from "../rollover.ts";
@@ -26,6 +29,7 @@ import { checkContractMakerSignature, probeMakerCode, recoverEoaSigner } from ".
 import { type CloneAdmission, cloneAdmission, rolloverCloneAbi } from "./rollover-clone-admission.ts";
 import { chainStatusName, settlerStatusAbi } from "../rollover-verify.ts";
 import { resolveJitBytesInput } from "./jit.ts";
+import { chooseFloor, type DstFloor, deriveDstFloor, type FloorChoice, floorWarnings, type JitDestination, readRolloverTrust, type RolloverTrust, trustWarnings } from "./rollover-fill-safety.ts";
 import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTransportFailure, nowSecondsOf, revertReason, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 
 type RolloverFillAction = Extract<PrepareOrdersInput["action"], { type: "rollover-fill" }>;
@@ -197,7 +201,9 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   if (premiumCapEstimated) {
     amountNotices.push({ code: "premium_cap_estimated", message: `premiumCap defaulted to ${premiumEstimate} = ceil(fillerSrcCst × minPremiumPerShare / 1e18): exact when the destination pool mints one dst cST per src cST consumed; a destination pool minting MORE shares per collateral charges more (ceil(dstCstProduced × rate / 1e18)) and reverts Settler__PremiumExceedsCap above the cap — simulate, and raise the cap if the simulation names that error; BaseFiller refunds the unspent part either way` });
   }
-  const minDstPerSrc = BigInt(action.minDstPerSrc);
+  // minDstPerSrc has NO schema default: omitted, it is derived below from the two previews the
+  // clone's own path runs; a fill whose floor can be neither given nor derived builds no bytes.
+  const explicitFloor = action.minDstPerSrc !== undefined ? BigInt(action.minDstPerSrc) : undefined;
 
   // ── the JIT destination market the order committed to ──
   const committed = order.rolloverParams.jitMarketHash;
@@ -259,6 +265,10 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     { role: "taker", stage: "before-fill", holder: account, token: order.premiumToken, tokenRole: "premium token", spender: baseFiller, spenderRole: "Cork BaseFiller", mechanism: "erc20-approve", amount: premiumCap.toString(), kind: "cap", wallets: "eoa+contract", note: "BaseFiller pulls the whole premiumCap, pays the settler exactly ceil(dstCstProduced × minPremiumPerShare / 1e18), and refunds the rest to you in the same transaction", unsignedTx: erc20ApproveTx(order.premiumToken, baseFiller, premiumCap) },
   ];
   const balances: { srcCst?: string; premiumToken?: string } = {};
+  // derived stays null when no RPC resolved; floor is assigned on both branches below.
+  let derived: DstFloor | null = null;
+  let floor: FloorChoice;
+  let trust: RolloverTrust | null = null;
   // The HOLDER's signature over the order digest, verified the way the settler verifies it
   // (SignatureChecker.isValidSignatureNow(order.user, digest, sig)): ecrecover first, the
   // holder's own isValidSignature when it has code. A refuted signature builds no bytes — the
@@ -365,14 +375,48 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       });
     }
     approvals = await annotateApprovalStatus(resolved.client, { entries: approvals, nowSeconds: nowSecs, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    // A just-in-time destination does not exist yet: it is created on the rollover generation's
+    // pool manager, so the deposit rule is read there.
+    const jitPoolManager = jitParams !== undefined ? (await resolveGenerations(chainId)).generations.find((g) => g.label === generation.label)?.phoenix?.poolManager : undefined;
+    const jitDestination: JitDestination | undefined = jitParams !== undefined && jitPoolManager !== undefined ? { collateralAsset: jitParams.collateralAsset as `0x${string}`, poolManager: jitPoolManager as `0x${string}` } : undefined;
+    derived = await deriveDstFloor(resolved.client, { chainId, srcPoolId: order.rolloverParams.srcPoolId as `0x${string}`, dstPoolId: order.rolloverParams.dstPoolId as `0x${string}`, srcCstToken: order.srcCstToken, dstCstToken: order.dstCstToken, fillerSrcCst, ...(jitDestination !== undefined ? { jitDestination } : {}), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+    const choice = chooseFloor(explicitFloor, derived);
+    if (!choice.ok) {
+      return envelope({
+        state: "unavailable",
+        data: { orderDigest: localDigest, srcPoolId: order.rolloverParams.srcPoolId, dstPoolId: order.rolloverParams.dstPoolId, gap: choice.gap },
+        chainId,
+        source: "chain",
+        warnings: [...rpcWarn(resolved), { code: choice.code, message: choice.message }, ...warnings],
+        ...rpcProvenance(input.format, resolved),
+        ctx,
+      });
+    }
+    floor = choice.floor;
+    // Only an admitted clone (deployed and owned by the holder) has a trust configuration to read.
+    if (admission?.ok) {
+      try {
+        trust = await readRolloverTrust(resolved.client, { factory: generation.factory as `0x${string}`, clone: order.rolloverContract, hooks: { pre: intent.preRolloverHooks, mid: intent.midRolloverHooks, post: intent.postRolloverHooks, premium: intent.premiumHooks }, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+      } catch (err) {
+        warnings.push({ code: "chain_read_failed", message: `the clone's trust configuration could not be read (${revertReason(err)}) — the holder's attesters and hook attestations are unchecked; the minDstPerSrc floor is your protection either way` });
+      }
+    }
     warnings.push(...amountNotices);
     if (balances.srcCst !== undefined && BigInt(balances.srcCst) < fillerSrcCst) warnings.push({ code: "would_revert", message: `you hold ${balances.srcCst} of the src cST ${order.srcCstToken} but the fill pulls ${fillerSrcCst} — BaseFiller's transferFrom reverts; you need the SOURCE pool's cST (the cover being rolled), not the destination's` });
     if (balances.premiumToken !== undefined && BigInt(balances.premiumToken) < premiumCap) warnings.push({ code: "would_revert", message: `you hold ${balances.premiumToken} of the premium token ${order.premiumToken} but the fill pulls the whole cap ${premiumCap} up front (the surplus comes back in the same tx) — BaseFiller's transferFrom reverts` });
   } else {
+    const choice = chooseFloor(explicitFloor, null);
+    if (!choice.ok) return envelope({ state: "unavailable", data: { orderDigest: localDigest, gap: choice.gap }, chainId, source: "config", warnings: [{ code: choice.code, message: choice.message }, ...warnings], ctx });
+    floor = choice.floor;
     warnings.push(...amountNotices, { code: "funding_needs_rpc", message: "no RPC resolved — the settler status, the clone ownership, your balances and allowances were NOT read; the fill is built from the signed payload alone. Simulate and check the two BaseFiller allowances before signing" });
   }
   const approvalWarn = approvalMissingWarning(approvals, "before broadcasting this fill");
   if (approvalWarn) warnings.push(approvalWarn);
+
+  // ── the floor ──
+  const minDstPerSrc = floor.value;
+  warnings.push(...floorWarnings(floor, derived, { fillerSrcCst, premiumCap }));
+  if (trust !== null) warnings.push(...trustWarnings(trust, minDstPerSrc > 0n));
 
   // ── the bytes ──
   const jobArgs = { order, intent, userSig: signature, fillerSrcCst, premiumCap, minDstPerSrc, fillerAuthSig: action.fillerAuthSig ?? "0x" } as const;
@@ -410,6 +454,10 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       premiumCapEstimated,
       premiumAtOneToOne: premiumEstimate.toString(),
       minDstPerSrc: minDstPerSrc.toString(),
+      minDstPerSrcSource: floor.source,
+      // The honest roll the previews describe; null when no RPC resolved or the derivation stopped.
+      dstFloor: derived?.ok ? { honestRate: derived.floor.toString(), srcBurned: derived.srcBurned.toString(), quantum: derived.quantum.toString(), collateralOut: derived.collateralOut.toString(), collateralAsset: derived.collateralAsset, expectedDstCst: derived.expectedDstCst.toString(), depositPreviewedOn: derived.depositPreviewedOn } : null,
+      trust,
       destination: account,
       openDeadline: order.openDeadline.toString(),
       fillDeadline: order.fillDeadline.toString(),
@@ -429,6 +477,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
         premiumAtOneToOne: "base units of premiumToken (its own decimals)",
         minPremiumPerShare: "premiumToken base units per 1e18 dst cST shares",
         minDstPerSrc: "1e18 = 1.0 (WAD)",
+        dstFloor: "honestRate 1e18 = 1.0 (WAD); srcBurned, quantum and expectedDstCst are cST shares, 18 decimals; collateralOut is base units of collateralAsset (its own decimals)",
         approvalsAmount: "approvals[].amount is base units of that entry's own token",
         unitsTopic: UNITS_TOPIC_REFERENCE,
       },

@@ -570,6 +570,15 @@ market; prices are raw premium-token units per 1e18 destination shares. `rollove
 accepts `quoteRef` and checks the quoted terms; a reserved rollover fill may additionally
 need the exclusive filler's signature, distinct from the RFQ write authorization.
 
+The filler's protection on value is `minDstPerSrc`: BaseFiller pays only the caller, but the
+holder's clone decides how much it mints, under hooks and attesters the holder chose. Phoenix
+deposits and unwinds at exactly 1:1, so omitted, `rollover-fill` derives the honest rate from
+`previewUnwindMint` (source) and `previewDeposit` (destination) with no tolerance; when it
+cannot, it refuses `dst_floor_underivable` and you pass `--min-dst-per-src`. An explicit 0
+warns `no_dst_floor`, a floor below the honest rate `dst_floor_slack`. `data.trust` compares
+the clone's attesters with the factory defaults, reports a queued trust change, and checks every
+hook against the defaults.
+
 API keys are **optional**, never provisioned by installing or releasing this CLI. Use
 `ch auth set-key` with a hidden prompt or pipe, never argv. Stored keys are host-bound;
 environment/process keys apply to the configured venue. HTTP MCP refuses the operator's
