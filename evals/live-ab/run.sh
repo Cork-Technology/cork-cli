@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live A/B eval runner: headless `claude -p` sessions against a tree's REAL MCP server
-# (stdio, spawned per session). Complements the stubbed Layer B suite (evals/run.ts):
-# Layer B grades against a stub chain with an SDK loop; this harness grades the actual
+# (stdio, spawned per session). Complements the stubbed agent task evals (evals/run.ts):
+# The agent task evals grade against a stub chain with an SDK loop; this harness grades the actual
 # advertised wire surface end-to-end, and can point at TWO checkouts (e.g. a worktree at
 # an older commit) to A/B a schema change. See evals/live-ab/README.md.
 #

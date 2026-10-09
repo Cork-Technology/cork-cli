@@ -900,7 +900,7 @@ export function stubContext(): HandlerContext {
           // no real bytecode, so "0x" here would be a FALSE statement ("the adapter is an empty
           // account") that warns implementation_not_approved on every prepare and skews
           // grading. Throwing is the honest answer — unreadable — which the guard documents as
-          // silent degradation. The guard itself is covered by Layer A.
+          // silent degradation. The guard itself is covered by the mcp-surface checks.
           if (IMPLEMENTATION_ROLE_ADDRESSES.has(address)) throw new Error(`eval stub holds no bytecode for ${address}`);
           return "0x";
         },

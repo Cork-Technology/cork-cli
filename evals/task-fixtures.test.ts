@@ -3,12 +3,12 @@
 // no LLM. This is the deterministic half of a task: if it fails, the task would fail for every
 // agent regardless of competence (fixture rot, the class that silently turned two tasks red on
 // the 0.3.3 redeploy), and no LLM tokens should be spent discovering that. The LLM half (tool
-// selection, phrasing, unit translation) stays Layer B's. COVERAGE IS PARTIAL and grows with
+// selection, phrasing, unit translation) stays the agent task evals'. COVERAGE IS PARTIAL and grows with
 // the task set: the six rc.2 tasks, the five highest-value earlier tasks (real signed fill,
 // oracle deploy, rfq-open, rollover prepare, constraint resolve), the eight 2026-08-20
 // surface-gap tasks (auction, finalize, inline fill, simulate, the gated quote, the RFQ feed,
 // the fixed-rate oracle, the warnings topic) plus their two held-out siblings, the
-// venue-orderbook regression found by self-driven Layer B validation (2026-09-21), and a read
+// venue-orderbook regression found by self-driven agent task eval validation (2026-09-21), and a read
 // canary — extend this file when adding tasks whose outcome depends on stub fixtures.
 import { describe, expect, it } from "vitest";
 import { runTool } from "@cork/core";
@@ -403,7 +403,7 @@ describe("eval task fixtures reproduce their expected envelopes (offline, canoni
   it("venue-orderbook: the actual resting-order count matches what the task's answer regex accepts", async () => {
     // The regression this guards: the stub's orderbook fixture (RESTING_ROW) drifted from the
     // task's answer regex for five weeks — every honest agent that reported the real count was
-    // scored a miss (found 2026-09-21 via self-driven Layer B validation). Pin the two together
+    // scored a miss (found 2026-09-21 via self-driven agent task eval validation). Pin the two together
     // so a future fixture change that doesn't also update the task fails HERE, offline.
     const env = await runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { poolId: DEMO_POOL_ID } }, stubContext());
     expect(env.state).toBe("ok");

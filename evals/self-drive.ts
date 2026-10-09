@@ -1,4 +1,4 @@
-// Keyless Layer-B self-drive: an in-session agent plays each task's tool calls; execution,
+// Keyless agent task eval self-drive: an in-session agent plays each task's tool calls; execution,
 // trace semantics, and GRADING are the suite's own — runTool + stubContext + gradeTask — so a
 // failure here is a suite defect (unwinnable task, over-tight regex, wrong expectation), never
 // a harness approximation. NOT a model baseline: the sonnet gate exists so scores stay

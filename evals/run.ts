@@ -1,4 +1,4 @@
-// Layer-B agent evals: a fresh agent given ONLY the 9 MCP tool definitions must complete the
+// Agent task evals: a fresh agent given ONLY the 9 MCP tool definitions must complete the
 // tasks in evals/tasks.ts. The loop is a plain Anthropic-SDK agentic loop dispatching to the
 // in-process `runTool` with a stubbed chain (evals/stub.ts) — the LLM API is the only network.
 // Grading is programmatic over the tool-call trace: tool selection, variant/parameter accuracy,

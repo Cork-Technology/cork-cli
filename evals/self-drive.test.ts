@@ -2,7 +2,7 @@
 // play grades PASS through the suite's own execution and grader (runTool + stubContext +
 // gradeTask). Before this, a task could be unwinnable for every agent — an expectation nobody
 // can satisfy, an answer regex that rejects the true answer, a fixture that drifted — and the
-// only place it showed was a lower Layer-B score, read as a model weakness (the venue-orderbook
+// only place it showed was a lower agent task eval score, read as a model weakness (the venue-orderbook
 // regression sat there for five weeks). Now it fails here, offline, before any model tokens are
 // spent. This asserts coherence of the SUITE, not model performance: the plays are canonical
 // calls with ground-truth answers, not transcripts.

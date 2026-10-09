@@ -4,7 +4,9 @@ Two layers gate the tool surface, per Anthropic's tool-evaluation guidance: dete
 run in CI on every change; LLM agent evals run on demand when the surface (names, descriptions,
 schemas, examples) changes.
 
-## Layer A — deterministic, always-on (vitest)
+## MCP-surface checks — deterministic, always-on (vitest)
+
+(Formerly "Layer A".)
 
 | Check | Where |
 |---|---|
@@ -22,7 +24,7 @@ because "it's just wording" is precisely how semantic drift ships):
   (schema/tool `description`, server `instructions`) that preserves its sentence count.
   Regenerate the fixture; **no eval run required**.
 - **semantic** — anything else: keys added/removed, names, types, enums, patterns, `x-units`,
-  sentence counts, array sizes. Full workflow: run Layer B (include the held-out set,
+  sentence counts, array sizes. Full workflow: run the agent task evals (include the held-out set,
   `EVAL_HELD_OUT=1`), and if the numbers hold, regenerate.
 
 Ambiguity fails EXPENSIVE by construction (the sentence counter's approximations only ever
@@ -34,7 +36,9 @@ mutation-probed (`surface-tier-*`). To regenerate after either tier:
 UPDATE_SURFACE=1 bunx vitest run packages/mcp/test/surface-drift.test.ts
 ```
 
-## Layer B — LLM agent evals (`bun run eval`)
+## Agent task evals — LLM agents (`bun run eval`)
+
+(Formerly "Layer B".)
 
 A fresh agent is given ONLY the 9 tool definitions (as an MCP client would see them) and must
 complete realistic tasks. The loop is a plain Anthropic-SDK agentic loop (`evals/run.ts`)
@@ -156,12 +160,12 @@ environment.
 
 ### Keyless self-drive — validating the suite with no LLM credentials
 
-`evals/self-drive.ts` answers a different question than Layer B: not "how does an agent perform
+`evals/self-drive.ts` answers a different question than the agent task evals: not "how does an agent perform
 against this surface" but "is the suite itself coherent" — is every task actually winnable, do
 the answer regexes accept realistic prose, is every expectation reachable. Execution, trace
 semantics, and grading are the suite's own (`runTool` + `stubContext` + `gradeTask`), so a
 failure here is a suite defect, never a harness approximation. It is NOT a model baseline — the
-sonnet gate exists precisely so Layer B scores stay comparable across runs, and self-drive
+sonnet gate exists precisely so agent task eval scores stay comparable across runs, and self-drive
 doesn't touch that number.
 
 A human or agent plays every task's tool calls against a JSON spec (`{id, calls, finalText}`),
@@ -176,7 +180,7 @@ This caught a real regression on first use (2026-09-21): `venue-orderbook`'s ans
 expected an empty book five weeks after the `fill-resting-order` fixture gave the stub's
 orderbook one permanent resting order — every honestly-correct answer was scored a miss. Run
 this whenever `bun run eval` is unavailable and the task set has changed; it will not catch
-phrasing/tool-selection weaknesses a real model can have (that needs Layer B), but it will catch
+phrasing/tool-selection weaknesses a real model can have (that needs the agent task evals), but it will catch
 every unwinnable task before any LLM tokens are spent discovering one.
 
 **Built-in plays and the winnability gate (2026-09-02).** `evals/self-drive-plays.ts` holds ONE
@@ -185,7 +189,7 @@ constants (never hand-pasted hex), with a ground-truth final answer — and
 `evals/self-drive.test.ts` grades every one of them offline in the always-on suite. Two
 invariants: every task has a play (a new task without one fails the gate, so "not yet played"
 can never grow silently) and every play passes every graded axis within budget (an unwinnable
-task fails here, not as a Layer-B score). The same plays drive the CLI:
+task fails here, not as an agent task eval score). The same plays drive the CLI:
 
 ```sh
 CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts grade builtin    # the committed plays, 70/70
@@ -193,4 +197,4 @@ CORK_CONFIG_NO_FETCH=1 bun evals/self-drive.ts record builtin   # print the real
 ```
 
 A play is a canonical answer, not a transcript: it proves the suite is coherent and says nothing
-about how a model performs — Layer B keeps that number.
+about how a model performs — the agent task evals keep that number.

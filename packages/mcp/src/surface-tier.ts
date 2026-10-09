@@ -1,5 +1,5 @@
 // Tiered surface-change gating (2026-08-11): the drift gate used to demand a full
-// Layer-B eval run for ANY advertised-surface diff, pricing a typo fix the same as a tool
+// agent task eval run for ANY advertised-surface diff, pricing a typo fix the same as a tool
 // redesign — which quietly discourages fixing advertised doc-rot at all. The tier boundary is
 // MECHANICAL, never a judgment call ("it's just wording" is precisely how semantic drift ships):
 //
@@ -8,7 +8,7 @@
 //              that preserves the string's sentence count. Regenerate the fixture; no eval run.
 //   semantic — anything else: keys added or removed anywhere, any non-description value changed
 //              (names, types, enums, patterns, required, x-units, annotations), a description
-//              gaining or losing sentences, arrays changing length. Full workflow: Layer B
+//              gaining or losing sentences, arrays changing length. Full workflow: the agent task evals
 //              (held-out included, per the cadence), then regenerate.
 //
 // Ambiguity FAILS EXPENSIVE by construction: the sentence counter is a mechanical approximation

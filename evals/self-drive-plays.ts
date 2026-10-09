@@ -4,7 +4,7 @@
 // and `self-drive.test.ts` (the offline winnability gate — every task must have a play and every
 // play must grade PASS). A task without a play fails the gate: "not yet played" can never grow
 // silently again. These are NOT model transcripts; they assert that the suite is coherent, not
-// how a model performs (that is Layer B's number, and stays on the sonnet gate).
+// how a model performs (that is the agent task evals' number, and stays on the sonnet gate).
 import { runTool, ToolInputError } from "@cork/core";
 import { DEMO_ACCOUNT, DEMO_POOL_ID, DEMO_SIGNED_TX, TOOL_EXAMPLES } from "@cork/schemas";
 import type { TraceCall } from "./run.ts";

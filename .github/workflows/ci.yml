@@ -1,5 +1,5 @@
 # CI for the offline-deterministic gates. Network-gated suites (fork-parity,
-# bundle-sim, rpc-live) self-skip without their env vars; the agent-eval runner (Layer B)
+# bundle-sim, rpc-live) self-skip without their env vars; the agent task eval runner
 # self-skips without an Anthropic key — wire ANTHROPIC_API_KEY as a repo secret to enable it.
 # Never put RPC endpoints in this file: CORK_TEST_RPC/CORK_RPC_URL are environment-only.
 name: ci
@@ -101,7 +101,7 @@ jobs:
           CORK_RPC_LIVE: "1"
         run: bun scripts/test-gate.ts packages/cli/test/compiled-binding-live.test.ts
 
-  # Layer B agent evals: runs the trace-graded task set when credentials resolve;
+  # Agent task evals: runs the trace-graded task set when credentials resolve;
   # the runner prints a skip line and exits 0 otherwise, so forks/PRs without secrets stay green.
   # Preferred auth is Claude Platform on AWS via GitHub OIDC → SigV4 (no stored secret, nothing
   # to expire): set the CORK_EVALS_AWS_* repo VARIABLES below. ANTHROPIC_API_KEY stays as the
@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: test
-    # Only on main/release pushes — eval runs cost real tokens; PRs get Layer A.
+    # Only on main/release pushes — eval runs cost real tokens; PRs get the mcp-surface checks.
     if: github.event_name == 'push'
     permissions:
       contents: read

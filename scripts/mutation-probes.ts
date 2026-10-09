@@ -2492,7 +2492,7 @@ const CATALOG: Mutant[] = [
     tests: [T.evalAuth],
   },
   {
-    // The Layer-B config pin: an unpinned eval resolves config remote-first while the stub
+    // The agent task eval config pin: an unpinned eval resolves config remote-first while the stub
     // answers MARKET_REGISTRY() from the local cork-defaults.json — remote/bundled skew during
     // a registry-redeploy integration re-creates the 0.3.3 adapter_binding_mismatch eval rot.
     id: "eval-config-pin-dropped",

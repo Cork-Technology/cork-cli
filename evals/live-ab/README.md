@@ -1,6 +1,6 @@
 # live-ab — headless-agent A/B evals against the real MCP wire surface
 
-Complements the always-on stubbed suite (`evals/run.ts`, Layer B): that grades an SDK
+Complements the always-on stubbed suite (`evals/run.ts`, the agent task evals): that grades an SDK
 agent against a stub chain; **this** spawns real `claude -p` sessions against the actual
 stdio MCP server of one or two checkouts, so schema/description changes can be A/B'd on
 the surface clients actually see. First used 2026-07-21 to validate a schema revision
@@ -39,4 +39,4 @@ amounts fail), `inv` (invalid_input teaching errors seen), `c` (cork call count)
 Single runs are noisy (n=1 per cell): treat a flip as a lead, re-run the task 2–3×, and
 read the transcript before concluding — a 2026-07 run found one real schema defect
 (base-unit rescaling) and one model-tier artifact (round-number ×1000 drops) this way.
-Never tune descriptions against these tasks and the held-out Layer B set at once.
+Never tune descriptions against these tasks and the held-out agent task eval set at once.
