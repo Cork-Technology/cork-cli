@@ -16,14 +16,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # The mutation-probe step alone runs ~11-14 min at 254 probes (each probe re-runs the killer
-    # suite); 15 was outgrown 2026-08-19 and cancelled three green trees in a row.
-    # The mutation catalogue grew past what 25 minutes holds on the 2-vCPU runner (427 probes,
-    # ~24 min on 2026-09-03; 373 probes took 14 min on 2026-08-31). The step is deliberately
-    # serial per mutant; the bound is the guard against a hung run, not a budget.
-    # Raised to 90 on 2026-10-07: the catalogue (986 probes after the RFQ v2, API-key and
-    # keystore probes) ran past 60 minutes.
-    timeout-minutes: 90
+    # The mutation catalogue runs in its own job (`mutation`, below) since 2026-10-09, so this
+    # bound covers install, typecheck, the suite, the property harnesses and the package build.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -46,11 +41,6 @@ jobs:
           # Deterministic: never fetch cork-defaults.json from GitHub in CI.
           CORK_CONFIG_NO_FETCH: "1"
         run: bun run test:ci
-
-      - name: Mutation probes (bytes-critical logic — every catalogued mutant must be CAUGHT)
-        env:
-          CORK_CONFIG_NO_FETCH: "1"
-        run: bun run test:mutation
 
 
       # The npm dist layout has its own gate script (scripts/verify-package-layout.mjs) that was
@@ -159,3 +149,32 @@ jobs:
           # 0.96 permits 3. Re-derive it when the task count changes.
           EVAL_GATE_THRESHOLD: "0.96"
         run: bun run eval
+
+  # The mutation catalogue (bytes-critical logic — every catalogued mutant must be CAUGHT). It
+  # takes far longer than every other gate together (~80 min at 1100+ probes on the 2-vCPU
+  # runner), so since 2026-10-09 it runs in its own job, LAST: the suite, live smoke and agent
+  # evals report first, and a red early gate is visible an hour sooner. It waits for the other
+  # jobs and runs whatever their outcome (on a PR the push-only jobs are skipped), unless the
+  # offline suite failed or the run was cancelled. It still gates the workflow: a survivor, a
+  # rotted anchor or an inconclusive run fails ci.
+  mutation:
+    runs-on: ubuntu-latest
+    needs: [test, live-smoke, agent-evals]
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    # The step is deliberately serial per mutant; the bound is the guard against a hung run, not
+    # a budget. 15 min was outgrown 2026-08-19, 25 on 2026-09-03 (427 probes), 60 on 2026-10-07
+    # (986 probes); raised to 90 then.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Toolchain from mise.toml — the ONE place the Bun version is pinned.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Mutation probes (bytes-critical logic — every catalogued mutant must be CAUGHT)
+        env:
+          CORK_CONFIG_NO_FETCH: "1"
+        run: bun run test:mutation
