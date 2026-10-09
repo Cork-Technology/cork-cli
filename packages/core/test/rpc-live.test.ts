@@ -448,7 +448,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
   }, 90_000);
 });
 
-// Nested-wire parity (market-registry 0.5.0, the phoenix/v0.4-rc.1 PRIMARY on Arbitrum): the same
+// Nested-wire parity (market-registry 0.5.0, read through the phoenix/v0.5 PRIMARY on Arbitrum): the same
 // independent-reference discipline as the flat suite above, with the ABI re-declared HERE from the
 // Sourcify exact-match verification of the deployed registry 0xe1f5…55c5 (fetched 2026-10-01) —
 // `deploy` takes an oracleSalt, denominations are ADDRESS units, feeds carry no feedDecimals, and
@@ -487,7 +487,8 @@ describe.skipIf(!LIVE)("0.5.0 registry (nested wire, the primary) — live parit
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr, generation } = await resolveMarketRegistry(42161);
     expect(generation?.wire).toBe("nested"); // no generation passed = the PRIMARY, and the primary speaks the nested wire
-    expect(generation?.label).toBe("phoenix/v0.4-rc.1");
+    // phoenix/v0.5 since 2026-10-09; it shares the 0.5.0 registry with phoenix/v0.4-rc.1.
+    expect(generation?.label).toBe("phoenix/v0.5");
     const r = await resolveRpc(42161, undefined);
     expect(r).not.toBeNull();
     return { registry: mr!.registry as `0x${string}`, client: r!.client };
@@ -679,7 +680,8 @@ describe.skipIf(!LIVE)("cover readings — live parity vs raw reads (Base, the p
   const primaryBase = async () => {
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr, generation } = await resolveMarketRegistry(8453);
-    expect(generation?.label).toBe("phoenix/v0.4-rc.1");
+    // phoenix/v0.5 since 2026-10-09; it shares the 0.5.0 registry with phoenix/v0.4-rc.1.
+    expect(generation?.label).toBe("phoenix/v0.5");
     const r = await resolveRpc(8453, undefined);
     expect(r).not.toBeNull();
     return { registry: mr!.registry as `0x${string}`, recipes: mr!.recipes as Record<string, `0x${string}`>, client: r!.client };
