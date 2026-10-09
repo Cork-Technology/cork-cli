@@ -2805,12 +2805,14 @@ const CATALOG: Mutant[] = [
     // exact silent class the generation model exists to prevent. Since stage 2a BOTH wires are
     // implemented and the default binds the PRIMARY; a binding that quietly preferred the flat
     // set would emit flat bytes for a caller who asked for the primary's nested adapter. Killed
-    // by the nested suite (the primary's adapter, wire and generation are asserted).
+    // by the v05 suite: its "default (the primary)" case asserts the primary's adapter, wire and
+    // generation. The nested suite pins phoenix/v0.4-rc.1 by name since 2026-10-09, so it no
+    // longer exercises the default binding (this probe survived the 0.7.1-rc.1 full run).
     id: "registry-binding-implemented-wire-dropped",
     file: "packages/core/src/handlers/shared.ts",
     find: "  const label = aliased.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);",
     replace: '  const label = aliased.label ?? generations.find((g) => g.marketRegistry?.wire === "flat")?.label;\n  const r = await resolveMarketRegistry(chainId, undefined, label);',
-    tests: [T.nested],
+    tests: [T.v05, T.nested],
   },
   {
     // A named generation whose wire this build does not encode must REFUSE (phase_gated) —
