@@ -21,7 +21,7 @@
 // explained by the getCode result, which the classifier consults first.
 import { erc20Abi, permit2AllowanceAbi } from "../chain/abis.ts";
 import { decodeExtensionFields, decodeMakerTraits, type LopOrder } from "../orders.ts";
-import type { MarketRegistryWire, ResolvedGeneration } from "../generations.ts";
+import type { ResolvedGeneration } from "../generations.ts";
 import { decodeJitExtensionFor } from "../jit-extension.ts";
 import { PERMIT2_ADDRESS } from "../order-approvals.ts";
 import type { MakerCodeProbe } from "./order-auth.ts";
@@ -42,10 +42,6 @@ export interface MakerJitContext {
   predictedCorkSwapToken: `0x${string}` | null;
   /** Every token an embedded ERC-2612 permit covers (the adapter executes them post-mint). */
   permitTokens: `0x${string}`[];
-  /** The adapter's registry wire. On `nested` (adapter 0.5.0+) the embedded permit carries bytes
-   *  the share token checks with ERC-1271 for a contract owner, so a contract maker can sign it;
-   *  `flat` and `legacy` take ECDSA v/r/s only. */
-  wire: MarketRegistryWire;
 }
 
 export interface MakerExtensionContext {
@@ -74,7 +70,6 @@ export function decodeMakerExtensionContext(generations: readonly ResolvedGenera
         enableJitMint: Boolean(dec.params.enableJitMint),
         predictedCorkSwapToken: dec.permits[0]?.token ?? null,
         permitTokens: dec.permits.map((p: { token: `0x${string}` }) => p.token),
-        wire: dec.wire,
       };
     }
   } catch {
@@ -197,7 +192,7 @@ export async function gatherMakerReadinessFacts(client: ReadinessClient, t: Make
 export type MakerNotReadyCode =
   | "silent-noop" // code-less makerAsset NO hook creates: the maker transfer "succeeds" moving nothing — the taker pays for nothing
   | "unborn-cst-no-permit" // JIT creates the makerAsset but no embedded permit covers it — the LOP cannot pull the minted cST
-  | "contract-maker-unborn-cst" // the incident class: permit present but the maker is a contract, and the adapter's permit is ECDSA-only (flat/legacy wire)
+  | "contract-maker-unborn-cst" // the incident class: permit present but the maker is a contract, and ERC-2612 is ECDSA-only
   | "allowance-missing"
   | "allowance-insufficient"
   | "balance-empty"
@@ -251,10 +246,6 @@ export function assessMakerReadiness(a: MakerReadinessInput): MakerReadiness {
   // (no permit to infer from): the no-permit rule below then fires assumption-free anyway.
   const jitCoversMakerAsset = jit !== null && (jit.predictedCorkSwapToken === null || lc(jit.predictedCorkSwapToken) === lc(a.makerAsset));
   const permitsCoverMakerAsset = jit !== null && jit.permitTokens.some((t) => lc(t) === lc(a.makerAsset));
-  // Can the maker have signed the JIT-embedded permit? On the nested wire the permit carries
-  // bytes the share token checks with ERC-1271 for a contract, so any maker can; elsewhere it
-  // needs ECDSA.
-  const makerCanSignJitPermit = jit?.wire === "nested" ? true : f.makerCanSignEcdsa;
 
   if (f.makerAssetCode === "no-rpc" || f.makerAssetCode === "read-failed") {
     // The token-side legs all hang on this read; a transport failure is never a verdict.
@@ -270,12 +261,12 @@ export function assessMakerReadiness(a: MakerReadinessInput): MakerReadiness {
         code: "unborn-cst-no-permit", structural: true,
         message: `the makerAsset ${a.makerAsset} has no code yet (the JIT hook creates it during the fill), and the extension embeds NO ERC-2612 permit covering it — an allowance cannot exist on a code-less token, so the LOP has no way to pull the minted cST and every fill reverts TransferFromMakerToTakerFailed. The maker's fix (no re-sign needed): create the pool ahead of the fill (cork_prepare_market create-pool) and approve the then-existing cST to the LOP`,
       });
-    } else if (makerCanSignJitPermit === false) {
+    } else if (f.makerCanSignEcdsa === false) {
       reasons.push({
         code: "contract-maker-unborn-cst", structural: true,
-        message: `the maker is a CONTRACT account and the makerAsset ${a.makerAsset} has no code yet — this adapter's embedded ERC-2612 permit is ECDSA-only (v/r/s; only the nested-wire adapter 0.5.0+ takes an ERC-1271 signature), so no valid permit by this maker can exist and a standing allowance cannot exist on a code-less token: every fill reverts TransferFromMakerToTakerFailed. The maker's fix (no re-sign needed): cork_prepare_market create-pool, then approve the cST to the LOP`,
+        message: `the maker is a CONTRACT account and the makerAsset ${a.makerAsset} has no code yet — the embedded ERC-2612 permit is ECDSA-only, so no valid permit by this maker can exist and a standing allowance cannot exist on a code-less token: every fill reverts TransferFromMakerToTakerFailed. The maker's fix (no re-sign needed): cork_prepare_market create-pool, then approve the cST to the LOP`,
       });
-    } else if (makerCanSignJitPermit === null) {
+    } else if (f.makerCanSignEcdsa === null) {
       indeterminate = true; // permit present; whether the maker could have signed it is unknown
     } else if (!jit.enableJitMint) {
       // Created-but-not-minted: the hook births the cST with the maker holding zero of it.
@@ -306,15 +297,13 @@ export function assessMakerReadiness(a: MakerReadinessInput): MakerReadiness {
     } else if (f.allowanceToLop === 0n) {
       // Escape hatches for a zero standing allowance: an in-fill permit can grant it — the
       // LOP-level extension makerPermit (EOA fill path only), or a JIT-embedded permit (the
-      // adapter executes it on the pre-interaction, either fill path). The extension permit
-      // dies with a maker that cannot sign ECDSA; the JIT permit too, except on the nested wire.
+      // adapter executes it on the pre-interaction, either fill path). Both are ERC-2612, so
+      // both die with a maker that cannot sign ECDSA.
       const extensionHatch = a.extensionPermitToken !== null && lc(a.extensionPermitToken) === lc(a.makerAsset);
-      const extensionOpen = extensionHatch && f.makerCanSignEcdsa !== false;
-      const jitOpen = permitsCoverMakerAsset && makerCanSignJitPermit !== false;
-      const hatch = extensionOpen || jitOpen;
-      const hatchUnknown = hatch && !(extensionHatch && f.makerCanSignEcdsa === true) && !(permitsCoverMakerAsset && makerCanSignJitPermit === true);
+      const hatch = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa !== false;
+      const hatchUnknown = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa === null;
       if (!hatch) {
-        reasons.push({ code: "allowance-missing", structural: false, message: `the maker holds NO allowance on ${a.makerAsset} for the LOP and no in-fill permit can grant one${extensionHatch || permitsCoverMakerAsset ? " (a permit rides the order, but the maker is a contract account and this permit is ECDSA-only)" : ""} — every fill reverts TransferFromMakerToTakerFailed until the maker approves` });
+        reasons.push({ code: "allowance-missing", structural: false, message: `the maker holds NO allowance on ${a.makerAsset} for the LOP and no in-fill permit can grant one${extensionHatch || permitsCoverMakerAsset ? " (a permit rides the order, but the maker is a contract account and ERC-2612 is ECDSA-only)" : ""} — every fill reverts TransferFromMakerToTakerFailed until the maker approves` });
       } else if (hatchUnknown) indeterminate = true;
     } else if (f.allowanceToLop < a.makingAmount && !partial) {
       reasons.push({ code: "allowance-insufficient", structural: false, message: `the maker's allowance ${f.allowanceToLop.toString()} on ${a.makerAsset} is below the all-or-nothing making amount ${a.makingAmount.toString()} — the fill reverts` });

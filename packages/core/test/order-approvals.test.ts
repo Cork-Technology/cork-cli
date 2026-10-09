@@ -119,26 +119,6 @@ describe("takerApprovalRequirements — the hedger's grants", () => {
     expect(entries[0]).toMatchObject({ mechanism: "erc2612-permit", wallets: "eoa-only", unsignedTx: null });
     expect(entries[1]).toMatchObject({ token: COLLATERAL, spender: ADAPTER, spenderRole: "Cork JIT adapter" });
   });
-
-  it("nested wire (JIT adapter 0.5.0+): the permit carries signature bytes, so a contract wallet can satisfy it (ERC-1271)", () => {
-    const maker = makerApprovalRequirements({
-      maker: MAKER, makerAsset: CST, makingAmount: AMOUNT, lop: LOP, usePermit2: false,
-      jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: false, predictedCorkSwapToken: CST, wire: "nested" },
-    });
-    expect(maker[0]).toMatchObject({ mechanism: "erc2612-permit", wallets: "eoa+contract" });
-    expect(maker[0]!.note).toContain("ERC-1271");
-    const taker = takerApprovalRequirements({
-      taker: TAKER, takerAsset: CST, requiredTakingAmount: AMOUNT, lop: LOP,
-      jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, predictedCorkSwapToken: CST, wire: "nested" },
-    });
-    expect(taker[0]).toMatchObject({ mechanism: "erc2612-permit", wallets: "eoa+contract" });
-    // The flat wire keeps the ECDSA-only rule.
-    const flat = makerApprovalRequirements({
-      maker: MAKER, makerAsset: CST, makingAmount: AMOUNT, lop: LOP, usePermit2: false,
-      jit: { adapter: ADAPTER, collateralAsset: COLLATERAL, enableJitMint: false, predictedCorkSwapToken: CST, wire: "flat" },
-    });
-    expect(flat[0]).toMatchObject({ wallets: "eoa-only" });
-  });
 });
 
 describe("annotateApprovalStatus — boundary-exact against a stub client", () => {

@@ -1988,6 +1988,32 @@ const CATALOG: Mutant[] = [
     replace: "decode: (logs) => decodeMarketRows(logs, ms.emitters),",
     tests: [T.hypersync],
   },
+  // ── the 0.7.0 `signature` permit input after the adapter revert: every JIT adapter this build
+  // targets takes ECDSA v/r/s, so only a 65-byte signature may pass, split exactly.
+  {
+    // The length check is dropped: an ERC-1271 signature would be cut into a wrong v/r/s.
+    id: "permit-signature-length-unchecked",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "    if (size(p.signature) !== 65) {",
+    replace: "    if (false) {",
+    tests: [T.nested],
+  },
+  {
+    // Both forms accepted: `signature` silently wins over a disagreeing v/r/s.
+    id: "permit-both-forms-accepted",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if (p.signature !== undefined && split > 0) {",
+    replace: "  if (false) {",
+    tests: [T.nested],
+  },
+  {
+    // The split reads v from the first byte instead of the last (r‖s‖v): every permit misencodes.
+    id: "permit-signature-split-v-misread",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "v: Number(BigInt(sliceHex(p.signature, 64, 65)))",
+    replace: "v: Number(BigInt(sliceHex(p.signature, 0, 1)))",
+    tests: [T.nested],
+  },
   // ── the answer grader of the eval task rollover-fill-as-cover-holder: each mutant drops or
   // widens one part of the claim it judges; the pinned right/wrong answers must kill every one.
   {
@@ -6506,31 +6532,12 @@ const CATALOG: Mutant[] = [
     tests: [T.makerReadiness],
   },
   {
-    // The permit escape hatch stops consulting the signer: a CONTRACT maker's LOP-level permit
-    // counts (that permit is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
+    // The permit escape hatch stops consulting the signer: a CONTRACT maker's embedded permit
+    // counts (ERC-2612 is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
     id: "readiness-hatch-ignores-signer",
     file: "packages/core/src/handlers/maker-readiness.ts",
-    find: "      const extensionOpen = extensionHatch && f.makerCanSignEcdsa !== false;",
-    replace: "      const extensionOpen = extensionHatch;",
-    tests: [T.makerReadiness],
-  },
-  {
-    // The JIT permit rule forgets the wire: a CONTRACT maker's nested-wire permit (ERC-1271
-    // bytes, adapter 0.5.0) reads as unsignable again, and the readiness verdict excludes a
-    // fillable order.
-    id: "readiness-nested-permit-wire-ignored",
-    file: "packages/core/src/handlers/maker-readiness.ts",
-    find: '  const makerCanSignJitPermit = jit?.wire === "nested" ? true : f.makerCanSignEcdsa;',
-    replace: "  const makerCanSignJitPermit = f.makerCanSignEcdsa;",
-    tests: [T.makerReadiness],
-  },
-  {
-    // The reverse: every wire treated as ERC-1271-capable — the flat (0.3.x) adapter's
-    // ECDSA-only permit stops refuting a contract maker (the incident class returns).
-    id: "readiness-flat-permit-treated-as-erc1271",
-    file: "packages/core/src/handlers/maker-readiness.ts",
-    find: '  const makerCanSignJitPermit = jit?.wire === "nested" ? true : f.makerCanSignEcdsa;',
-    replace: "  const makerCanSignJitPermit = jit !== null ? true : f.makerCanSignEcdsa;",
+    find: "      const hatch = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa !== false;",
+    replace: "      const hatch = extensionHatch || permitsCoverMakerAsset;",
     tests: [T.makerReadiness],
   },
   {
@@ -6942,41 +6949,6 @@ const CATALOG: Mutant[] = [
   //    denominations, the binding chain, the alias precedence, the salt refusal on flat, the
   //    generation threading, and decode dispatch by classification. Killed by
   //    test/market-registry-nested.test.ts (chain-captured golden bytes) unless noted. ──────────
-  {
-    // The nested permit row reverts to the 0.4.0 adapter's v/r/s tuple: the 0.5.0 adapter
-    // (bytes signature) reads every permit-carrying payload wrongly.
-    id: "nested-permit-row-reverts-to-vrs",
-    file: "packages/core/src/market-registry.ts",
-    find: "  PERMITS_NESTED_ABI,\n];",
-    replace: "  PERMITS_FLAT_ABI,\n];",
-    tests: [T.nested, T.extraData],
-  },
-  {
-    // The layout diff stops comparing the permit signature: a decoder that read other signature
-    // bytes than we wrote would pass the round-trip.
-    id: "layout-diff-permit-signature-blind",
-    file: "packages/core/src/market-registry.ts",
-    find: "ep.deadline !== dp.deadline || lc(ep.signature) !== lc(dp.signature)) out.push",
-    replace: "ep.deadline !== dp.deadline) out.push",
-    tests: [T.extraData],
-  },
-  {
-    // Both permit forms accepted at once: `signature` silently wins over a disagreeing v/r/s.
-    id: "permit-both-forms-accepted",
-    file: "packages/core/src/handlers/jit.ts",
-    find: "  if (p.signature !== undefined && split > 0) {",
-    replace: "  if (false) {",
-    tests: [T.nested],
-  },
-  {
-    // A non-ECDSA (ERC-1271) signature reaches the flat (0.3.x) encoder, whose adapter takes
-    // only v/r/s — the refusal must happen at input, with teaching.
-    id: "permit-flat-erc1271-not-refused",
-    file: "packages/core/src/handlers/jit.ts",
-    find: '    if (wire !== "nested" && splitPermitSignature(signature) === null) {',
-    replace: "    if (false) {",
-    tests: [T.nested],
-  },
   {
     // oracleSalt is MarketParams index 7, between the bytes and the fees; swapping it with the
     // bytes moves every trailing word — the adapter's own encodeExtraData bytes disagree.

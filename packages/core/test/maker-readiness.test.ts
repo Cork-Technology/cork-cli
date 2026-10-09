@@ -41,7 +41,6 @@ const jitCtx = (over: Partial<MakerJitContext> = {}): MakerJitContext => ({
   enableJitMint: false,
   predictedCorkSwapToken: ASSET,
   permitTokens: [ASSET],
-  wire: "flat",
   ...over,
 });
 
@@ -111,21 +110,10 @@ describe("assessMakerReadiness — the code-less makerAsset ladder", () => {
     expect(r.reasons[0]!.message).toContain("create-pool");
   });
 
-  it("the incident class: permit present but the maker is a CONTRACT — the flat-wire permit is ECDSA-only", () => {
+  it("the incident class: permit present but the maker is a CONTRACT — ERC-2612 is ECDSA-only", () => {
     const r = assess({ makerAssetCode: "no-code", makerCanSignEcdsa: false }, { jit: jitCtx() });
     expect(r.reasons[0]).toMatchObject({ code: "contract-maker-unborn-cst", structural: true });
     expect(r.reasons[0]!.message).toContain("CONTRACT account");
-  });
-
-  it("nested wire (adapter 0.5.0+): the permit carries ERC-1271 bytes, so a CONTRACT maker's permit counts", () => {
-    const r = assess({ makerAssetCode: "no-code", makerCanSignEcdsa: false, mintCollateralAllowance: 10n ** 30n, mintCollateralBalance: 10n ** 30n }, { jit: jitCtx({ wire: "nested", enableJitMint: true }) });
-    expect(codes(r)).not.toContain("contract-maker-unborn-cst");
-    expect(r.status).toBe("ready");
-    // Unknown signer capability is no longer a gap on the nested wire either.
-    expect(assess({ makerAssetCode: "no-code", makerCanSignEcdsa: null, mintCollateralAllowance: 10n ** 30n, mintCollateralBalance: 10n ** 30n }, { jit: jitCtx({ wire: "nested", enableJitMint: true }) }).status).toBe("ready");
-    // The has-code hatch: a nested JIT permit covers a zero allowance for a contract maker.
-    expect(assess({ allowanceToLop: 0n, makerCanSignEcdsa: false }, { jit: jitCtx({ wire: "nested" }) }).status).toBe("ready");
-    expect(codes(assess({ allowanceToLop: 0n, makerCanSignEcdsa: false }, { jit: jitCtx() }))).toEqual(["allowance-missing"]);
   });
 
   it("permit present, ECDSA capability unknown: no verdict — unknown", () => {
@@ -169,7 +157,7 @@ describe("assessMakerReadiness — has-code: allowance, balance, and the permit 
   it("both hatches are ERC-2612: a CONTRACT maker's permit does not count, and the message says so", () => {
     const r = assess({ allowanceToLop: 0n, makerCanSignEcdsa: false }, { extensionPermitToken: ASSET });
     expect(codes(r)).toEqual(["allowance-missing"]);
-    expect(r.reasons[0]!.message).toContain("this permit is ECDSA-only");
+    expect(r.reasons[0]!.message).toContain("ERC-2612 is ECDSA-only");
   });
 
   it("hatch present but ECDSA capability unknown: unknown, not a verdict either way", () => {
@@ -279,7 +267,7 @@ describe("decodeMakerExtensionContext — from the signed bytes, never throwing"
     unwindSwapFeePercentage: 0n,
     enableJitMint: true,
   } as const;
-  const permit = { token: ASSET, value: 10n ** 18n, deadline: 1_795_000_000n, signature: `0x${"ab".repeat(32)}${"cd".repeat(32)}1b` } as const;
+  const permit = { token: ASSET, value: 10n ** 18n, deadline: 1_795_000_000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` } as const;
 
   it("no extension: nulls", () => {
     expect(decodeMakerExtensionContext(GENS, undefined)).toEqual({ jit: null, extensionPermitToken: null });

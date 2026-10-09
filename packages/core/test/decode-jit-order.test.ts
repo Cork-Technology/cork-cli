@@ -45,7 +45,7 @@ describe("cork_decode order — JIT extension labeling", () => {
           unwindSwapFeePercentage: 0n,
           enableJitMint: true,
         },
-        [{ token: CA, value: 1n, deadline: 1_790_000_000n, signature: `0x${"ab".repeat(32)}${"cd".repeat(32)}1b` }],
+        [{ token: CA, value: 1n, deadline: 1_790_000_000n, v: 27, r: `0x${"ab".repeat(32)}`, s: `0x${"cd".repeat(32)}` }],
       ),
     );
     // Salt must commit to the extension for the decode to be ok (OrderLib InvalidExtension rule).

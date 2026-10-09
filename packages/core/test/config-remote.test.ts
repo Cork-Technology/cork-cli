@@ -448,7 +448,7 @@ describe("generations in the bundled defaults", () => {
     expect(mr.marketRegistry).toMatchObject({ registry: "0xa78d8137B01058dD23e545b6557209eBBc9611F1", adapter: "0x8902a88912a334263fe3d731d03c267715b9374f", marketCreator: "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C", contractsVersion: "0.3.3", wire: "flat" });
     expect(mr.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", wire: "flat" });
     // The primary registry is the 0.5.0 nested-wire set.
-    expect((await resolveMarketRegistry(42161)).marketRegistry).toMatchObject({ registry: "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", adapter: "0x960Cd94B31121806b1b0Ff02230D189Ad0310616", marketCreator: "0x1A074F17647504D1c50B436074a74d051D502dEa", contractsVersion: "0.5.0", deployedAtBlock: 503851928, wire: "nested" });
+    expect((await resolveMarketRegistry(42161)).marketRegistry).toMatchObject({ registry: "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", adapter: "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104", marketCreator: "0x1A074F17647504D1c50B436074a74d051D502dEa", contractsVersion: "0.5.0", deployedAtBlock: 503851928, wire: "nested" });
     expect((await resolveMarketRegistry(8453)).marketRegistry).toMatchObject({ deployedAtBlock: 51145039, wire: "nested" });
   });
   it("arbitrum-v1.1 keeps the previous production stack and the legacy registry; arbitrum-legacy keeps the old read-path pair (read-only)", async () => {

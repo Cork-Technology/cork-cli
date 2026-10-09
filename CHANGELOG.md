@@ -15,6 +15,11 @@ covered.
 
 ### Changed
 
+- **The `phoenix/v0.4-rc.1` set names its own JIT adapter again.** Since `0.7.0-rc.1` the set named CorkLimitOrderAdapter `0x960Cd94B31121806b1b0Ff02230D189Ad0310616` (version() `0.5.0`). That adapter belongs to market-registry 0.6.0 and the Distribution `phoenix/v0.5-rc.1`, not to `phoenix/v0.4-rc.1`. The set again names `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (version() `0.4.0`), the adapter of its own Distribution. Both adapters stay deployed. On 2026-10-09 we read the 0.4.0 adapter live on both chains: its code hash, its version, and its LOP, pool manager and market creator bindings.
+- **The nested wire's JIT permit is the 0.4.0 row again**, `(token, value, deadline, v, r, s)`. A contract wallet cannot sign a JIT permit on any wire: `data.approvals` marks the permit `eoa-only`, and `contract_maker_pre_rest` names create-pool first as the path for a contract maker.
+- **`jitMarket.permits[]` still accepts `signature`**, so inputs written for `0.7.0` keep working. The tool splits a 65-byte signature into `v`, `r`, `s`. It refuses any other length, such as an ERC-1271 signature, and teaches create-pool first. `v`, `r`, `s` remain accepted; pass one form.
+- **Allowlist.** The approved-implementations `jitAdapter` list approves `0x2fe70bac…d35a` (0.4.0) again and drops `0x24a11fba…225d` (0.5.0). This build encodes only the 0.4.0 permit row, so it must not build JIT bytes for the 0.5.0 adapter, even from a stale remote config.
+- **SDK:** `PermitParams` carries `v`, `r`, `s` again. The exports `permitSignatureOfVrs`, `splitPermitSignature`, `permitOfFlatRow` and the type `FlatPermitRow` are removed. This is a breaking change for SDK code that used them.
 - **The live suites run through the fail-closed test gate.** `bun run test:live` and both live steps of CI's `live-smoke` job now use `scripts/test-gate.ts`, like the tests step. `live-smoke` also runs `rollover-live.test.ts`, which no job ran before. It now also checks, against the real settler on both chains, that each clone fault reverts with the error `rollover-fill` names. A run in which every test skips is red: `bun run test:live` without `CORK_RPC_LIVE=1` (or `CORK_TEST_RPC`) now exits 1 with "no test executed", where it exited 0 before.
 
 ## [0.7.0] — preparation, not yet published

@@ -94,21 +94,7 @@ struct MarketParams {
 }
 ```
 
-`ResolvedConstraint` is unchanged. `PermitParams` changed with the nested adapter 0.5.0
-(redeployed on both chains 2026-10-07; the address lives in
-`cork-defaults.v2.json`): the permit carries one `bytes signature` in place of `v`, `r`, `s`:
-
-```solidity
-struct PermitParams {                // nested wire, adapter 0.5.0+
-    address token; uint256 value; uint256 deadline;
-    bytes signature;                 // 65 bytes r‖s‖v from an EOA, or a contract wallet's ERC-1271 bytes
-}
-```
-
-The share token checks the signature with OpenZeppelin `SignatureChecker`: ECDSA for an EOA,
-ERC-1271 for a contract wallet such as a Safe. The typehash, domain and nonce are the classic
-ERC-2612 ones. The tool takes `signature` as the canonical input and still accepts `v`/`r`/`s`.
-Three other things moved with the layout:
+`ResolvedConstraint` and `PermitParams` are unchanged. Three things moved with the layout:
 
 - **The registry word is `extraData`.** The tool takes `extraData` on every jitMarket input and
   still accepts `additionalData` as an alias (an info `deprecation_notice`; both present and
@@ -163,11 +149,13 @@ The rule, in full:
 - **An empty `PermitParams[]` is valid** — an order that doesn't mint (existing market,
   `enableJitMint: false`) needs no permit, and pre-held inventory covered by a standing
   approval doesn't either.
-- **Who can sign depends on the wire.** On the flat (0.3.x) wire the adapter passes `v`/`r`/`s`
-  and the share token recovers a private-key signature, so a contract account (a Safe) cannot
-  produce one: it creates the pool first (`create-pool`) and approves the cST instead. On the
-  nested wire (adapter 0.5.0+) the permit carries `bytes signature`, and the share token checks
-  a contract owner with ERC-1271 — a Safe can sign the permit too. Pass it as `signature`.
+- **Strict ECDSA.** The share tokens' `permit` recovers a private-key signature; a contract
+  account (a Safe) cannot produce one. A contract that needs the newborn-token allowance must
+  be positioned to `approve` mid-transaction instead — which only a contract *taker* can do.
+  The tool takes each permit as `v`, `r`, `s`, or as one 65-byte `signature` (r‖s‖v), which it
+  splits; any other length is refused. The CorkLimitOrderAdapter of market-registry 0.6.0
+  (Distribution `phoenix/v0.5-rc.1`) takes a bytes signature that a contract wallet can produce
+  through ERC-1271; this build does not target that adapter.
 
 **Interaction with `fillOrderForSelf` (the ForSelf adapter route):** none, by design. The
 order-carried permit belongs to the *maker* and still names the LOP as spender; the ForSelf

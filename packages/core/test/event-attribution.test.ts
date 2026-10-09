@@ -24,7 +24,7 @@ const CANDIDATE_EXACT = "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E" as const;
 const CANDIDATE_PARTIAL = "0x5E19Be0743fE521d8BF85b5A558356675499bE9e" as const;
 const JIT_ADAPTER = "0x8902a88912a334263fe3d731d03c267715b9374f" as const;
 // The 0.5.0 (nested-wire) adapter of the primary phoenix/v0.4-rc.1 generation.
-const NESTED_JIT_ADAPTER = "0x960Cd94B31121806b1b0Ff02230D189Ad0310616" as const;
+const NESTED_JIT_ADAPTER = "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104" as const;
 const LEGACY_JIT_ADAPTER = "0xea15BF1E5565181Ed8678CcFf39D797272858505" as const;
 
 const ORDER_SETTLED = toEventSelector("OrderSettled(bytes32)");

@@ -249,10 +249,9 @@ sign. Nothing is broadcast: send a signed transaction through your own RPC as in
   allowance → the LOP with a live expiration) must exist BEFORE the order rests — a resting
   order without them looks fillable but reverts; the TAKER grants the taker asset → the LOP
   before broadcasting the fill. JIT orders differ: the cST side is covered by an ERC-2612
-  permit embedded in the extension (pass it as \`signature\` bytes; on the flat 0.3.x wire EOA
-  makers/takers only, ECDSA; on the nested wire, JIT adapter 0.5.0+, a CONTRACT wallet can sign
-  it too, checked with ERC-1271 — or create the pool first and place a standing allowance), and
-  a JIT MINT additionally pulls collateral into the Cork JIT adapter under its own allowance. Approval txs work identically
+  permit embedded in the extension (EOA makers/takers only — the LOP executes NO permit for a
+  CONTRACT maker, which needs a standing allowance instead), and a JIT MINT additionally pulls
+  collateral into the Cork JIT adapter under its own allowance. Approval txs work identically
   from EOAs and contract wallets (a contract wallet executes the same payload through its own
   flow). \`cork_query\` resource:"account-state" shows current allowances for pool tokens;
   \`cork_prepare_phoenix\` authority-onboard builds an approve tx for any token/spender/amount.
@@ -1102,10 +1101,9 @@ export function executionRefreshOrder(requote = false): ExecutionBlock {
   ]);
 }
 
-/** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet, with
- *  no permit it can use (flat wire: ECDSA-only permits; nested wire: none carried yet): the pool
- *  is created and the allowances placed BEFORE the order rests (the CorkMarketCreator, batched by
- *  the smart account). */
+/** Family B, a maker-order whose maker is a CONTRACT and whose JIT pool does not exist yet: the
+ *  EOA-only ERC-2612 permit path is closed, so the pool is created and the allowances placed
+ *  BEFORE the order rests (cork-periphery CorkMarketCreator, batched by the smart account). */
 export function executionMakerOrderContractMaker(): ExecutionBlock {
   return executionTypedData([
     "cork_prepare_market create-pool with this order's jitMarket legs (collateral, reference, expiry, recipe, constraint) — the pool the order derives, created ahead of the fill; simulate, then execute from the maker account",

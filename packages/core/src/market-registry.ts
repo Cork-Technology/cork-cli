@@ -213,11 +213,9 @@ export const recipeNestedAbi = parseAbi([
   "error ZeroRegistry()",
 ]);
 
-/** CorkLimitOrderAdapter 0.5.0 (nested wire): binds the LOP, the POOL MANAGER and the MARKET
+/** CorkLimitOrderAdapter 0.4.0 (nested wire): binds the LOP, the POOL MANAGER and the MARKET
  *  CREATOR — no CONTROLLER()/MARKET_REGISTRY() (creation is delegated to the creator, which holds
- *  them), no MAX_FEE_PERCENTAGE(). decodeExtraData returns the WRAPPER shape. Since 0.5.0 a permit
- *  carries one `bytes signature` (ECDSA for an EOA, ERC-1271 for a contract wallet) in place of
- *  v/r/s, so a contract maker can sign the permit a JIT mint needs. */
+ *  them), no MAX_FEE_PERCENTAGE(). decodeExtraData returns the WRAPPER shape. */
 export const jitAdapterNestedAbi = parseAbi([
   "function LIMIT_ORDER_PROTOCOL() view returns (address)",
   "function POOL_MANAGER() view returns (address)",
@@ -226,7 +224,7 @@ export const jitAdapterNestedAbi = parseAbi([
   "struct RateConstraintN { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
   "struct MarketParamsN { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; RateConstraintN constraint; bytes extraData; bytes32 oracleSalt; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
   "struct JITMarketParamsN { MarketParamsN market; bool enableJitMint; }",
-  "struct PermitParamsN { address token; uint256 value; uint256 deadline; bytes signature; }",
+  "struct PermitParamsN { address token; uint256 value; uint256 deadline; uint8 v; bytes32 r; bytes32 s; }",
   "function encodeExtraData(JITMarketParamsN market, PermitParamsN[] permits) pure returns (bytes)",
   "function decodeExtraData(bytes extraData) pure returns (JITMarketParamsN market, PermitParamsN[] permits)",
   "error MintAmountDrift()",
@@ -523,26 +521,13 @@ export interface JITMarketParams {
   unwindSwapFeePercentage: bigint;
   enableJitMint: boolean; // gates the maker-side mint; IGNORED on the taker path (always mints)
 }
-/** One ERC-2612 permit the JIT adapter executes. `signature` is the permit signature as bytes:
- *  the nested wire carries it as is (65-byte ECDSA, or a contract wallet's ERC-1271 bytes); the
- *  flat wire takes ECDSA only and splits it into v/r/s. */
 export interface PermitParams {
   token: `0x${string}`;
   value: bigint;
   deadline: bigint;
-  signature: `0x${string}`;
-}
-
-/** r‖s‖v — the 65-byte ECDSA signature for a v/r/s triple (v as one byte). */
-export function permitSignatureOfVrs(v: number, r: `0x${string}`, s: `0x${string}`): `0x${string}` {
-  return concatHex([r, s, toHex(v, { size: 1 })]);
-}
-
-/** Split a 65-byte ECDSA signature (r‖s‖v) into v/r/s; null for any other length (an ERC-1271
- *  signature has no v/r/s form). */
-export function splitPermitSignature(signature: `0x${string}`): { v: number; r: `0x${string}`; s: `0x${string}` } | null {
-  if (size(signature) !== 65) return null;
-  return { r: sliceHex(signature, 0, 32), s: sliceHex(signature, 32, 64), v: Number(BigInt(sliceHex(signature, 64, 65))) };
+  v: number;
+  r: `0x${string}`;
+  s: `0x${string}`;
 }
 
 /** The two registry wires this build's codecs implement (the `legacy` wire is the deprecated
@@ -559,9 +544,7 @@ const CONSTRAINT_COMPONENTS = [
   { name: "rateChangePerDayMax", type: "uint256" },
   { name: "rateChangeCapacityMax", type: "uint256" },
 ] as const;
-/** The permit row differs per wire: the flat (0.3.x) adapter takes ECDSA v/r/s; the nested
- *  adapter (0.5.0+) takes one `bytes signature`, so a contract wallet can sign it (ERC-1271). */
-const PERMITS_FLAT_ABI = {
+const PERMITS_ABI = {
   type: "tuple[]" as const,
   components: [
     { name: "token", type: "address" },
@@ -570,15 +553,6 @@ const PERMITS_FLAT_ABI = {
     { name: "v", type: "uint8" },
     { name: "r", type: "bytes32" },
     { name: "s", type: "bytes32" },
-  ],
-};
-const PERMITS_NESTED_ABI = {
-  type: "tuple[]" as const,
-  components: [
-    { name: "token", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "deadline", type: "uint256" },
-    { name: "signature", type: "bytes" },
   ],
 };
 
@@ -599,7 +573,7 @@ const JIT_PARAMS_FLAT_ABI = [
       { name: "enableJitMint", type: "bool" },
     ],
   },
-  PERMITS_FLAT_ABI,
+  PERMITS_ABI,
 ];
 
 /** The creator's 10-field MarketParams — the SAME struct in createNewPool and inside the nested
@@ -626,18 +600,11 @@ const JIT_PARAMS_NESTED_ABI = [
       { name: "enableJitMint", type: "bool" },
     ],
   },
-  PERMITS_NESTED_ABI,
+  PERMITS_ABI,
 ];
 
 type DecodedConstraint = { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
-/** A flat-wire permit row as the 0.3.x adapter encodes it (ECDSA v/r/s). */
-export type FlatPermitRow = { token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` };
-type DecodedNestedPermit = { token: `0x${string}`; value: bigint; deadline: bigint; signature: `0x${string}` };
-
-/** A flat-wire permit row (v/r/s) as the one TS shape. */
-export function permitOfFlatRow(p: FlatPermitRow): PermitParams {
-  return { token: p.token, value: p.value, deadline: p.deadline, signature: permitSignatureOfVrs(p.v, p.r, p.s) };
-}
+type DecodedPermit = { token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` };
 /** The nested wire's inner MarketParams as decoded/encoded. */
 type NestedMarketParams = {
   collateralAsset: `0x${string}`;
@@ -676,12 +643,8 @@ function nestedMarketParamsOf(p: Omit<JITMarketParams, "enableJitMint">): Nested
  *  the mint flag as the wrapper's second member. The adapter of that wire decodes exactly this. */
 export function encodeJitExtraData(wire: MarketRegistryWire, params: JITMarketParams, permits: readonly PermitParams[] = []): `0x${string}` {
   assertImplementedWire(wire);
+  const permitRows = permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, v: p.v, r: p.r, s: p.s }));
   if (wire === "flat") {
-    const permitRows = permits.map((p, i) => {
-      const vrs = splitPermitSignature(p.signature);
-      if (vrs === null) throw new Error(`encodeJitExtraData: permits[${i}] carries a ${size(p.signature)}-byte signature, but the flat (0.3.x) adapter takes only a 65-byte ECDSA permit (v/r/s) — a contract wallet's ERC-1271 permit needs a nested-wire generation (the phoenix/v0.4-rc.1 primary)`);
-      return { token: p.token, value: p.value, deadline: p.deadline, ...vrs };
-    });
     if (!isZeroSalt(params.oracleSalt)) throw new Error("encodeJitExtraData: the flat (0.3.x) wire carries no oracleSalt — a non-zero salt cannot be encoded for a flat-wire adapter");
     return encodeAbiParameters(JIT_PARAMS_FLAT_ABI, [
       {
@@ -699,7 +662,6 @@ export function encodeJitExtraData(wire: MarketRegistryWire, params: JITMarketPa
       permitRows,
     ]);
   }
-  const permitRows = permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, signature: p.signature }));
   return encodeAbiParameters(JIT_PARAMS_NESTED_ABI, [{ market: nestedMarketParamsOf(params), enableJitMint: params.enableJitMint }, permitRows]);
 }
 
@@ -718,7 +680,7 @@ export function buildJitExtension(adapter: `0x${string}`, extraData: `0x${string
 /** Normalize the nested adapter's own decodeExtraData return (or our decode) into the flat TS
  *  shape — the ONE place the wrapper is unwrapped, shared by decodeJitExtraData and the on-chain
  *  round-trip so the two cannot read the same words differently. */
-export function flattenNestedJitParams(out: readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedNestedPermit[]]): { params: JITMarketParams; permits: PermitParams[] } {
+export function flattenNestedJitParams(out: readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedPermit[]]): { params: JITMarketParams; permits: PermitParams[] } {
   const m = out[0].market;
   return {
     params: {
@@ -734,7 +696,7 @@ export function flattenNestedJitParams(out: readonly [{ market: NestedMarketPara
       unwindSwapFeePercentage: m.unwindSwapFeePercentage,
       enableJitMint: out[0].enableJitMint,
     },
-    permits: out[1].map((x) => ({ token: x.token, value: x.value, deadline: x.deadline, signature: x.signature })),
+    permits: out[1].map((x) => ({ ...x })),
   };
 }
 
@@ -745,12 +707,12 @@ export function decodeJitExtraData(wire: MarketRegistryWire, extraData: `0x${str
   if (wire === "flat") {
     const [p, permits] = decodeAbiParameters(JIT_PARAMS_FLAT_ABI, extraData) as [
       { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: bigint; recipe: `0x${string}`; rateOverride: bigint; constraint: DecodedConstraint; additionalData: `0x${string}`; swapFeePercentage: bigint; unwindSwapFeePercentage: bigint; enableJitMint: boolean },
-      FlatPermitRow[],
+      DecodedPermit[],
     ];
     const { additionalData, ...rest } = p;
-    return { params: { ...rest, constraint: { ...p.constraint }, extraData: additionalData }, permits: permits.map(permitOfFlatRow) };
+    return { params: { ...rest, constraint: { ...p.constraint }, extraData: additionalData }, permits: permits.map((x) => ({ ...x })) };
   }
-  const out = decodeAbiParameters(JIT_PARAMS_NESTED_ABI, extraData) as unknown as readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedNestedPermit[]];
+  const out = decodeAbiParameters(JIT_PARAMS_NESTED_ABI, extraData) as unknown as readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly DecodedPermit[]];
   return flattenNestedJitParams(out);
 }
 
@@ -776,7 +738,7 @@ export function diffJitExtraData(encoded: { params: JITMarketParams; permits: re
   else {
     encoded.permits.forEach((ep, i) => {
       const dp = decoded.permits[i]!;
-      if (lc(ep.token) !== lc(dp.token) || ep.value !== dp.value || ep.deadline !== dp.deadline || lc(ep.signature) !== lc(dp.signature)) out.push(`permits[${i}]`);
+      if (lc(ep.token) !== lc(dp.token) || ep.value !== dp.value || ep.deadline !== dp.deadline || ep.v !== dp.v || lc(ep.r) !== lc(dp.r) || lc(ep.s) !== lc(dp.s)) out.push(`permits[${i}]`);
     });
   }
   return out;

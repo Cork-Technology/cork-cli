@@ -1,9 +1,10 @@
 // Split from handlers.ts (2026-08-05): jit handlers — one typed dispatch, per-tool modules.
 // Declarations are moved byte-identically; see handlers.ts for the runTool dispatch.
 import { type ChainId, Envelope } from "@cork/schemas";
+import { size, sliceHex } from "viem";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, type JITMarketParams, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type FlatPermitRow, type PermitParams, permitOfFlatRow, permitSignatureOfVrs, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, splitPermitSignature, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, type JITMarketParams, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
@@ -210,35 +211,45 @@ const LADDER_SIDE = {
  *  own signature so the shape has exactly one declaration site. */
 export type JitMarketWireParams = Parameters<typeof runJitPreflightLadder>[0]["jm"];
 
-/** One permit input row: `signature` (canonical) or the older v/r/s split form. */
-type PermitWireRow = NonNullable<JitMarketWireParams["permits"]>[number];
+/** One permit input row: v/r/s, or (accepted since 0.7.0) the same ECDSA signature as one
+ *  `signature` field. */
+export interface PermitWireRow {
+  token: `0x${string}`;
+  value: string;
+  deadline: string;
+  signature?: `0x${string}` | undefined;
+  v?: number | undefined;
+  r?: `0x${string}` | undefined;
+  s?: `0x${string}` | undefined;
+}
 
-/** The permit's signature bytes from either input form; refuses a row with both forms, with
- *  neither, or with an incomplete v/r/s triple. */
-export function permitSignatureOfWire(p: PermitWireRow, path: Array<string | number>, tool = "cork_prepare_orders"): `0x${string}` {
+/** The v/r/s of a permit row. Every JIT adapter this build targets (0.4.0 on the nested wire, the
+ *  0.3.x flat one, the legacy one) takes ECDSA v/r/s, so `signature` must be 65 bytes r‖s‖v and is
+ *  split; both forms at once, neither, a partial triple, or another length refuse with teaching. */
+export function permitVrsOfWire(p: PermitWireRow, path: Array<string | number>): { v: number; r: `0x${string}`; s: `0x${string}` } {
   const split = [p.v, p.r, p.s].filter((x) => x !== undefined).length;
   if (p.signature !== undefined && split > 0) {
-    throw new ToolInputError(tool, [{ path, message: "pass the permit signature ONCE: either `signature` (the bytes, canonical) or the older v/r/s split form, not both" }]);
+    throw new ToolInputError("cork_prepare_orders", [{ path, message: "pass the permit signature ONCE: either `signature` (65 bytes r‖s‖v) or v/r/s, not both" }]);
   }
-  if (p.signature !== undefined) return p.signature;
+  if (p.signature !== undefined) {
+    if (size(p.signature) !== 65) {
+      throw new ToolInputError("cork_prepare_orders", [{
+        path: [...path, "signature"],
+        message: `the permit signature is ${size(p.signature)} bytes; the JIT adapter of this generation (CorkLimitOrderAdapter 0.4.0 on the nested wire) takes a 65-byte ECDSA signature only (r‖s‖v from an EOA). A contract wallet's ERC-1271 signature cannot authorize this permit: create the pool first (cork_prepare_market create-pool), then rest the order without a JIT mint`,
+      }]);
+    }
+    return { r: sliceHex(p.signature, 0, 32), s: sliceHex(p.signature, 32, 64), v: Number(BigInt(sliceHex(p.signature, 64, 65))) };
+  }
   if (split !== 3) {
-    throw new ToolInputError(tool, [{ path, message: "a permit needs its signature: pass `signature` (the bytes — 65-byte r‖s‖v from an EOA, or a contract wallet's ERC-1271 bytes on the nested wire), or all three of v, r and s" }]);
+    throw new ToolInputError("cork_prepare_orders", [{ path, message: "a permit needs its signature: pass all three of v/r/s, or `signature` (65 bytes r‖s‖v)" }]);
   }
-  return permitSignatureOfVrs(p.v!, p.r!, p.s!);
+  return { v: p.v!, r: p.r!, s: p.s! };
 }
 
 /** Parse the ERC-2612 permit wire rows into bigint params — ONE spelling for the maker and
- *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). The
- *  flat (0.3.x) adapter takes ECDSA v/r/s only, so a non-65-byte signature is refused there. */
-export function parsePermitWires(permits: JitMarketWireParams["permits"], wire: MarketRegistryWire): PermitParams[] {
-  return (permits ?? []).map((p, i) => {
-    const path = ["action", "jitMarket", "permits", i];
-    const signature = permitSignatureOfWire(p, path);
-    if (wire !== "nested" && splitPermitSignature(signature) === null) {
-      throw new ToolInputError("cork_prepare_orders", [{ path: [...path, "signature"], message: `this generation speaks the '${wire}' registry wire, whose JIT adapter takes only a 65-byte ECDSA permit (v/r/s) — this signature is ${(signature.length - 2) / 2} bytes. A contract wallet (ERC-1271) can sign a JIT permit only on the nested wire (the phoenix/v0.4-rc.1 primary, adapter 0.5.0+); on this generation create the pool first (cork_prepare_market create-pool) and approve the cST to the LOP` }]);
-    }
-    return { token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), signature };
-  });
+ *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). */
+export function parsePermitWires(permits: JitMarketWireParams["permits"]): PermitParams[] {
+  return (permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...permitVrsOfWire(p, ["action", "jitMarket", "permits", i]) }));
 }
 
 /**
@@ -270,7 +281,7 @@ export async function runJitPreflightLadder(args: {
     swapFeePercentage: string;
     unwindSwapFeePercentage: string;
     enableJitMint: boolean;
-    permits?: Array<{ token: `0x${string}`; value: string; deadline: string; signature?: `0x${string}` | undefined; v?: number | undefined; r?: `0x${string}` | undefined; s?: `0x${string}` | undefined }> | undefined;
+    permits?: Array<PermitWireRow> | undefined;
   };
   side: keyof typeof LADDER_SIDE;
 }): Promise<JitLadderResult> {
@@ -300,8 +311,6 @@ export async function runJitPreflightLadder(args: {
   }
   const phoenixWire: PhoenixWire = phoenixWireResolved;
   const { extraData, oracleSalt } = resolveJitBytesInput(jm, wire, mrGeneration?.label, { tool: "cork_prepare_orders", path: ["action", "jitMarket"], bytesField: codec.bytesField }, warnings);
-  // The permit form is a pure input rule — refused here, before any chain read.
-  parsePermitWires(jm.permits, wire);
   if (wire === "nested" && !mr.marketCreator) {
     return { gate: unavailable(chainId, "unknown_deployment", `generation '${mrGeneration?.label}' speaks the nested registry wire but configures no CorkMarketCreator — on that wire the adapter delegates pool creation to the creator (and the creator holds the controller role), so no ${words.artifact} can be pre-flighted; refresh cork-defaults.v2.json`, ctx) };
   }
@@ -532,7 +541,7 @@ export async function buildTakerJitInteraction(args: {
           warnings.push({ code: "share_prediction_unavailable", message: `could not predict the pool's cST — ${pred.reason ?? "no reason recorded"}. VERIFY yourself that one side of the RESTING order is the derived pool's cST, or the fill reverts OrderNotForPool; a REVERT named here means the fill's own creation leg would revert the same way` });
         }
         if (pred.cst) {
-          jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits as `signature` (65 bytes r‖s‖v from an EOA; on the nested wire a contract wallet signs it through ERC-1271) — the LOP pulls the just-minted cST from the taker. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint: the resting order names one specific pool, and a re-derivation from a moved oracle rate would target a different one (OrderNotForPool)" };
+          jit = { ...jit, predictedCorkSwapToken: pred.cst, permitNote: "sign the ERC-2612 permit over this cST with the TAKER as owner (spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — the LOP pulls the just-minted cST from the taker. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint: the resting order names one specific pool, and a re-derivation from a moved oracle rate would target a different one (OrderNotForPool)" };
           const cstLc = pred.cst.toLowerCase();
           if (args.order.makerAsset.toLowerCase() !== cstLc && args.order.takerAsset.toLowerCase() !== cstLc) {
             warnings.push({ code: "jit_side_mismatch", message: `NEITHER side of the resting order is the derived pool's cST ${pred.cst} — the fill WILL revert OrderNotForPool` });
@@ -545,7 +554,7 @@ export async function buildTakerJitInteraction(args: {
       warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the interaction is built but the cST side-match is unverified` });
     }
   }
-  const permits = parsePermitWires(jm.permits, wire);
+  const permits = parsePermitWires(jm.permits);
   const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
   const hookBytes = codec.encodeExtraData(jitParams, permits);
   if (ladder.verified) {
@@ -600,7 +609,7 @@ export async function prepareJitLegacy(args: {
   chainId: ChainId;
   ctx: HandlerContext;
   lop: `0x${string}`;
-  jm: { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: string; mode?: string | undefined; swapFeePercentage: string; unwindSwapFeePercentage: string; enableJitMint: boolean; permits?: JitMarketWireParams["permits"] };
+  jm: { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: string; mode?: string | undefined; swapFeePercentage: string; unwindSwapFeePercentage: string; enableJitMint: boolean; permits?: Array<PermitWireRow> | undefined };
   makerAsset: `0x${string}`;
   takerAsset: `0x${string}`;
 }): Promise<{ gate: Envelope } | { gate?: undefined; extension: `0x${string}`; jitData: LegacyJitReport; warnings: Array<{ code: string; message: string }> }> {
@@ -631,12 +640,7 @@ export async function prepareJitLegacy(args: {
     unwindSwapFeePercentage: BigInt(jm.unwindSwapFeePercentage),
     enableJitMint: jm.enableJitMint,
   };
-  const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p, i) => {
-    const path = ["action", "jitMarket", "permits", i];
-    const vrs = splitPermitSignature(permitSignatureOfWire(p, path));
-    if (vrs === null) throw new ToolInputError("cork_prepare_orders", [{ path: [...path, "signature"], message: "the legacy (pre-2.1.0) JIT adapter takes only a 65-byte ECDSA permit (v/r/s)" }]);
-    return { token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...vrs };
-  });
+  const permits: legacyRegistry.PermitParams[] = (jm.permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...permitVrsOfWire(p, ["action", "jitMarket", "permits", i]) }));
   const extension = legacyRegistry.buildJitExtension(mr.adapter, legacyRegistry.encodeJitExtraData(jitParams, permits));
   let jitData: LegacyJitReport = { generation: "legacy (pre-2.1.0)", adapter: mr.adapter, hook: "preInteraction (maker-side)", mode, enableJitMint: jm.enableJitMint };
   warnings.push({ code: "rate_drift_notice", message: "LEGACY generation: market identity follows the LIVE oracle rate — the derived pool id is only stepwise-stable, and a drifted rate reverts the fill with OrderNotForPool (by design, as a staleness guard)" });
@@ -773,9 +777,9 @@ export async function verifyExtraDataLayout(a: {
       const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedAbi, functionName: "decodeExtraData", args: [a.extraData] })) as Parameters<typeof flattenNestedJitParams>[0];
       decoded = flattenNestedJitParams(out);
     } else {
-      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams & { additionalData: `0x${string}` }, readonly FlatPermitRow[]];
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterAbi, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [JITMarketParams & { additionalData: `0x${string}` }, readonly PermitParams[]];
       const { additionalData, ...rest } = out[0];
-      decoded = { params: { ...rest, extraData: additionalData, constraint: { ...out[0].constraint } }, permits: out[1].map(permitOfFlatRow) };
+      decoded = { params: { ...rest, extraData: additionalData, constraint: { ...out[0].constraint } }, permits: out[1].map((p) => ({ ...p })) };
     }
   } catch (err) {
     return { status: `unchecked: the adapter exposes no decodeExtraData helper (pre-0.4.0 generation) or the read failed (${revertReason(err)}) — the bytes follow the layout this build knows` };
