@@ -8,6 +8,7 @@
 // subtotals); and the `migration` doc topic. Offline: a venueFetch stub serves /pools/v1 rows per
 // manager in pages, a stub HyperSync source serves the same pools as MarketCreated
 // logs, and an address-aware `balanceOf` puts a position on two of three managers.
+import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbi } from "viem";
 import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
@@ -412,6 +413,45 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
       expect((second.data as PositionsData).scanned).toMatchObject({ pools: 4, complete: true });
     } finally {
       envSet(SCAN_CACHE_VAR, saved);
+    }
+  });
+  it("a cached pool row's set label follows the CURRENT config: a relabel under the cache never reaches the positions", async () => {
+    // 2026-10-09: phoenix/v0.5 became the primary on the pool manager it shares with
+    // phoenix/v0.4-rc.1. Rows cached before the move kept 'phoenix/v0.4-rc.1', so account-state
+    // named the read-only set while every pool read named the primary. The cache keeps chain
+    // facts; the scan re-derives the label from its emitters on the way out.
+    const VAR = "CORK_SCAN_CACHE_FILE";
+    const get = (k: string): string | undefined => process.env[k];
+    const put = (k: string, v: string | undefined): void => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    const saved = get(VAR);
+    const where = `${get("TMPDIR") ?? "/tmp"}/cork-scan-cache-relabel-${process.pid}-${Date.now()}.json`;
+    put(VAR, where);
+    try {
+      const source = {
+        async queryLogs(q: { fromBlock: number; address?: string[] }) {
+          const scope = new Set((q.address ?? []).map((a) => a.toLowerCase()));
+          return { logs: LOGS.filter((l) => scope.has(l.address.toLowerCase()) && l.blockNumber >= q.fromBlock), archiveHeight: 1_000 };
+        },
+      };
+      const first = await positions(ctxFor([], { hyperSync: source }), undefined, "full-decentralized");
+      const want = (first.data as PositionsData).positions.map((x) => [x.poolId, x.generation.label]);
+      expect(want).toContainEqual([P_NEW, "phoenix/v0.5"]);
+      // An older config labeled the rows differently: the same cache as it would have written it.
+      // The cache is memoized per path, so the edited copy goes to a fresh path the next read loads.
+      const doc = JSON.parse(readFileSync(where, "utf8")) as { entries: Record<string, { rows: Array<Record<string, unknown>> }> };
+      let relabeled = 0;
+      for (const e of Object.values(doc.entries)) for (const r of e.rows) if (r["generation"] === "phoenix/v0.5") { r["generation"] = "phoenix/v0.4-rc.1"; relabeled += 1; }
+      expect(relabeled).toBeGreaterThan(0);
+      const stale = where.replace(/\.json$/u, "-stale.json");
+      writeFileSync(stale, JSON.stringify(doc));
+      put(VAR, stale);
+      const second = await positions(ctxFor([], { hyperSync: source }), undefined, "full-decentralized");
+      expect((second.data as PositionsData).positions.map((x) => [x.poolId, x.generation.label])).toEqual(want);
+    } finally {
+      put(VAR, saved);
     }
   });
   it("`mode: full-decentralized` WITHOUT a HyperSync source falls back to the windowed walk and SAYS so (cork-pools parity); with one, it uses it and stays silent", async () => {

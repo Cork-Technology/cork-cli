@@ -43,6 +43,12 @@ interface HsScanSpec {
    *  set, topics, and floor — see scanCacheId). Cached rows are PRE-postFilter, so per-call
    *  filters and join closures still apply fresh. */
   cache?: string;
+  /** Re-derive the CONFIG-dependent fields of a row (its set label, its wire) from the scan's
+   *  current emitters. Applied to cached rows on the way out: a cached row keeps what the CHAIN
+   *  said, never what the config said when it was cached. Found 2026-10-09: when phoenix/v0.5
+   *  became the primary on a pool manager it shares with phoenix/v0.4-rc.1, cached rows kept the
+   *  old label, so account-state named the read-only set while pool reads named the primary. */
+  attribute?: (row: Record<string, unknown>) => Record<string, unknown>;
 }
 
 /** The two JSON-RPC calls the live-tail needs — a structural subset of viem's PublicClient, so the
@@ -129,7 +135,8 @@ async function runScanWithTail(ctx: HandlerContext, chainId: ChainId, hs: HyperS
   const r = await hs.queryLogs({ fromBlock: resumeFrom, address: spec.address, topics: spec.topics });
   let decoded = spec.decode(r.logs);
   if (cached !== undefined) {
-    decoded = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom).concat(decoded);
+    const kept = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom);
+    decoded = (spec.attribute !== undefined ? kept.map(spec.attribute) : kept).concat(decoded);
   }
   if (cacheId !== undefined && r.complete !== false && r.archiveHeight !== undefined) {
     writeScanCache(cacheId, { watermark: r.archiveHeight, rows: decoded });
@@ -178,6 +185,10 @@ function marketCreatedSpecFor(emitters: MarketEmitter[], filters: QueryFilters):
       postFilter: (rows) => (filters.poolId ? rows.filter((m) => String(m.poolId).toLowerCase() === filters.poolId!.toLowerCase()) : rows),
       key: (m) => `market:${String(m.poolId).toLowerCase()}`,
       cache: "markets",
+      attribute: (row) => {
+        const e = emitters.find((x) => x.poolManager.toLowerCase() === String(row["poolManager"]).toLowerCase());
+        return e === undefined ? row : { ...row, generation: e.label, wire: e.wire };
+      },
     },
   };
 }

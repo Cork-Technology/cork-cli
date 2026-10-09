@@ -152,6 +152,15 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+  {
+    // Cached rows keep the label the config gave them when they were cached (the 2026-10-09
+    // account-state / pool-read disagreement on the pool manager two sets share).
+    id: "scan-cache-stale-label-served",
+    file: "packages/core/src/handlers/query.ts",
+    find: "    decoded = (spec.attribute !== undefined ? kept.map(spec.attribute) : kept).concat(decoded);",
+    replace: "    decoded = kept.concat(decoded);",
+    tests: [T.migration],
+  },
   // ── phoenix/v0.5: the bytes JIT permit row and sets that share contracts (2026-10-09) ──
   {
     // The 0.5.0 adapter's wrapper (market, enableJitMint) in the wrong order.
@@ -1860,8 +1869,8 @@ const CATALOG: Mutant[] = [
     // read silently loses every old row.
     id: "cursor-boundary-filter-inverted",
     file: "packages/core/src/handlers/query.ts",
-    find: "decoded = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom).concat(decoded);",
-    replace: "decoded = cached.rows.filter((row) => Number(row.blockNumber) >= resumeFrom).concat(decoded);",
+    find: "const kept = cached.rows.filter((row) => Number(row.blockNumber) < resumeFrom);",
+    replace: "const kept = cached.rows.filter((row) => Number(row.blockNumber) >= resumeFrom);",
     tests: [T.hypersync],
   },
   {
