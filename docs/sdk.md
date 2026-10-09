@@ -5,8 +5,8 @@ state, run bit-exact math and build unsigned transactions, all from typed TypeSc
 
 One safety property shapes everything here: **the SDK never signs or holds wallet private keys.**
 Every prepare returns unsigned bytes or typed data. You sign with your own wallet and broadcast
-through your own RPC. `cork_submit` relays caller-signed or API-key-authenticated venue payloads;
-it does not broadcast on-chain transactions.
+through your own RPC. `cork_submit` relays venue payloads that the caller signed or authenticated
+with an API key. It does not broadcast on-chain transactions.
 
 Make one trade-off on purpose before you import anything. A library runs in-process, with your
 backend's full authority. The `ch` binary runs behind an OS process boundary you can sandbox. If
@@ -17,8 +17,8 @@ your posture needs that boundary, use the binary, or run this SDK in its own wor
 
 - `@cork/core`: the SDK. Math, chain reads, order building, bundle encoding, and `runTool`, the
   same 9-tool contract that the Cork MCP server and the `ch` CLI ship.
-- `@cork/schemas`: the zod schemas for every tool input and output. Useful on its own when you
-  validate inputs before you send them anywhere.
+- `@cork/schemas`: the zod schemas for every tool input and output. Use it on its own to validate
+  inputs before you send them anywhere.
 
 The numbers are not approximations. Every math port is bit-exact against the deployed Solidity,
 verified wei-for-wei on live chains. Trust the SDK's numbers over hand-derived ones.
@@ -28,11 +28,11 @@ verified wei-for-wei on live chains. Trust the SDK's numbers over hand-derived o
 You need Node 22 or later, or Bun 1.3 or later. The packages are ESM-only and ship their own types.
 
 The packages are not on a public registry. A release ships three attested tarballs beside the
-binaries: schemas, core and the optional MCP server package. Public releases and release
-candidates are published in `Cork-Technology/cork-cli`.
+binaries: schemas, core and the optional MCP server package. We publish public releases and
+release candidates in `Cork-Technology/cork-cli`.
 
-Download an already-published tag and verify every archive against its repository, builder,
-tag and approved source commit. Never put a private credential in a package URL or lockfile.
+Download a published tag. Verify every archive against its repository, builder, tag and approved
+source commit. Never put a private credential in a package URL or lockfile.
 
 ```sh
 REPO=Cork-Technology/cork-cli
@@ -47,10 +47,10 @@ for asset in cork-*.tgz; do
 done
 ```
 
-Merge dependencies **and overrides** into your consumer's package.json. This example is for
-0.7.0 after publication; use the archive version of the tag you actually downloaded.
-The overrides keep transitive Cork dependencies on those same verified archives rather than
-trying unpublished npm versions. MCP is optional: omit both of its entries if you need only core.
+Merge the dependencies **and the overrides** into your consumer's package.json. The example shows
+0.7.0 after publication. Use the archive version of the tag that you downloaded. The overrides keep
+transitive Cork dependencies on the same verified archives, so your package manager does not try
+unpublished npm versions. MCP is optional: if you need only core, omit both of its entries.
 
 ```json
 {
@@ -71,11 +71,12 @@ trying unpublished npm versions. MCP is optional: omit both of its entries if yo
 bun install --ignore-scripts
 ```
 
-Other, third-party dependencies still come from their registries. Review the lockfile's archive
-integrities on each upgrade. For private remote config and release reads, set CORK_GITHUB_TOKEN
-in the SDK process environment; this is separate from CORK_RFQ_API_KEY for venue authentication.
+Third-party dependencies still come from their registries. On each upgrade, review the archive
+integrities in the lockfile. To read private remote config and releases, set CORK_GITHUB_TOKEN in
+the environment of the SDK process. This token is separate from CORK_RFQ_API_KEY, which
+authenticates you to the venue.
 
-Working from a clone? Build and validate with the repository's pinned Bun before packing:
+Working from a clone? Before you pack, build and validate with the repository's pinned Bun:
 
 ```sh
 mise exec -- bun install --frozen-lockfile --os='*' --cpu='*'
@@ -87,9 +88,9 @@ done
 printf 'Local archives: %s\n' "$SDK_DIR"
 ```
 
-Copy those local archives into your consumer and use the dependency/override recipe above.
-Locally packed bytes are not attested release assets; the release's independent-build checksum
-comparison and provenance gates must prove release reproducibility separately.
+Copy those local archives into your consumer and use the dependency and override recipe above.
+Locally packed bytes are not attested release assets. The release proves reproducibility
+separately, with its own gates: a checksum comparison of independent builds, and provenance.
 
 Why tarballs and not npm? [sdk-roadmap.md](sdk-roadmap.md) explains the distribution posture, the
 verification chain, and when the npm stage arrives.
@@ -140,7 +141,7 @@ Check `state` first. It has three values, and each means what it says.
 
 | `state` | Meaning | What you do |
 |---|---|---|
-| `ok` | The call worked. | Use `data`. Read `warnings` too; informational notes ride there. |
+| `ok` | The call worked. | Use `data`. Read `warnings` too; they carry informational notes. |
 | `unavailable` | The tool cannot serve this honestly. | Read `warnings[0].code` for the reason. Do not retry the same call. |
 | `conflict` | The tool ran and found a mismatch. | Surface it. Two sources disagree, often the venue and the chain, and the chain wins. |
 
@@ -157,9 +158,10 @@ branch on it. The message is for people. Codes you meet early:
 
 **Provenance tells you who answered.** `provenance.mode` is a connectivity pledge:
 `lite-decentralized` means your RPC only; `hybrid` means venue rows, chain-verified;
-`full-decentralized` means chain events, never the venue. `provenance.chainId`, `fetchedAt` and,
-on a chain-backed read, `generation` are always present. Pass `format: "full"` in any input to
-also get the RPC host that served the read.
+`full-decentralized` means chain events, never the venue. `provenance.chainId` and `fetchedAt` are
+always present. A read that targets one generation also carries `generation`. A positions read
+across every generation does not; each of its rows names its own. To also get the RPC host that
+served the read, pass `format: "full"` in any input.
 
 **Numbers carry labels.** Money and rate outputs include a `scales` block. Read it. Not every value
 has 18 decimals, and two conventions coexist on-chain: 1e18 = 1.0 for rates, 1e18 = 1% for fees.
@@ -227,15 +229,15 @@ console.log(poolId8, poolId10);           // two different pool ids
 ```
 
 `Market` is the union `Market8 | Market10`. `computeMarketId` takes the wire explicitly and refuses
-a market whose shape contradicts it. Why explicit: viem decodes a 10-field `market()` return through
-an 8-field ABI without error, so the wire is never inferred from the fields. The wire comes from the
-pool's generation. `generationsOf(defaults, chainId)` lists a chain's generations, primary first,
-each block with its `wire`. `resolvePoolGeneration(client, list, poolId)` finds the generation a pool
-lives on with one batched `shares(poolId)` read. `resolveDeployment`, `resolveRollover` and
-`resolveMarketRegistry` take an optional generation label and return `generation: { label, status,
-wire }`. `runTool` does all of this for you: every chain-backed input takes an optional
-`generation`, a pool-scoped read follows the pool's generation, and every such result carries
-`data.generation` and `provenance.generation`.
+a market whose shape contradicts it. The reason: viem decodes a 10-field `market()` return through
+an 8-field ABI without error. So the SDK never infers the wire from the fields. The wire comes from
+the pool's generation. `generationsOf(defaults, chainId)` lists a chain's generations, primary
+first, each block with its `wire`. `resolvePoolGeneration(client, list, poolId)` finds the
+generation of a pool with one batched `shares(poolId)` read. `resolveDeployment`,
+`resolveRollover` and `resolveMarketRegistry` take an optional generation label and return
+`generation: { label, status, wire }`. `runTool` does all of this for you. Every chain-backed input
+takes an optional `generation`. A pool-scoped read follows the pool's generation, and every such
+result carries `data.generation` and `provenance.generation`.
 
 Amounts and rates are `bigint` in base units throughout. The SDK never uses floating point for
 money.
@@ -286,13 +288,13 @@ await runTool("cork_track", { chainId: 8453, mode: "reconcile", subject: { kind:
 ```
 
 Every prepare result carries `data.execution`: the artifact kind, the sign method and the ordered
-next steps. When in doubt, follow it.
+next steps. If you are not sure what to do next, follow it.
 
 <details>
 <summary><b>Deeper: the order path (EIP-712 typed data)</b></summary>
 
 Limit orders and rollover intents follow the second family. You sign typed data instead of a
-transaction, and the venue receives the result.
+transaction, and the venue gets the result.
 
 1. `cork_prepare_orders` with `action.type: "maker-order"` returns unsigned EIP-712 typed data.
 2. Sign it client-side (`eth_signTypedData_v4`).
@@ -331,9 +333,10 @@ bundles, or pin `nowSeconds`.
 
 Chain reads resolve an endpoint in this order: explicit (`ctx.rpcUrl` or `CORK_RPC_URL`), then the
 committed defaults (mainnet, Arbitrum One, Base), then the chainlist.org fallback. An explicit
-endpoint must prove it serves the requested chain, or the call refuses. Failures trip a
-per-endpoint circuit breaker and fail over during the call. `provenance.rpc`, with
-`format: "full"`, discloses which endpoint served you.
+endpoint must prove that it serves the requested chain, or the call refuses. When an
+automatic endpoint fails, it trips a per-endpoint circuit breaker, and the call fails over to
+another endpoint. An explicit endpoint never fails over. With `format: "full"`,
+`provenance.rpc` names the endpoint that served you.
 
 You need configuration only for a private node, a chain outside the defaults (a staging vnet, for
 example), or the event-archive tier (`ENVIO_HYPERSYNC_TOKEN` for full-decentralized reads).
@@ -345,8 +348,9 @@ One rule: never commit an RPC URL. Pass endpoints through the environment.
 <details>
 <summary><b>Deeper: validate inputs early with @cork/schemas</b></summary>
 
-`runTool` validates for you and returns structured teaching errors on bad input. Each issue carries
-a path, the expectation, a "did you mean" suggestion and a corrected example. To validate earlier,
+`runTool` validates for you. On bad input it throws a `ToolInputError` with structured teaching
+issues. Each issue carries a path, the expectation, a "did you mean" suggestion and a corrected
+example. To validate earlier,
 for example at your own API boundary, use the schemas directly:
 
 <!-- example: fragment -->
@@ -357,21 +361,21 @@ const tool = toolByName("cork_query");
 const parsed = tool.input.safeParse(userInput);   // zod v4, the same schema the SDK enforces
 ```
 
-Bad input surfaces as a thrown `ToolInputError`, exported from `@cork/core`. Everything else,
-domain failures included, comes back inside the envelope, never as an exception.
+`ToolInputError` is exported from `@cork/core`. Bad input is the only exception. Everything else,
+domain failures included, comes back inside the envelope.
 </details>
 
 ## What we promise about stability
 
-The public surface, every export on the root and on each subpath, type exports included, is pinned
-by a drift gate in CI (`packages/core/test/api-surface.test.ts`). Nothing appears or disappears by
-accident. Below 1.0.0, a breaking change on covered surface bumps the minor version and lands in
-the changelog. The internal modules the barrels exclude carry no promise. If you cannot import it,
-do not depend on it.
+A drift gate in CI (`packages/core/test/api-surface.test.ts`) pins the public surface: every
+export on the root and on each subpath, type exports included. Nothing appears or disappears by
+accident. Below 1.0.0, a breaking change on covered surface bumps the minor version and goes into
+the changelog. We promise nothing about the internal modules that the barrels exclude. If you
+cannot import it, do not depend on it.
 
 ## When something goes wrong
 
 Read the envelope first: `state`, then `warnings[0].code`. The code is the diagnosis. If the
 message names a fix, and most do, try that. If a read looks wrong, ask for `format: "full"` and
-check which endpoint and mode served it. And if you find a number the chain disagrees with, tell
-us. The math is verified wei-for-wei, and we treat any deviation as a bug.
+check which endpoint and mode served it. If you find a number that the chain disagrees with, tell
+us. We verify the math wei-for-wei, and we treat any deviation as a bug.

@@ -43,6 +43,12 @@ covered.
   - The Zyfai quickstart named `phoenix/v0.4-rc.1` where the primary is `phoenix/v0.5`. It said that no pool exists on the primary, but 33 do on Base. Its exercise example used a pool that had expired. It said that all four Base feeds go into USD, but wstETH goes into ETH. Its recipe sample was not valid JSON.
 
   We ran the quickstart again live on Base on 2026-10-09 and replaced its samples.
+- **The docs read in Simplified Technical English, and the pass fixed the stale facts it found.** We rewrote the prose of `README.md` and `docs/*.md` with short sentences and named actors. Every code block is byte-identical. The facts we corrected:
+  - `docs/jit-order-anatomy.md` said that this build does not target the `phoenix/v0.5` JIT adapter, and that a contract wallet cannot sign the JIT permit. The primary takes a `bytes` permit, so a Safe can sign it through ERC-1271. Only `phoenix/v0.4-rc.1` takes v/r/s. It also gave `InvalidFees` and the creator role holder for `phoenix/v0.4-rc.1` only; both apply to `phoenix/v0.5` too.
+  - `docs/sdk.md` said that `runTool` returns teaching errors on bad input. It throws a `ToolInputError` that carries them. It also said that every call fails over, but an explicit RPC endpoint never does.
+  - `docs/sdk-roadmap.md` named two SDK tarballs (there are three), an install by URL (you install a downloaded file), and only `viem` and `zod` as dependencies (the optional HyperSync client packages come from npm too).
+  - `README.md` said that the apk index is not live yet, that an explicit RPC is used with no probe (it must prove its chain), and that the pool actions run on mainnet and Arbitrum only (Base too). It gave the old venue pools URL.
+  - `docs/zyfai-quickstart.md` said that `jit_side_mismatch` refuses an order (it warns), listed three recipes for the previous set (it has four), and did not name the `arbitrum-v1.1` set.
 
 ### Security
 

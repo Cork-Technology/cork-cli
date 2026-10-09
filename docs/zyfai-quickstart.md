@@ -2,38 +2,40 @@
 
 **Audience:** the Zyfai engineering team. **Assumes:** fluency with Safe and ERC-7579, 1inch LOP v4,
 EIP-712 and ERC-1271, ERC-2612 permits, ERC-4626, CREATE2. **Chain:** Base (8453). Everything here
-also runs on Arbitrum One (42161) with only the chain id and the asset addresses changed, because
-both contract sets live at identical addresses on both chains.
+also runs on Arbitrum One (42161). Only the chain id and the asset addresses change, because each
+Distribution set lives at identical addresses on both chains.
 
 **Status (2026-10-09).** A chain hosts a set of contract generations. One of them is the primary.
 On Base and Arbitrum One the primary is **`phoenix/v0.5`** (Distribution `phoenix/v0.5-rc.1`).
-It runs Market Registry contracts release **0.6.0**: the 0.5.0 registry
+It runs Market Registry contracts release **0.6.0**. That release is the 0.5.0 registry
 `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5` with a new JIT adapter, CorkLimitOrderAdapter 0.5.0 at
-`0x960Cd94B31121806b1b0Ff02230D189Ad0310616`, on the Phoenix 1.4.0-rc.1 pool manager
+`0x960Cd94B31121806b1b0Ff02230D189Ad0310616`. It runs on the Phoenix 1.4.0-rc.1 pool manager
 `0xcC17…0C2D`. Its JIT permit is one `bytes` signature, so a Safe can sign it through ERC-1271.
 
-Two older sets stay active, and you select one with `--generation <label>`:
+Two older sets stay active on both chains. Select one with `--generation <label>`:
 
 - `phoenix/v0.4-rc.1` shares every contract with the primary except the JIT adapter
   (`0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104`, which takes v/r/s permits only).
 - `phoenix/v0.3-rc.1` is the previous set: contracts release **0.3.3** (registry
-  `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. Most pools the
-  venue lists live there.
+  `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. Most pools that
+  the venue lists live there.
+
+Arbitrum One also keeps `arbitrum-v1.1` active: the stack of its first 176 pools.
 
 On 2026-10-09 the venue listed 584 pools on Base: 551 on the previous set and 33 on the primary.
 Primary pools are short-dated, so pick a live one when you run the examples. A prepare targets the
-primary unless you pass `--generation`. A read of an existing pool follows the generation the pool
-lives on.
+primary unless you pass `--generation`. A read of an existing pool follows the generation of that
+pool.
 
 We ran every example below live on Base on 2026-10-09 with cork-cli `0.7.1-rc.1`. The trimmed
-responses are that run. Treat them as orientation and take the real values from the tool:
+responses come from that run. Use them for orientation, and take the real values from the tool:
 `ch query protocol-config` lists every generation with every address and wire. Never hardcode an
 address.
 
-This is a two-part handoff. Part one is a compact model of what Cork gives you and where your
-agent plugs in. Part two is `cork-cli`, a helper you drive from an MCP client or the shell to read
-state, derive markets, build unsigned transactions and simulate them. It never signs and never
-holds funds.
+This handoff has two parts. Part one is a compact model of what Cork gives you and where your
+agent plugs in. Part two is `cork-cli`, a helper that you drive from an MCP client or the shell.
+It reads state, derives markets, builds unsigned transactions and simulates them. It never signs
+and never holds funds.
 
 ---
 
@@ -45,79 +47,79 @@ position into two ERC-20 legs.
 | Term | Meaning | Who holds it |
 |---|---|---|
 | **REF** | the asset your user is exposed to and wants cover on. The registry lists the approved assets. Read the list; do not assume. | the user |
-| **CA** | the liquid collateral asset paid out on cover. Pilot: **sUSDe**, `0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2`, 18 decimals. | the pool |
+| **CA** | the liquid collateral asset that the cover pays out. Pilot: **sUSDe**, `0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2`, 18 decimals. | the pool |
 | **cST** | the cover token: the right to swap REF for CA at the market's tracked rate before expiry | **Zyfai (demand)** |
 | **cPT** | the principal token: the underwriter's leg plus the premium | **bond.credit (supply)** |
 
-One naming rule carries the whole page. A **cork-pool** is one concrete expiry of a **market**, an
-instance of it. The CLI accepts `pool` and `market-instance` as synonyms for `cork-pool`. Despite
-the word, it is not an AMM liquidity pool. It is a covered position tokenized into the two legs
-above. A **trading-pair** is a pair listed on the LOP venue book. The **orderbook** holds that
-pair's resting orders.
+One naming rule applies to the whole page. A **cork-pool** is one concrete expiry of a
+**market**: an instance of it. The CLI accepts `pool` and `market-instance` as synonyms for
+`cork-pool`. Despite the word, a cork-pool is not an AMM liquidity pool. It is a covered position,
+tokenized into the two legs above. A **trading-pair** is a pair listed on the LOP venue book. The
+**orderbook** holds the resting orders of that pair.
 
-The pool id is the keccak of its on-chain `Market` struct, so you can derive it off-chain before
-the pool exists. Markets are short-dated; you pick the term. The rate rules come from a
-**recipe**, an approved contract. Four are live: **fixed** (the rate never moves), **liquidity** in
-two flavors that share one policy and differ only in the rate's source, **price** (a market feed,
-the depeg view) and **nav** (the vault's own accounting, the book-value view), and **impairment**
-(a window sized from an annual yield spread). **The recipe decides what the cover pays**: a
-liquidity recipe gives an exit, the impairment recipe gives downside protection (step 1b). The
-registry bounds market life: `maxExpiryDuration` is 30 days, and a fill that would create a
-longer market reverts.
+The pool id is the keccak of the on-chain `Market` struct of the pool, so you can derive it
+off-chain before the pool exists. Markets are short-dated, and you pick the term. A **recipe**, an
+approved contract, sets the rate rules. Four are live. **fixed**: the rate never moves.
+**liquidity**, in two flavors that share one policy and differ only in the source of the rate:
+**price** (a market feed, the depeg view) and **nav** (the vault's own accounting, the book-value
+view). **impairment**: a window sized from an annual yield spread. **The recipe decides what the
+cover pays.** A liquidity recipe gives an exit. The impairment recipe gives downside protection
+(step 1b). The registry limits market life: `maxExpiryDuration` is 30 days. A fill that would
+create a longer market reverts.
 
-**You are the demand side.** You buy cST cover on a position your yield agent manages, and you
-exercise it on impairment. The underwriter is the supply side. It prices and sells the cover and
-holds cPT. Settlement is atomic on 1inch LOP v4 with just-in-time (JIT) minting of cST and cPT
-inside the fill. Nobody pre-funds inventory.
+**You are the demand side.** You buy cST cover on a position that your yield agent manages, and
+you exercise it on impairment. The underwriter is the supply side. It prices and sells the cover
+and holds cPT. Settlement is atomic on 1inch LOP v4. The fill mints cST and cPT just in time
+(JIT), so nobody pre-funds inventory.
 
 ---
 
 ## 2. The flow end to end
 
-Four steps, seen from the demand side. Every step has a `ch` command that returns an unsigned
-artifact or a plain read. You sign and broadcast with your own stack.
+The flow has four steps, seen from the demand side. Each step has a `ch` command that returns an
+unsigned artifact or a plain read. You sign and broadcast with your own stack.
 
 | # | Step | What happens | Tool |
 |---|---|---|---|
 | 1 | **Select the asset and open an RFQ** (off-chain) | Pick REF, CA, recipe and term from the registry. Derive the market they name. Open a request-for-quote on the venue. | `ch query registry-*`, `ch query derive-cork-pool`, `ch submit rfq-open` |
-| 2 | **The underwriter answers and rests a SELL order** | The underwriter answers with priced options, each carrying its signed SELL order, then rests that order on the book: makerAsset is the cST, takerAsset is CA. The cST does not exist yet; the order carries the market. | `ch query rfq`, `ch query orderbook`, `ch decode order` |
-| 3 | **You buy the cST** by filling that order | Verify, build, simulate, fill on the LOP. The adapter creates the market if it is new and mints the cST to your Safe in the same transaction. | `ch fill`, `ch track simulate` |
-| 4 | **You exercise** the cST | Hand in cST plus REF, receive CA at the market's rate. A direct Phoenix call, not an LOP fill. | `ch compute cst-swap-rate`, `ch exercise`, `ch track simulate` |
+| 2 | **The underwriter answers and rests a SELL order** | The underwriter answers with priced options. Each option carries its signed SELL order. The underwriter then rests that order on the book: makerAsset is the cST, takerAsset is CA. The cST does not exist yet; the order carries the market. | `ch query rfq`, `ch query orderbook`, `ch decode order` |
+| 3 | **You buy the cST** by filling that order | Verify, build, simulate, then fill on the LOP. If the market is new, the adapter creates it and mints the cST to your Safe in the same transaction. | `ch fill`, `ch track simulate` |
+| 4 | **You exercise** the cST | Hand in cST plus REF, and receive CA at the market's rate. This is a direct Phoenix call, not an LOP fill. | `ch compute cst-swap-rate`, `ch exercise`, `ch track simulate` |
 
 Three facts shape the flow.
 
-- **Market identity is pinned at signing.** The order carries its resolved rate constraint, so the
-  pool id and the cST and cPT addresses are fixed the moment the order is signed. Staleness is
-  checked at fill time instead: if the live rate has left the carried window, the fill reverts
-  `RecipeRejectedConstraint` until a fresh constraint is signed.
+- **Market identity is pinned at signing.** The order carries its resolved rate constraint. So the
+  pool id and the cST and cPT addresses are fixed the moment the maker signs the order. The fill
+  checks staleness instead: if the live rate has left the carried window, the fill reverts
+  `RecipeRejectedConstraint`. It keeps reverting until the maker signs a fresh constraint.
 - **The tool picks the fill flavor.** `fillOrderArgs` for an EOA maker, `fillContractOrderArgs` for
   a Safe maker. A wrong guess reverts `BadSignature`.
 - **Redeem is a supply-side action.** You hold cST only. Your terminal move is exercise, never
   redeem. An unexercised cST is worthless after expiry.
 
-One piece of one-time preparation per pair comes before step 1: the pair's rate oracle. It is
+Before step 1 comes one preparation per pair, done once: the rate oracle of the pair. It is
 permissionless, idempotent and optional, because a JIT fill deploys a missing oracle itself. On the
-primary registry the sUSDe/mwUSDC oracle is not deployed yet, which changes one detail in step 1
-(the anchor rate). After step 4, or instead of it near expiry, comes rollover.
+primary registry the sUSDe/mwUSDC oracle is not deployed yet. This changes one detail in step 1:
+the anchor rate. After step 4, or instead of it near expiry, comes rollover.
 
 ---
 
 ## 3. The flow, step by step
 
 Every command below ran live on Base on 2026-10-09. Each returns an unsigned artifact or a plain
-read. Trimmed responses follow each command. Conventions:
+read. A trimmed response follows each command. Conventions:
 
 - Replace `0xYOUR_SAFE` with the Safe you drive.
-- The action is a subcommand and its fields are flags: `ch exercise --pool-id 0x… --cst-shares-in
+- The action is a subcommand, and its fields are flags: `ch exercise --pool-id 0x… --cst-shares-in
   1000e18`. Every subcommand has `--help` and `--explain`. A mistyped action gets a did-you-mean.
 - Amount flags take exact sugar: `1000e18`, `1_000000`. Spelling is forgiving: `--pool-id`,
   `--poolid` and `--poolId` are one flag.
 - The canonical wire form works everywhere: `--input '{…}'` with the full object. A flag overrides
   the same key in the blob. An MCP call carries exactly that object.
-- `--client-request-id` is the name of the request. Retrying the same thing? Reuse the id. Doing
-  a new thing? New id. For orders this decides the invalidator bit: two live orders that share an
-  id kill each other.
-- Output is prose by default. A bare `--json` returns the raw envelope. The responses shown are
+- `--client-request-id` names the request. To retry the same request, reuse the id. For a new
+  request, use a new id. For orders the id decides the invalidator bit: two live orders that share
+  an id kill each other.
+- Output is prose by default. A bare `--json` returns the raw envelope. The responses below are
   that JSON, trimmed.
 
 The pair used throughout:
@@ -131,13 +133,13 @@ In the tool, CA is `collateralAsset` and REF is `referenceAsset`.
 
 ### Step 1: select the asset and open an RFQ
 
-There is no UI for RFQs. The CLI or MCP is the way in. The same core also ships as the typed
-`@cork/core` SDK ([sdk.md](sdk.md)).
+RFQs have no UI. Use the CLI or MCP. The same core also ships as the typed `@cork/core` SDK
+([sdk.md](sdk.md)).
 
 #### 1a. Pick the REF asset
 
-The registry lists the assets it approves. Each entry describes its price and NAV sources. Look one
-up by address:
+The registry lists the assets it approves. Each entry describes the price and NAV sources of the
+asset. Look one up by address:
 
 ```sh
 ch query registry-assets --chain-id 8453 --address 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca --json
@@ -153,17 +155,16 @@ ch query registry-assets --chain-id 8453 --address 0xc1256Ae5FF1cf2719D4937adb3b
 ```
 
 Each asset carries up to two source slots. `priceSource` is what the market says the asset is
-worth, a Chainlink-style aggregator. `navSource` is what the asset's own accounting says, here the
+worth: a Chainlink-style aggregator. `navSource` is what the asset's own accounting says, here the
 vault's `convertToAssets`. mwUSDC carries only `navSource`; sUSDe carries only `priceSource`. That
-decides the oracle mode for the pair: it composes as `nav` only, which is why every step below
+decides the oracle mode for the pair: it composes as `nav` only. This is why every step below
 says `nav`. Fourteen assets are registered on Base today; `ch query registry-assets --chain-id
 8453` lists them.
 
-Two supporting tables explain how sources compare. Denominations map a unit to its symbol; on the
-0.5.0 registry they are keyed by unit address (five on Base: USD, ETH, wstETH, USDC, cbETH). Feeds
+Two supporting tables show how sources compare. Denominations map a unit to its symbol. On the
+0.5.0 registry the key is the unit address (five on Base: USD, ETH, wstETH, USDC, cbETH). Feeds
 are directed conversion edges with live answers (four on Base: ETH, USDC and cbETH into USD, and
-wstETH into ETH). A pair whose sources
-have no path to a common unit cannot get a price oracle.
+wstETH into ETH). A pair whose sources have no path to a common unit cannot get a price oracle.
 
 ```sh
 ch query registry-denominations --chain-id 8453 --json
@@ -172,7 +173,7 @@ ch query registry-feeds --chain-id 8453 --json
 
 #### 1b. Pick the cover, and with it the recipe
 
-Decide first what you want the cover to pay. The recipe decides that, not the RFQ `modes`: the
+First decide what you want the cover to pay. The recipe decides that, not the RFQ `modes`. The
 modes name the alternatives you accept, and nothing on chain reads them. A request carries one
 market template, so it describes one cover. Open one request per cover.
 
@@ -180,11 +181,11 @@ market template, so it describes one cover. Open one request per cover.
 |---|---|---|---|---|
 | **Liquidity (duration-risk) cover**: an exit | LiquidityPriceRecipe, LiquidityNavRecipe | follows the oracle: window 1 wei to 2x the anchor, one whole anchor of movement a day | **not paid**. The rate falls with the reference, so you hand in more reference for the same collateral | `liquidity_only` |
 | **Impairment (credit-risk) cover**: downside, with a deductible | ApySpreadImpairmentRecipe | held in a band: anchor ± `apy_spread × duration / 365 d`, one day of the spread of movement a day | **covered beyond the part of the band the rate has given up**. The whole band is your worst-case deductible | `liquidity_impairment` |
-| **Fixed-rate cover**: downside, frozen | FixedRateRecipe | never moves: the window is the rate to the rate plus 1 wei | **covered in full below the frozen rate**. The yield of the reference after creation is not tracked | `fixed_rate` (venue 0.4.4) |
+| **Fixed-rate cover**: downside, frozen | FixedRateRecipe | never moves: the window is the rate to the rate plus 1 wei | **covered in full below the frozen rate**. The pool does not track the yield of the reference after creation | `fixed_rate` (venue 0.4.4) |
 
 We measured the difference on a Base fork against the deployed `phoenix/v0.4-rc.1` contracts
-(2026-10-01): three pools over USDC and baseUSD with the same expiry, one per recipe. The fixed
-pool froze the oracle's rate at creation. The reference vault took a real 10% loss. One hour
+(2026-10-01). We used three pools over USDC and baseUSD with the same expiry, one per recipe. The
+fixed pool froze the oracle's rate at creation. The reference vault took a real 10% loss. One hour
 later the holder exercised 100 cST on each pool:
 
 | | Reference handed in | Its value after the loss | Collateral received | Payout of the cover |
@@ -194,25 +195,25 @@ later the holder exercised 100 cST on each pool:
 | Fixed-rate cover (frozen at the rate at creation) | 91.652 baseUSD | 90.001 USDC | 100.000 USDC | **9.999 USDC** |
 
 The band is the worst-case deductible, not the deductible on every day. The rate of the impairment
-pool walks toward its floor at one day of the spread per day. One hour after the loss it had given
-up only the burst capacity (0.19% of the anchor), so the payout was 9.827. When the rate reaches
-the floor, the payout is the loss less the whole band.
+pool walks toward its floor at one day of the spread per day. One hour after the loss, the rate had
+given up only the burst capacity (0.19% of the anchor). So the payout was 9.827. When the rate
+reaches the floor, the payout is the loss less the whole band.
 
 Liquidity cover answers duration risk: you cannot sell or redeem the reference at its book value
-in time. It is not protection against the reference losing value. Impairment cover answers credit
-risk: the reference loses value.
+in time. It does not protect you against a loss of value in the reference. Impairment cover
+answers credit risk: the reference loses value.
 
-**A loss the share price does not report moves no rate.** The liquidity and impairment recipes
-read the rate oracle, and a NAV oracle reads the vault's reported share price. A fixed-rate pool
-reads no feed. MetaMorpho v1.1 vaults keep realized bad
-debt out of that price (they add it to `lostAssets`), so on those vaults the pool's rate does not
-move on bad debt under either recipe. You can still swap at the reported price while the pool has
-collateral, and the underwriter carries any open shortfall, so expect it to price that risk or
-to pass. YCSUSDC and sparkUSDC are such vaults on Base today. Neither has an open shortfall: the
-`lostAssets` counter never decreases, and the owner of YCSUSDC covered its 131.38 USDC loss
-through `address(1)` (read 2026-10-01). For a NAV-sourced recipe `ch submit rfq-open` reads
-`lostAssets()` and that cover, and warns `reference_loss_unreported` with the open shortfall when
-the reference has the counter. What the tool could not read is listed in `data.cover.notRead`.
+**A loss that the share price does not report moves no rate.** The liquidity and impairment
+recipes read the rate oracle, and a NAV oracle reads the vault's reported share price. A
+fixed-rate pool reads no feed. MetaMorpho v1.1 vaults keep realized bad debt out of that price:
+they add it to `lostAssets`. So on those vaults the pool's rate does not move on bad debt, under
+either recipe. You can still swap at the reported price while the pool has collateral. The
+underwriter carries any open shortfall, so expect it to price that risk or to pass. YCSUSDC and
+sparkUSDC are such vaults on Base today. Neither has an open shortfall. The `lostAssets` counter
+never decreases, and the owner of YCSUSDC covered its 131.38 USDC loss through `address(1)` (read
+2026-10-01). For a NAV-sourced recipe, `ch submit rfq-open` reads `lostAssets()` and that cover.
+When the reference has the counter, it warns `reference_loss_unreported` with the open shortfall.
+`data.cover.notRead` lists what the tool could not read.
 
 A recipe is an approved contract address. Copy it from the registry, never from a chat message:
 
@@ -234,22 +235,23 @@ ch query registry-recipes --chain-id 8453 --json
 The previous set has its own registry and its own four recipes. Add `--generation phoenix/v0.3-rc.1`
 to list them. A recipe works only on the registry that approves it.
 
-The liquidity policy: the rate may fall to 1 wei (`rateMin`), may never exceed twice the anchor
-(`rateMax`), may move one anchor per day (`rateChangePerDayMax`) with a total budget of three
-(`rateChangeCapacityMax`). In practice the rate follows the oracle: in the measurement above it
+The liquidity policy: the rate may fall to 1 wei (`rateMin`) and may never exceed twice the anchor
+(`rateMax`). It may move one anchor per day (`rateChangePerDayMax`), with a total budget of three
+(`rateChangeCapacityMax`). In practice the rate follows the oracle: in the measurement above, it
 had tracked the whole 10% loss within the hour.
 
 The impairment policy: you choose a duration and an annual spread. The band is
-`apy_spread × duration / 365 d`, the rate may move one day of the spread per day, with seven days
-of it available as a burst. Each recipe states its own limits, and they differ per generation. The
-0.5.0 recipe (on the primary and on `phoenix/v0.4-rc.1`) caps the spread at 100% a year and the duration at 30 days, and the
-duration must fit inside the pool's remaining life at the fill that creates the pool. The tool
-restates none of these: `rfq-open` asks the recipe (`resolve`, then `verify` with the pool expiry
-your block names) and returns its answer in `data.cover.resolved`, or a warning. A duration above
-the pool's remaining life is rejected when the pool is created, and the fill then reverts
-`RecipeRejectedConstraint`: `rfq-open` warns `would_revert` and names that cause. Ask the recipe
-what a choice commits you to. Pass three words: the anchor, the duration in seconds, and
-the spread on the percentage scale (1e18 = 1%, so 10% a year is `10000000000000000000`):
+`apy_spread × duration / 365 d`. The rate may move one day of the spread per day, with seven days
+of it available as a burst. Each recipe states its own limits, and the limits differ per
+generation. The 0.5.0 recipe (on the primary and on `phoenix/v0.4-rc.1`) caps the spread at 100%
+a year and the duration at 30 days. The duration must also fit inside the pool's remaining life at
+the fill that creates the pool. The tool restates none of these limits. `rfq-open` asks the recipe
+(`resolve`, then `verify` with the pool expiry your block names). It returns the recipe's answer in
+`data.cover.resolved`, or a warning. The recipe rejects a duration above the pool's remaining life
+when the pool is created, and the fill then reverts `RecipeRejectedConstraint`. `rfq-open` warns
+`would_revert` and names that cause. Ask the recipe what a choice commits you to. Pass three
+words: the anchor, the duration in seconds, and the spread on the percentage scale (1e18 = 1%, so
+10% a year is `10000000000000000000`):
 
 ```sh
 ch compute recipe-rate-constraint --chain-id 8453 --json \
@@ -267,18 +269,20 @@ ch compute recipe-rate-constraint --chain-id 8453 --json \
   "rateOracle": { "address": "0x6df4a5EE…5836", "status": "predicted", "mode": "nav", "rate": null } }
 ```
 
-`rateMin` is the worst rate you would ever swap at. For a pool that exists, `ch compute
-impairment-floor --pool-id …` returns the worst rate over a horizon, and `ch query cork-pool`
-returns `data.cover`, read from the pool's four limits: both rate-change allowances at zero is
-fixed-rate cover; else a `rateMin` of at most 1 wei is liquidity cover; else the pool holds a band.
+`rateMin` is the worst rate you would ever swap at. For a pool that exists,
+`ch compute impairment-floor --pool-id …` returns the worst rate over a horizon. `ch query
+cork-pool` returns `data.cover`, read from the four limits of the pool. Both rate-change
+allowances at zero means fixed-rate cover. Else, a `rateMin` of at most 1 wei means liquidity
+cover. Else, the pool holds a band.
 
-The fixed-rate policy: you choose one rate (1e18 = 1.0), and one reference swaps for that much
-collateral for the pool's whole life. Read the reference's rate first (`ch query registry-oracle`).
+The fixed-rate policy: you choose one rate (1e18 = 1.0). One reference then swaps for that much
+collateral for the pool's whole life. First read the reference's rate (`ch query registry-oracle`).
 At that rate you lock in today's value. Below it, the gap is your deductible. Above it, the cover
-pays the gap at once with no loss at all: `rfq-open` warns `fixed_rate_in_the_money`, and an
+pays the gap at once, with no loss at all. `rfq-open` then warns `fixed_rate_in_the_money`, and an
 underwriter prices that gap as a certain payout or passes. The rate is part of pool identity:
-another rate is another oracle and another pool. To ask, name `modes: ["fixed_rate"]` and an inline
-template with the fixed recipe and a `cork-inline-fixed/1` block:
+another rate is another oracle and another pool. To ask for this cover, name
+`modes: ["fixed_rate"]` and an inline template with the fixed recipe and a `cork-inline-fixed/1`
+block:
 
 ```jsonc
 { "inline": { "oracle_recipe": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
@@ -287,7 +291,7 @@ template with the fixed recipe and a `cork-inline-fixed/1` block:
 ```
 
 The venue refuses a fixed-rate request without a valid `rate_override` (a decimal string, no
-leading zero), and the tool refuses it first with the reason.
+leading zero). The tool refuses it first and gives the reason.
 
 #### 1c. Check the pair's oracle, then derive the market
 
@@ -304,14 +308,14 @@ ch query registry-oracle --chain-id 8453 --json \
   "oracle": { "address": "0x6df4a5EEd8dC546682253F5FDf2c1d8E17965836", "deployed": false, "deployable": true } }
 ```
 
-Read `oracle` as a three-state answer. `deployed: true` means the pair prices today and `rate` is
-live. `deployed: false, deployable: true` means the first fill deploys it; you lose nothing by
-waiting. `deployable: false` means the pair is not viable as asked; `reason` names the registry's
-own error, and the fix is registration on Cork's side.
+Read `oracle` as an answer with three states. `deployed: true` means the pair prices today and
+`rate` is live. `deployed: false, deployable: true` means the first fill deploys the oracle; you
+lose nothing by waiting. `deployable: false` means the pair is not viable as asked. `reason` names
+the registry's own error, and the fix is a registration on Cork's side.
 
 **This pair's oracle is not deployed on the primary yet.** The liquidity recipe reads the live
-oracle when one exists and needs an anchor rate when none does. A good anchor is the live rate on
-the previous registry, where this pair's oracle has run since August:
+oracle when one exists. When none exists, it needs an anchor rate. A good anchor is the live rate
+on the previous registry, where this pair's oracle has run since August:
 
 ```sh
 ch query registry-oracle --chain-id 8453 --json --generation previous \
@@ -322,8 +326,8 @@ ch query registry-oracle --chain-id 8453 --json --generation previous \
 #   (the rate on 2026-09-25; a NAV rate moves, and the examples below keep this anchor)
 ```
 
-Now ask the recipe what it would commit you to. This is the same staticcall a fill runs. Pass the
-anchor as one uint word; the tool encodes it:
+Now ask the recipe what it would commit you to. A fill runs this same staticcall. Pass the anchor
+as one uint word; the tool encodes it:
 
 ```sh
 ch compute recipe-rate-constraint --chain-id 8453 --json \
@@ -341,11 +345,11 @@ ch compute recipe-rate-constraint --chain-id 8453 --json \
   "note": "no live oracle — the recipe resolved from its fallback (e.g. the anchorRate in args); the eventual fill deploys the oracle and re-checks with recipe.verify against the LIVE rate" }
 ```
 
-Without the anchor the call refuses with `recipe_refused` and `MalformedExtraData`. Once the
-oracle is deployed the recipe ignores the anchor and reads the chain.
+Without the anchor, the call refuses with `recipe_refused` and `MalformedExtraData`. Once the
+oracle is deployed, the recipe ignores the anchor and reads the chain.
 
-Then derive the market. The term is bounded by the registry (30 days). With CA, REF, recipe and
-expiry chosen, you have named a market. Derive what a fill would create before anything exists:
+Then derive the market. The registry limits the term (30 days). With CA, REF, recipe and expiry
+chosen, you have named a market. Derive what a fill would create, before anything exists:
 
 ```sh
 EXP=$(( $(date +%s) + 7*86400 ))
@@ -372,29 +376,31 @@ What to check:
 
 - **`pool.exists: false`** means the first fill creates the pool. **`corkSwapToken`** is the cST you
   will buy.
-- **`pool.wire: "10-field"`**: on the primary the two fee percentages are part of the pool id. Pass
-  the fees you will create with, or the id names a different pool. Zero is the live default.
+- **`pool.wire: "10-field"`**: on the primary, the two fee percentages are part of the pool id.
+  Pass the fees you will create with, or the id names a different pool. Zero is the live default.
 - **`constraint`** is what the underwriter's order will sign. Carry it verbatim into any order you
-  build yourself. Between two resolves minutes apart a NAV rate can tick, and the re-resolved
-  constraint names a different pool; the tool then refuses the mismatched order with
-  `jit_side_mismatch`.
-- **`oracle.rate` is the anchor you publish in the RFQ**, and `--expiry` is its expiry. On a pair
-  whose oracle is not deployed, that is how an underwriter reading at a different moment lands on
-  this exact `poolId`. On a pair whose oracle is deployed, the recipe reads the live rate at the
-  underwriter's signing moment and ignores the anchor, so the pool the order births is the
-  underwriter's derivation; compare its `answer.pool.poolId` with yours before you fill.
+  build yourself. A NAV rate can tick between two resolves minutes apart. The re-resolved
+  constraint then names a different pool. The tool still builds the mismatched order, but it
+  warns `jit_side_mismatch`: the fill would revert `OrderNotForPool`.
+- **The anchor you passed (`--args`) is the anchor you publish in the RFQ**, and `--expiry` is
+  its expiry. On a pair
+  whose oracle is not deployed, the anchor lets an underwriter who reads at a different moment land
+  on this exact `poolId`. On a pair whose oracle is deployed, the recipe ignores the anchor and
+  reads the live rate at the moment the underwriter signs. So the pool that the order creates
+  follows the underwriter's derivation. Compare its `answer.pool.poolId` with yours before you
+  fill.
 
 The steps below use this market: `poolId` `0x22eeb2b1…b858`, cST `0xE3a3b5Df…5683`.
 
 #### 1d. Open the RFQ
 
-An RFQ is an off-chain venue posting: the parameter envelope underwriters answer against. Every
-field is one of the choices from 1a to 1c.
+An RFQ is an off-chain venue posting: the parameter envelope that underwriters answer against.
+Every field is one of your choices from 1a to 1c.
 
-Every RFQ write is proven (venue RFQ v2). Send the same request through
-`ch prepare order rfq-write --chain-id 8453 --account 0xYOUR_SAFE --client-request-id rfq-0001 --request '{"type":"rfq-open",…}'`
-first, sign its `data.typedData` with your Safe, and pass that signature as `--auth`. The tool
-checks your Safe's `isValidSignature` before it relays.
+Every RFQ write is proven (venue RFQ v2). First send the same request through `ch prepare order
+rfq-write --chain-id 8453 --account 0xYOUR_SAFE --client-request-id rfq-0001 --request
+'{"type":"rfq-open",…}'`. Sign its `data.typedData` with your Safe, and pass that signature as
+`--auth`. The tool checks your Safe's `isValidSignature` before it relays.
 
 ```sh
 VU=$(( $(date +%s) + 3600 ))
@@ -412,26 +418,26 @@ Conventions the live flow uses:
 
 - `modes` must match the recipe (step 1b): `["liquidity_only"]` with a liquidity recipe,
   `["liquidity_impairment"]` with the impairment recipe, `["fixed_rate"]` with the fixed recipe.
-  The result carries `data.cover`: the kind of cover the request buys, the recipe's own rate
-  limits for it (`resolved`), for impairment the band, and for fixed-rate the position of the
-  frozen rate against the reference's rate today. A request whose mode and recipe disagree is
-  relayed with a `cover_mode_mismatch` warning; an impairment mode on a liquidity recipe is
-  priced as downside cover and creates an exit-only pool.
+  The result carries `data.cover`. It names the kind of cover the request buys and the recipe's
+  own rate limits for it (`resolved`). For impairment it adds the band. For fixed-rate it adds the
+  position of the frozen rate against the reference's rate today. The tool relays a request whose
+  mode and recipe disagree, with a `cover_mode_mismatch` warning. An impairment mode on a
+  liquidity recipe is priced as downside cover, but it creates an exit-only pool.
 - `packageIds: ["balanced-v1"]` is the live package. Confirm the catalog and the
   `notionalAssets` units with your Cork contact before your first post.
 - Pin an exact expiry with `notBefore = notAfter - 1`.
 - `oracle_recipe` carries the recipe's contract address. The venue stores it as free text, so a
-  typo posts fine and fails only at fill time. Copy it from `registry-recipes`.
-- `oracle_params` carries the pool identity, the `cork-inline-liquidity/1` block: `anchor_rate`
+  typo posts fine and fails only at fill time. Copy the address from `registry-recipes`.
+- `oracle_params` carries the pool identity in the `cork-inline-liquidity/1` block: `anchor_rate`
   from 1c, the `expiry` you derived with, and the two fees as decimal strings. Never send `{}`.
-  Without the block an underwriter falls back to the window's end and zero fees, and a different
+  Without the block, an underwriter falls back to the end of the window and zero fees. A different
   expiry or fee names a different pool.
 - You sign the RFQ with your own stack. `ch submit` checks the signer and relays; it never signs.
 
-To ask for **impairment (credit-risk) cover** instead, change three things: the mode, the recipe, and the
-block. The block is `cork-inline-impairment/1`: the liquidity block plus `duration_seconds` and
-`apy_spread_percentage` (1e18 = 1%). All three words are required; a partial block is never
-filled in with zeros.
+To ask for **impairment (credit-risk) cover** instead, change three things: the mode, the recipe
+and the block. The block is `cork-inline-impairment/1`: the liquidity block plus `duration_seconds`
+and `apy_spread_percentage` (1e18 = 1%). All three words are required. The tool never fills in a
+partial block with zeros.
 
 ```sh
 ch submit rfq-open --chain-id 8453 --client-request-id rfq-0002 --json \
@@ -444,9 +450,9 @@ ch submit rfq-open --chain-id 8453 --client-request-id rfq-0002 --json \
   --notional-assets … --valid-until $VU --auth '{"method":"signature","signature":"0x…"}'
 ```
 
-Read the answers before you rely on the cover. Supply is each underwriter's own decision: a
-`pass` means no underwriter quotes that recipe for the pair yet. Raise it with your Cork contact;
-do not fall back to a liquidity recipe under the impairment mode.
+Read the answers before you rely on the cover. Each underwriter decides its own supply. A `pass`
+means that no underwriter quotes that recipe for the pair yet. Raise it with your Cork contact. Do
+not fall back to a liquidity recipe under the impairment mode.
 
 Then watch for answers:
 
@@ -458,10 +464,10 @@ ch query rfqs --chain-id 8453 --watch              # alert when a requester acce
 
 ### Step 2: the underwriter answers and rests a SELL order
 
-This step belongs to the underwriter, but you can watch every part of it and you should verify the
-result before you buy. An answer carries priced options that echo your template. Each quoted
-option also carries the full signed SELL order it stands for (`order`, plus the venue's
-`order_hash` when you read it back):
+This step belongs to the underwriter. But you can watch every part of it, and you should verify
+the result before you buy. An answer carries priced options that echo your template. Each quoted
+option also carries the full signed SELL order behind it (`order`, plus the venue's `order_hash`
+when you read it back):
 
 ```jsonc
 { "status": "quoted", "options": [ {
@@ -474,9 +480,9 @@ option also carries the full signed SELL order it stands for (`order`, plus the 
 
 The underwriter then rests a signed SELL order on the venue book: `makerAsset` is the cST,
 `takerAsset` is CA. The cST does not exist yet. The signed order carries the market's recipe and
-constraint, which pins the cST address, and the mint happens inside your fill, funded by the
-underwriter's collateral. The tool builds exactly that order for an underwriter; here is the one
-we built against the market from 1c, then decoded from its own bytes:
+constraint, and these pin the cST address. The mint happens inside your fill, and the
+underwriter's collateral funds it. The tool builds exactly that order for an underwriter. Here is
+the order we built against the market from 1c, decoded from its own bytes:
 
 ```sh
 ch query orderbook --chain-id 8453 --json --pool-id 0x22eeb2b19fa6d4d0434f468cb03ce77f2d6870128a5a2c64453562db4651b858 --account 0xYOUR_ADAPTER
@@ -493,22 +499,22 @@ ch decode order --chain-id 8453 --data '{…the signed order row…}' --json
 ```
 
 Read `generation` and `wire`. `phoenix/v0.5` and `nested` name the primary's adapter. Its payload
-wraps the creator's `MarketParams`: `extraData`, `oracleSalt`, and the two fees, which are part
-of the pool id. `phoenix/v0.4-rc.1` names the older adapter `0x3E01…B104` on the same wire. A row
+wraps the creator's `MarketParams`: `extraData`, `oracleSalt`, and the two fees, which are part of
+the pool id. `phoenix/v0.4-rc.1` names the older adapter `0x3E01…B104` on the same wire. A row
 that decodes to `phoenix/v0.3-rc.1` and `flat` names the 0.3.3 adapter
-`0x8902a88912a334263fe3d731d03c267715b9374f`. The tool identifies the adapter first and decodes
-with that generation's layout. It never decodes by trial.
+`0x8902a88912a334263fe3d731d03c267715b9374f`. The tool identifies the adapter first, and then
+decodes with the layout of that generation. It never decodes by trial.
 
-Pass your adapter as `--account`: the book is ranked for the address that calls the LOP, and for
-a ForSelf wallet that is the adapter, not the Safe. An empty book is a normal result; markets are
-short-dated and the book refills in waves. Never reuse an order hash from a document.
+Pass your adapter as `--account`. The tool ranks the book for the address that calls the LOP. For
+a ForSelf wallet, that address is the adapter, not the Safe. An empty book is a normal result:
+markets are short-dated, and the book refills in waves. Never reuse an order hash from a document.
 
-**The JIT permit rule.** A token that does not exist yet cannot be pre-approved, so the order
-carries the maker's ERC-2612 permit over the predicted cST: signed by the party being served
-(the underwriter), spender always the 1inch LOP, executed right after the mint. It is the maker's
-problem, never yours. On the `fillOrderForSelf` route the two allowance systems never touch: your
-taker-asset approval goes to your ForSelf adapter. The contract-level reference is
-[jit-order-anatomy.md](jit-order-anatomy.md).
+**The JIT permit rule.** Nobody can pre-approve a token that does not exist yet. So the order
+carries the maker's ERC-2612 permit over the predicted cST. The party being served (the
+underwriter) signs it, the spender is always the 1inch LOP, and the permit executes right after
+the mint. This is the maker's problem, never yours. On the `fillOrderForSelf` route the two
+allowance systems never touch: your taker-asset approval goes to your ForSelf adapter.
+[jit-order-anatomy.md](jit-order-anatomy.md) is the contract-level reference.
 
 ### Step 3: buy the cST by filling the order
 
@@ -530,38 +536,39 @@ ch fill --chain-id 8453 --account 0xYOUR_SAFE --client-request-id buy-0001 --jso
 ch track simulate --chain-id 8453 --subject '{"kind":"artifact","artifact":{…}}' --json
 ```
 
-Then sign the calldata with your Safe stack and broadcast. What to check:
+Then sign the calldata with your Safe stack and broadcast it. What to check:
 
 - `unsigned_artifact` on the prepare is expected. Require `wouldRevert: false` from the simulate.
 - **One fill lands, so size it for everything you want.** Cork orders use the 1inch bit
   invalidator: the first fill of any size spends the whole order.
-- The tool refuses a dead row before it builds bytes: it reads the order's invalidator on chain
-  (`status_mismatch`), verifies the maker's signature and extension the way the fill does, and
-  sets aside a row whose maker cannot deliver (`maker_not_ready`). It refuses an order reserved
-  for another sender (`private_order`) and an order whose extension names a contract it does not
-  know.
-- With `--for-self`, the bought asset is delivered to the caller, taker interactions are
-  impossible, and the taker-asset allowance goes to the adapter, never the LOP. The tool verifies
-  the adapter's on-chain bindings first and refuses a mismatch (`adapter_binding_mismatch`).
-- Some SELL rows carry a decaying premium. The tool detects them, caps at the curve's ceiling, and
+- The tool refuses a dead row before it builds bytes. It reads the order's invalidator on chain
+  (`status_mismatch`). It verifies the maker's signature and extension the way the fill does. It
+  sets aside a row whose maker cannot deliver (`maker_not_ready`). It also refuses an order
+  reserved for another sender (`private_order`), and an order whose extension names a contract it
+  does not know.
+- With `--for-self`, the bought asset goes to the caller, and taker interactions are impossible.
+  The taker-asset allowance goes to the adapter, never the LOP. The tool first verifies the
+  adapter's on-chain bindings and refuses a mismatch (`adapter_binding_mismatch`).
+- Some SELL rows carry a decaying premium. The tool detects them, caps at the curve's ceiling and
   reports `data.auction`. Re-price and simulate close to broadcast.
 - `data.execution` names the completion path. `ch capabilities --topic signing` is the guide.
 
 ### Step 4: exercise the cST
 
-When your risk monitor sees impairment on the user's REF, exercise the cover: hand in cST plus
-REF, receive CA at the market's tracked rate. This is a direct Phoenix call with no counterparty,
-so it works exactly when the market is stressed.
+When your risk monitor sees impairment on the user's REF, exercise the cover. Hand in cST plus
+REF, and receive CA at the market's tracked rate. This is a direct Phoenix call with no
+counterparty, so it works exactly when the market is stressed.
 
-The arithmetic is fixed by the pool, so size the call before you build it. One cST plus
-`1 / swapRate` REF buys one CA. The pool takes its swap fee from the CA leg only. So the CA you
-receive depends on the cST you hand in and the fee; the REF you pay depends on the rate, and the
-rate moves. That is the number your cap protects.
+The pool fixes the arithmetic, so size the call before you build it. One cST plus `1 / swapRate`
+REF buys one CA. The pool takes its swap fee from the CA leg only. So the CA you receive depends
+on the cST you hand in and on the fee. The REF you pay depends on the rate, and the rate moves.
+Your cap protects that number.
 
-Your pair has no pool before its first fill, so this run uses a live pool on the primary with USDC
-as CA (6 decimals). Pick one that has not expired: `ch query cork-pools --chain-id 8453` lists the
-pools with their expiry. The run below used USDC/YCSUSDC, `0xe12aef66…319d`, which expires on
-2026-10-16. The tool follows the pool's generation; the commands are the same for your pair.
+Your pair has no pool before its first fill. So this run uses a live pool on the primary, with
+USDC as CA (6 decimals). Pick a pool that has not expired: `ch query cork-pools --chain-id 8453`
+lists the pools with their expiry. The run below used USDC/YCSUSDC, `0xe12aef66…319d`, which
+expires on 2026-10-16. The tool follows the pool's generation, and the commands are the same for
+your pair.
 
 ```sh
 POOL=0x…    # a live pool from ch query cork-pools
@@ -581,11 +588,12 @@ ch compute cst-swap-rate --chain-id 8453 --json --pool-id "$POOL" --collateral-a
 ```
 
 Read it as: 1000 CA out cost 1000 cST plus 928.93 REF at 1.076509 CA per REF, with no fee.
-`alsoIn` says the pool manager is shared: the same pool is reachable through `phoenix/v0.4-rc.1`. Three
-numbers size the build. `cstSharesIn` is exact. `referenceAssetsIn` plus a margin becomes
-`maxReferenceAssetsIn`; the margin covers the rate moving before broadcast, and the unspent part
-comes back. `collateralAssetsOut` minus a small margin becomes `minCollateralAssetsOut`. A zero
-preview means the market cannot pay right now, not that the cover is free.
+`alsoIn` says that the pool manager is shared: the same pool is reachable through
+`phoenix/v0.4-rc.1`. Three numbers size the build. `cstSharesIn` is exact. `referenceAssetsIn`
+plus a margin becomes `maxReferenceAssetsIn`. The margin covers a rate move before broadcast, and
+the unspent part comes back. `collateralAssetsOut` minus a small margin becomes
+`minCollateralAssetsOut`. A zero preview means the market cannot pay right now. It does not mean
+the cover is free.
 
 ```sh
 # 2. Build the unsigned exercise. Bounds from the preview: 1000e18 cST in, floor 995 CA out,
@@ -598,7 +606,7 @@ ch exercise --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-0
 ch track simulate --chain-id 8453 --subject '{"kind":"artifact","artifact":{…}}' --json
 ```
 
-The build's `summary` is the part to read before you sign. Four legs, in execution order:
+Read the build's `summary` before you sign. It has four legs, in execution order:
 
 ```text
 1. fund via Permit2: pull 1000000000000000000000 of cST (0x9452…4647) from you into the adapter (0x71eB…84A7)
@@ -607,37 +615,40 @@ The build's `summary` is the part to read before you sign. Four legs, in executi
 4. return the entire remaining balance of reference (0xE74c…ED56) to you (0xYOUR_SAFE)
 ```
 
-Check three things. The two pulls match your cST count and your REF cap. Leg 3 names your Safe after
-"proceeds to". Leg 4 returns the unspent REF to the same Safe; the `sweep_back` warning announces
-that leg. The dry-run then answers `wouldRevert`. With an account that holds no cST it answers
-`true`, as an unfunded Safe would. Require `false` from your own run.
+Check three things. The two pulls match your cST count and your REF cap. Leg 3 names your Safe
+after "proceeds to". Leg 4 returns the unspent REF to the same Safe; the `sweep_back` warning
+announces that leg. The dry-run then answers `wouldRevert`. With an account that holds no cST, it
+answers `true`, as an unfunded Safe would. Require `false` from your own run.
 
-Once your ForSelf adapter is deployed, add `--for-self '{"adapter":"0xYOUR_ADAPTER"}'` and the
-artifact becomes a single `exerciseForSelf` call: no Bundler3 legs, output to the Safe, every
-allowance to the adapter (`data.forSelf.allowances` lists them). Every prepared bundle expires; the
-default deadline is 30 minutes. For a slow signing ceremony build with `--deadline-seconds 7200`
-or pin `--deadline-at <unix seconds>`, which also makes a retried prepare byte-identical.
+Once your ForSelf adapter is deployed, add `--for-self '{"adapter":"0xYOUR_ADAPTER"}'`. The
+artifact then becomes a single `exerciseForSelf` call: no Bundler3 legs, output to the Safe, every
+allowance to the adapter (`data.forSelf.allowances` lists them). Every prepared bundle expires,
+and the default deadline is 30 minutes. For a slow signing ceremony, build with
+`--deadline-seconds 7200` or pin `--deadline-at <unix seconds>`. A pinned deadline also makes a
+retried prepare byte-identical.
 
-The variation `exercise-other` pins the REF leg instead: you pass the exact REF you spend, cap the
+The variant `exercise-other` pins the REF leg instead: you pass the exact REF you spend, cap the
 cST and floor the CA. Its ForSelf twin is `exerciseOtherForSelf`.
 
-Keep in mind: `exercise` has only the bounds you pass. Re-run the preview at send time. A paused REF
-blocks the exercise leg, so keep positions small and monitor REF liveness.
+Keep in mind: `exercise` has only the bounds you pass. Re-run the preview at send time. A paused
+REF blocks the exercise leg, so keep positions small and monitor REF liveness.
 
 ### After the flow: roll the cover near expiry
 
-Near expiry, roll the user's cover into the successor market instead of letting it lapse. Rollover
-is a two-party trade. The rollover order is signed by a cPT holder, the supply side, who offers to
-co-roll their principal and collects a premium. You are the filler: you roll your user's cover and
-pay that premium. The settlers run on both chains in both generations. Find open orders:
+Near expiry, roll the user's cover into the successor market. Do not let it lapse. A rollover is a
+trade between two parties. A cPT holder, the supply side, signs the rollover order. The holder
+offers to roll their principal together with you, and collects a premium. You are the filler: you
+roll your user's cover and pay that premium. The rollover settlers of every active generation run on
+both chains. To find open orders:
 
 ```sh
 ch query rollover-orders --chain-id 8453 --kind orders      # the open rollover orders, newest first
 ```
 
-One atomic `BaseFiller.execute` call takes the user's expiring cST, pays the premium in the order's
-`premiumToken`, and delivers the fresh cST to the caller, the user's Safe. You supply the premium
-token, so first swap some of the user's REF into it in your own stack.
+One atomic `BaseFiller.execute` call does three things. It takes the user's expiring cST. It pays
+the premium in the order's `premiumToken`. It delivers the fresh cST to the caller, the user's
+Safe. You supply the premium token. So first swap some of the user's REF into it, in your own
+stack.
 
 `ch` builds the fill:
 
@@ -646,36 +657,40 @@ ch prepare order rollover-fill --chain-id 8453 --account <safe> --client-request
   --order-digest <0x…>                                       # unsigned BaseFiller.execute calldata
 ```
 
-- BaseFiller pulls the source cST and at most `premiumCap` of the premium token from the caller.
-  The result's `data.approvals` lists both allowances to BaseFiller, each with an unsigned approve
-  transaction, and warns `approval_missing` when the chain shows one absent.
-- The call carries no recipient. The fresh cST and every refund go to the caller, and BaseFiller
+- BaseFiller pulls two things from the caller: the source cST, and at most `premiumCap` of the
+  premium token. The result's `data.approvals` lists both allowances to BaseFiller, each with an
+  unsigned approve transaction. It warns `approval_missing` when the chain shows that one is
+  absent.
+- The call has no recipient argument. The fresh cST and every refund go to the caller. BaseFiller
   accepts only its own two settlers. A session-key policy must admit `BaseFiller.execute` and the
   two approvals.
 - The order's signed `allowPartialFills` flag picks the settler. An all-or-nothing order needs the
-  full size unless it allows underfill; a partial order takes `--filler-src-cst` for a slice.
-- An order reserved for another filler needs that filler's signature, `--filler-auth-sig`. The
-  result explains how to get it.
-- BaseFiller decides where the value goes; the user's clone decides how much. The clone runs the
-  hooks its owner signed, under attesters its owner chose, and a mid-roll hook can keep the
-  unwound collateral. `minDstPerSrc` is the settler's only check on value. Phoenix deposits and
-  unwinds at exactly 1:1, so omit it and `ch` derives the honest rate from the two pools'
-  previews, with no tolerance (`dst_floor_derived`); when it cannot, it refuses
-  `dst_floor_underivable` and you pass `--min-dst-per-src`. Never send 0. A session-key
+  full size, unless it allows underfill. A partial order takes `--filler-src-cst` for a slice.
+- An order reserved for another filler needs the signature of that filler, `--filler-auth-sig`.
+  The result explains how to get it.
+- BaseFiller decides where the value goes. The user's clone decides how much value. The clone runs
+  the hooks that its owner signed, under attesters that its owner chose. A mid-roll hook can keep
+  the unwound collateral. `data.trust` reports the clone's attesters. It warns on any hook that the
+  default attesters do not vouch for.
+- `minDstPerSrc` is the only value check that the settler makes. Phoenix deposits and unwinds at
+  exactly 1:1. So omit `minDstPerSrc`, and `ch` derives the honest rate from the previews of the
+  two pools, with no tolerance (`dst_floor_derived`). When `ch` cannot derive it, `ch` refuses
+  with `dst_floor_underivable`, and you pass `--min-dst-per-src`. Never send 0. A session-key
   policy that pins only (BaseFiller, execute) cannot enforce this floor, so your stack must keep
-  it. `data.trust` reports the clone's attesters and warns on any hook the default attesters do
-  not vouch for.
+  it.
 - Simulate with `ch track simulate` before you sign. The tool builds no bytes for an order whose
-  fill deadline passed, or one the settler reports as settled, expired or cancelled.
+  fill deadline has passed. It also builds none for an order that the settler reports as settled,
+  expired or cancelled.
 
 ---
 
 ## 4. `cork-cli`, the integration kit
 
-**One typed core, two surfaces.** The same 9-tool dispatch is exposed as an MCP server (stdio or
-Streamable HTTP) and a CLI (`ch`). It reads live chain and venue state, runs Cork's math bit-exact
-against on-chain reads, and builds unsigned bytes and typed data. It never signs, never holds
-custody and never broadcasts. The one tool with a side effect relays a payload you already signed.
+**One typed core, two surfaces.** The same 9-tool dispatch runs as an MCP server (stdio or
+Streamable HTTP) and as a CLI (`ch`). It reads live chain and venue state. It runs Cork's math
+bit-exact against on-chain reads. It builds unsigned bytes and typed data. It never signs, never
+holds custody and never broadcasts. The one tool with a side effect relays a payload that you
+already signed.
 
 **Install (MCP):**
 
@@ -687,11 +702,11 @@ claude mcp list                           # expect: cork-defi … ✓ Connected
 
 `ch mcp --http` serves a Streamable HTTP endpoint with `/healthz`, `/readyz` and `/docs/<topic>`.
 
-**CLI:** put `bin/` on PATH, or install the binary. The full reference is [cli.md](cli.md). Every
-action is a subcommand with its fields as flags. The 13 pool actions and `fill` are also top-level
-verbs. Query filter keys are flags. Amounts take exact sugar. Objects ride as JSON-string flags.
-The canonical wire blob `--input '{…}'` works everywhere. A bare `--json` switches the output to
-the raw envelope. The runtime is Bun.
+**CLI:** put `bin/` on PATH, or install the binary. [cli.md](cli.md) is the full reference. Every
+action is a subcommand, with its fields as flags. The 13 pool actions and `fill` are also
+top-level verbs. Query filter keys are flags. Amounts take exact sugar. Objects go as JSON-string
+flags. The canonical wire blob `--input '{…}'` works everywhere. A bare `--json` switches the
+output to the raw envelope. The runtime is Bun.
 
 **The 9 tools:** `capabilities` (the searchable manual; start here), `query` (state reads),
 `compute` (deterministic math), `decode` (bytes to labeled JSON, including a signed transaction
@@ -701,40 +716,41 @@ builders), `track` (verify, simulate frozen bytes, reconcile), `submit` (the onl
 **Every prepared artifact tells you how to finish it.** `data.execution` carries the sign method,
 the ordered next steps and a pointer to `ch capabilities --topic signing`.
 
-**The envelope:** check `state` before you trust `data`. `ok`: use `data`. `unavailable`: not
-servable now, `warnings[0].code` says why; do not retry blindly. `conflict`: the tool found a
-mismatch; surface it. Exit codes mirror this (`0/2/3/4/1`). Money fields carry a `scales` block.
-Read the labels; this page's pair is 18/18 but the USDC family is 6 decimals.
+**The envelope:** check `state` before you trust `data`. `ok`: use `data`. `unavailable`: the
+tool cannot serve the call now, and `warnings[0].code` says why; do not retry blindly. `conflict`:
+the tool found a mismatch; surface it. Exit codes mirror this (`0/2/3/4/1`). Money fields carry a
+`scales` block. Read the labels: this page's pair is 18/18, but the USDC family has 6 decimals.
 
 **RPC and secrets:** reads on mainnet, Arbitrum One and Base work out of the box. Set
-`CORK_RPC_URL` only for your own node. Full-decentralized reads want an Envio token
+`CORK_RPC_URL` only for your own node. Full-decentralized reads need an Envio token
 (`ENVIO_HYPERSYNC_TOKEN`, from <https://envio.dev/app/api-tokens>). Never commit an RPC URL or a
 token.
 
 **Venue reads can lag; the chain wins.** The book, RFQ and fill feeds come from Cork's indexer,
-which can trail the chain head. For anything time-sensitive verify against the chain (`ch query
-cork-pool`, `ch track`). Every venue row is re-checked against the chain before the tool acts on
-it, and a refuted row is dropped and counted.
+which can trail the chain head. For anything time-sensitive, verify against the chain (`ch query
+cork-pool`, `ch track`). The tool re-checks every venue row against the chain before it acts on
+the row. It drops and counts a refuted row.
 
 ### Migrating between generations
 
-Cork redeploys as a new generation and the previous one keeps working. The primary is `phoenix/v0.5`;
-`phoenix/v0.4-rc.1` (the same contracts with the 0.4.0 JIT adapter) and `phoenix/v0.3-rc.1` stay active. `cork-cli` supports both at the same time:
+Cork redeploys as a new generation, and the previous generation keeps working. The primary is
+`phoenix/v0.5`. `phoenix/v0.4-rc.1` (the same contracts with the 0.4.0 JIT adapter) and
+`phoenix/v0.3-rc.1` stay active. `cork-cli` supports all of them at the same time:
 
-- `ch query account-state --chain-id 8453 --account <you>` with no `--pool-id` lists every pool
-  where you hold cST or cPT, tagged with its generation and its expiry.
-- Exit an old pool with the pool-scoped command for its expiry state: `unwind-deposit` or
+- With no `--pool-id`, `ch query account-state --chain-id 8453 --account <you>` lists every pool
+  where you hold cST or cPT. Each pool comes tagged with its generation and its expiry.
+- To exit an old pool, use the pool-scoped command for its expiry state: `unwind-deposit` or
   `unwind-mint` before expiry, `withdraw`, `redeem` or `withdraw-other` after. The tool resolves
   the pool's generation from the chain.
-- Enter the new pool with `deposit` or `mint` on the primary, or `ch prepare market create-pool`
-  first when it does not exist. A rollover takes two parties: the cPT holder signs a
+- To enter the new pool, use `deposit` or `mint` on the primary. When the pool does not exist, run
+  `ch prepare market create-pool` first. A rollover takes two parties: the cPT holder signs a
   `rollover-intent`, and the cST holder fills it with `rollover-fill`.
 - `--generation previous`, `primary`, or a label targets a set explicitly. The result carries the
-  resolved label. `ch capabilities --topic migration` has the recipe.
+  resolved label. `ch capabilities --topic migration` has the steps.
 
-One change to plan: your ForSelf adapter pins the pool manager, the whitelist manager and the LOP
-at deployment. Markets on the primary need a second adapter bound to the 1.4.0-rc.1 pool manager,
-deployed from the cork-periphery v0.2.0-rc.1 reference and whitelisted beside the current one.
+Plan for one change: your ForSelf adapter pins the pool manager, the whitelist manager and the LOP
+at deployment. Markets on the primary need a second adapter, bound to the 1.4.0-rc.1 pool manager.
+Deploy it from the cork-periphery v0.2.0-rc.1 reference, and whitelist it beside the current one.
 The current adapter keeps serving every pool on `phoenix/v0.3-rc.1`.
 
 ## 5. Risks and ownership
@@ -743,60 +759,62 @@ Sections A to C are the security core.
 
 **A. Cork sends payouts to an address argument, and your permission layer cannot see arguments.
 You must force the receiver yourself.** Every raw Cork function that pays out takes its
-destination as a parameter (`receiver`, or `target` in takerTraits bit 251 on a fill) while it
-pulls the inputs from the calling Safe. A Safe-module whitelist can only allow or deny "this
-contract, this function". It cannot look inside the call. So a prompt-injected or compromised
-agent can make an allowed call in which your Safe pays and an attacker receives.
+destination as a parameter (`receiver`, or `target` in takerTraits bit 251 on a fill). It pulls
+the inputs from the calling Safe. A Safe-module whitelist can only allow or deny "this contract,
+this function". It cannot look inside the call. So a prompt-injected or compromised agent can make
+an allowed call in which your Safe pays and an attacker receives.
 
 | Surface | The argument the whitelist cannot see | Your remedy |
 |---|---|---|
 | Direct Phoenix calls: `exercise`, `swap`, `redeem`, `withdraw`, `unwind*` | `receiver` | Whitelist only a wrapper that hardcodes the receiver to the Safe |
 | Buying cST through the 1inch fill | `target` in takerTraits (bit 251) | Fill through a wrapper that pins the target to the caller |
 
-**The fix is yours to own, and it is a pattern you already run.** Do not whitelist raw Cork
-methods. Deploy a Zyfai-owned wrapper that forces the payout to the Safe, the same shape as your
-`*ForSelf` and AdapterProxy routes for Aave, Morpho and Euler, and whitelist that.
+**The fix is yours to own, and you already run the pattern.** Do not whitelist raw Cork methods.
+Deploy a Zyfai-owned wrapper that forces the payout to the Safe, and whitelist that wrapper. It
+has the same shape as your `*ForSelf` and AdapterProxy routes for Aave, Morpho and Euler.
 
-Cork's reference adapter exists and is proven end to end. `CorkForSelfAdapter`
+Cork's reference adapter exists, and it is proven end to end. `CorkForSelfAdapter`
 ([Cork-Technology/cork-periphery](https://github.com/Cork-Technology/cork-periphery)) is the
-`*ForSelf` twin of the whole surface: one address, 14 entrypoints (the 13 pool actions plus
-`fillOrderForSelf`), custody-free, every output delivered to the calling Safe with no receiver
-parameter anywhere, every fill bound on chain to a named Cork market, every ERC-20 approval to
-the adapter itself. It was exercised end to end on live-chain forks against the real 1inch LOP
-and both pool-manager generations. You still audit, vet and deploy it. Your users trust Zyfai.
+`*ForSelf` twin of the whole surface. It has one address and 14 entrypoints (the 13 pool actions
+plus `fillOrderForSelf`), and it is custody-free. It delivers every output to the calling Safe,
+with no receiver parameter anywhere. It binds every fill on chain to a named Cork market, and
+every ERC-20 approval goes to the adapter itself. We exercised it end to end on live-chain forks,
+against the real 1inch LOP and both pool-manager generations. You still audit, vet and deploy it.
+Your users trust Zyfai.
 
-**B. Markets in this flow have the pool-level whitelist OFF, by construction.** The JIT mint
-inside a fill is performed by Cork's adapter. A market with its whitelist on would refuse it, and
+**B. Markets in this flow have the pool-level whitelist OFF, by construction.** Cork's adapter
+performs the JIT mint inside a fill. A market with its whitelist on would refuse that mint, and
 every purchase would revert `MintUnavailable`. The order builders always create markets with the
-whitelist off. It is not a knob.
+whitelist off. This is not a knob.
 
 **C. Know which spender model your route uses, and one approval you must not grant.** On the raw
-route the premium (CA) is approved to the 1inch LOP and the REF you hand in on exercise to Cork's
-pool manager. On the ForSelf route every approval goes to the adapter: CA for the fill, REF and
-cST for the exercise. On either route, do not approve the cST to the pool manager: the exercise
-path moves your cST without an allowance check when the token's owner is the caller, so that
-approval can never be spent and sits as standing risk. The same holds for cPT.
+route, you approve the premium (CA) to the 1inch LOP, and the REF you hand in on exercise to
+Cork's pool manager. On the ForSelf route, every approval goes to the adapter: CA for the fill,
+REF and cST for the exercise. On either route, do not approve the cST to the pool manager. The
+exercise path moves your cST without an allowance check when the caller owns the token. So that
+approval can never be spent, and it sits as a standing risk. The same holds for cPT.
 
 **D. `exercise` has no built-in slippage protection.** The only bounds are the `min` and `max`
-values you pass. Preview with `cst-swap-rate` right before you send, and read a zero preview as
-"the market cannot pay right now".
+values you pass. Preview with `cst-swap-rate` right before you send. Read a zero preview as "the
+market cannot pay right now".
 
 **E. If the REF token can be paused, your cover freezes with it.** A paused REF blocks the
-transfer in, so the cover is unusable for as long as the pause lasts. Keep pilot positions small
-and monitor the REF's pause status.
+transfer in, so the cover is unusable for as long as the pause lasts. Keep pilot positions small,
+and monitor the pause status of the REF.
 
-**F. `submit` pre-flights locally; the venue round trip is the part to reconcile.** Simulate before
-signing and reconcile after (`ch track reconcile`). The chain outranks the indexer.
+**F. `submit` pre-flights locally; reconcile the venue round trip.** Simulate before you sign,
+and reconcile after (`ch track reconcile`). The chain outranks the indexer.
 
 **G. Addresses drift; read them live, and know which generation answered.** A chain hosts a set
-of generations. `ch query protocol-config` lists them all with each block's addresses and wire.
-Every result names the generation it answered from (`data.generation`), and `--generation
-<label>` selects a non-primary set for a prepare. Installed copies of the tool pick up redeployed
-addresses within an hour (remote config, `cork-defaults.v2.json`).
+of generations. `ch query protocol-config` lists them all, with the addresses and wire of each
+block. Every result names the generation it answered from (`data.generation`).
+`--generation <label>` selects a non-primary set for a prepare. Installed copies of the tool pick
+up redeployed addresses within an hour (remote config, `cork-defaults.v2.json`).
 
-The primary set on Base and Arbitrum One (`phoenix/v0.5`, contracts release **0.6.0** on the Phoenix
-1.4.0-rc.1 pool manager; identical addresses on both chains). `phoenix/v0.4-rc.1` has the same
-addresses except the JIT adapter, `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (0.4.0, v/r/s permits):
+The primary set on Base and Arbitrum One is `phoenix/v0.5`: contracts release **0.6.0** on the
+Phoenix 1.4.0-rc.1 pool manager, with identical addresses on both chains. `phoenix/v0.4-rc.1` has
+the same addresses, except the JIT adapter `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (0.4.0,
+v/r/s permits):
 
 | Role | Address |
 |---|---|
@@ -811,44 +829,47 @@ addresses except the JIT adapter, `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (
 | CorkAdapter (pool actions) | `0x71eB628c3A40FB3896613804847840426f9284A7` |
 | CorkForSelfAdapter v0.2.0-rc.1 (reference) | `0x3864902695DC930Df406ef5dEB74c4DC249e23f1` |
 
-The previous set (`phoenix/v0.3-rc.1`, contracts release **0.3.3**) is where every listed pool lives
-today: registry `0xa78d8137B01058dD23e545b6557209eBBc9611F1`, JIT adapter
-`0x8902a88912a334263fe3d731d03c267715b9374f`, recipes `0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55`
-(price), `0xAeD3D0e3C86A994d88741C285657c3e78550f66d` (nav), `0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1`
-(fixed). Pass `--generation phoenix/v0.3-rc.1` to build against it on purpose.
+The previous set (`phoenix/v0.3-rc.1`, contracts release **0.3.3**) is where most listed pools
+live today. Its registry is `0xa78d8137B01058dD23e545b6557209eBBc9611F1`, and its JIT adapter is
+`0x8902a88912a334263fe3d731d03c267715b9374f`. Its recipes are
+`0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55` (price), `0xAeD3D0e3C86A994d88741C285657c3e78550f66d`
+(nav), `0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1` (fixed) and
+`0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA` (impairment). Pass
+`--generation phoenix/v0.3-rc.1` to build against it on purpose.
 
-Two rules make redeploys safe to live through. An abandoned generation does not go dark; it
+Two rules make redeploys safe to live through. First, an abandoned generation does not go dark: it
 answers current-shaped calls with plausible values. Never conclude "this address works, so it must
-be current". And anything that signs against an adapter must confirm the adapter binds the
-registry you pin: `MARKET_REGISTRY()` on the 0.3.3 adapter, the chain `MARKET_CREATOR()` then
-`creator.MARKET_REGISTRY()` on the 0.5.0 adapter. `ch` runs this guard on every order prepare and
-refuses a mismatch (`adapter_binding_mismatch`). The check is manual only when you bypass the tool.
+be current". Second, anything that signs against an adapter must confirm that the adapter binds
+the registry you pin. On the 0.3.3 adapter, that check is `MARKET_REGISTRY()`. On the 0.5.0
+adapter, it is the chain `MARKET_CREATOR()`, then `creator.MARKET_REGISTRY()`. `ch` runs this
+guard on every order prepare and refuses a mismatch (`adapter_binding_mismatch`). You run the
+check by hand only when you bypass the tool.
 
 ---
 
 ## 6. What you need to do
 
-1. **Stand up the tool.** `claude mcp add` or `ch` on PATH. Confirm `cork_capabilities` returns 9
-   tools. Optional: `CORK_RPC_URL`, `ENVIO_HYPERSYNC_TOKEN`.
+1. **Stand up the tool.** Run `claude mcp add`, or put `ch` on PATH. Confirm that
+   `cork_capabilities` returns 9 tools. Optional: `CORK_RPC_URL`, `ENVIO_HYPERSYNC_TOKEN`.
 2. **Audit and deploy the receiver-forcing adapter**, one per generation you trade on. The
-   reference is `CorkForSelfAdapter` in cork-periphery. You audit, vet and deploy it, or extend
-   your own `*ForSelf` route to the same shape.
+   reference is `CorkForSelfAdapter` in cork-periphery. You audit, vet and deploy it, or you
+   extend your own `*ForSelf` route to the same shape.
 3. **Load the whitelist** for the loop: `fillOrderForSelf`, `exerciseForSelf` and
    `exerciseOtherForSelf`, plus the approvals for the route you chose (section 5, item C).
 4. **Wire the four-step flow against the tool.** Select and derive with `registry-*` and
-   `derive-cork-pool`, RFQ with `submit rfq-open` and `rfqs --watch`, simulate every artifact
-   before signing, fill with `ch fill --for-self`, size the exercise with `cst-swap-rate`, build it
-   with `ch exercise`, reconcile with `ch track`.
-5. **Confirm ownership and timeline with Cork.** Cork needs no protocol change from you. It needs
-   to know when your adapter routes are ready, and the RFQ package catalog and notional units for
-   step 1d.
+   `derive-cork-pool`. Run the RFQ with `submit rfq-open` and `rfqs --watch`. Simulate every
+   artifact before you sign. Fill with `ch fill --for-self`. Size the exercise with
+   `cst-swap-rate`, and build it with `ch exercise`. Reconcile with `ch track`.
+5. **Confirm ownership and timeline with Cork.** Cork needs no protocol change from you. Cork
+   needs to know when your adapter routes are ready. Also settle the RFQ package catalog and the
+   notional units for step 1d with Cork.
 
 ---
 
 ## 7. Finding the right command
 
-The tool documents itself two ways, and because the MCP tools and the CLI are one core, an MCP
-input object runs verbatim as `ch <command> --input '<object>'`.
+The tool documents itself in two ways. The MCP tools and the CLI are one core, so an MCP input
+object runs verbatim as `ch <command> --input '<object>'`.
 
 ```sh
 ch compute --explain                      # the contract of one command, all variants
@@ -859,8 +880,8 @@ ch capabilities --topic signing           # sign, validate, broadcast
 ch capabilities --search "swap rate"      # keywords → tool, variant, ready-to-run examples
 ```
 
-With the `cork-defi` server installed, prompts like these exercise the whole surface. Start with
-"call `cork_capabilities` first" when in doubt.
+With the `cork-defi` server installed, prompts like these exercise the whole surface. When in
+doubt, start with "call `cork_capabilities` first".
 
 > "Using cork-defi, derive the sUSDe / mwUSDC market on Base that expires in 7 days, and give me
 > the poolId and cST address."
@@ -868,5 +889,5 @@ With the `cork-defi` server installed, prompts like these exercise the whole sur
 > "What is the `ch` command to build an unsigned exercise bundle: 1000 cST into pool `0x…`, payout
 > to my Safe `0x…`?"
 
-Questions or a stale value? `ch capabilities` is the living manual. For the deeper security
-analysis and the pilot's open items, ask your Cork contact.
+Questions, or a stale value? `ch capabilities` is the living manual. For the deeper security
+analysis and the open items of the pilot, ask your Cork contact.

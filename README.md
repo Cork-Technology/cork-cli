@@ -1,21 +1,21 @@
 # cork-cli
 
 One tool for Cork Phoenix, three ways to use it: an **MCP server** for AI agents, a **CLI** for
-people and scripts, and a **TypeScript SDK** for integrators. All three are projections of the
-same typed core, so they share one contract: 9 tools that read protocol state, run
-bit-exact math, decode bytes, and build **unsigned** transactions and orders.
+people and scripts, and a **TypeScript SDK** for integrators. All three project the same typed
+core and share one contract: 9 tools that read protocol state, run bit-exact math, decode bytes,
+and build **unsigned** transactions and orders.
 
 One safety property shapes everything: **these tools never sign and never hold keys.** You sign
 with your own wallet and broadcast through your own RPC. The one side-effecting tool,
 `cork_submit`, only relays a payload you already signed.
 
-The math is not an approximation. Every port is verified wei-for-wei against live on-chain
-reads on Ethereum mainnet and Arbitrum One.
+The math is exact, not an approximation. We verified every port wei-for-wei against live
+on-chain reads on Ethereum mainnet and Arbitrum One.
 
 ## Install
 
 You need one file: the `ch` binary. It contains the CLI **and** the MCP server (`ch mcp`).
-No runtime, no clone, no package manager.
+You need no runtime, no clone and no package manager.
 
 1. Open the [Releases page](https://github.com/Cork-Technology/cork-cli/releases) and download
    the asset for your platform:
@@ -41,16 +41,17 @@ No runtime, no clone, no package manager.
    ch capabilities
    ```
 
-Later, update in place with `ch self-update`. It resolves the newest release, verifies its
-provenance, runs the staged binary's own `version --json` to confirm it is that build, and only
-then swaps atomically. It never installs an older release unless you pass `--allow-downgrade`.
+To update in place later, run `ch self-update`. It finds the newest release and verifies its
+provenance. Then it runs the staged binary's own `version --json` to confirm that it is that
+build. Only then does it swap the binary atomically. It never installs an older release unless
+you pass `--allow-downgrade`.
 
 <details>
 <summary><b>Verify a download before you trust it</b></summary>
 
-Releases are immutable, and every asset carries a GitHub build attestation. Two independent
-builds must produce byte-identical binaries before a release can publish. Verify any asset with
-the [GitHub CLI](https://cli.github.com):
+Releases are immutable, and every asset carries a GitHub build attestation. A release publishes
+only when two independent builds produce byte-identical binaries. Verify any asset with the
+[GitHub CLI](https://cli.github.com):
 
 ```sh
 gh attestation verify ch-linux-x64 \
@@ -58,15 +59,15 @@ gh attestation verify ch-linux-x64 \
   --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml
 ```
 
-This proves the exact bytes came from this repository's build workflow at a specific tag.
+The check proves that the exact bytes came from this repository's build workflow at a specific
+tag.
 </details>
 
 <details>
 <summary><b>Alpine Linux: install from the apk repository</b></summary>
 
-Alpine users can install and update through the signed package channel instead. The signing
-key is served already; the package index goes live with the **first production (non-rc)
-release** — until then step 2's `apk update` reports the repository as unavailable.
+On Alpine, you can install and update through the signed package channel instead. Every
+production release publishes to the package index. A release candidate does not.
 
 ```sh
 # 1. trust the signing key (the same key is committed as packaging/melange.rsa.pub)
@@ -77,17 +78,17 @@ echo "https://cork-technology.github.io/cork-cli/apk" >> /etc/apk/repositories
 apk update && apk add cork-cli
 ```
 
-`apk upgrade cork-cli` then tracks new releases. Published apks are immutable.
+Then `apk upgrade cork-cli` tracks new releases. Published apks are immutable.
 </details>
 
 <details>
 <summary><b>Run it from the container image (Docker or Podman)</b></summary>
 
 Every release also publishes a minimal Wolfi image with the same `ch` binary, for
-`linux/amd64` and `linux/arm64`. It runs as a non-root user, and its entrypoint is `ch`, so
-the image takes the same arguments as the binary. Pick the tag from the
+`linux/amd64` and `linux/arm64`. The image runs as a non-root user. Its entrypoint is `ch`, so
+it takes the same arguments as the binary. Pick the tag from the
 [package page](https://github.com/Cork-Technology/cork-cli/pkgs/container/cork-cli). There is
-no `latest` tag yet: only an audited v1.0.0 or later release moves it.
+no `latest` tag yet: only an audited release of v1.0.0 or later moves it.
 
 ```sh
 docker pull ghcr.io/cork-technology/cork-cli:v0.7.0
@@ -101,11 +102,11 @@ keep it between runs:
 docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.7.0 query protocol-config
 ```
 
-The image has no shell, no package manager, and no setuid binary, and it runs as uid 65532.
-Run it locked down. It needs one thing: a **writable, exec-mappable temp dir**. HyperSync
-reads (`full-decentralized` mode) extract the embedded native binding there on first load and
-`dlopen` it, and remove it at exit. A `noexec` temp dir fails with `failed to map segment`;
-`TMPDIR` is honored. Docker's `--read-only` mounts no tmpfs by itself, so pass one:
+The image has no shell, no package manager and no setuid binary. It runs as uid 65532. Run it
+locked down. It needs one thing: a **writable, exec-mappable temp dir**. On first load, HyperSync
+reads (`full-decentralized` mode) extract the embedded native binding there, `dlopen` it, and
+remove it at exit. A `noexec` temp dir fails with `failed to map segment`. The binary honors
+`TMPDIR`. Docker's `--read-only` mounts no tmpfs by itself, so pass one:
 
 ```sh
 # ENVIO_API_TOKEN is passed through from your shell, never written on the command line.
@@ -116,37 +117,37 @@ docker run --rm --read-only \
   query whitelisted-addresses --chain-id 42161 --mode full-decentralized
 ```
 
-`ch` is PID 1 in the container and handles SIGTERM itself, so `docker stop` is immediate.
+In the container, `ch` is PID 1 and handles SIGTERM itself, so `docker stop` is immediate.
 
-Verify the image the same way as a binary — by digest, against this repository's workflow:
+Verify the image as you verify a binary: by digest, against this repository's workflow:
 
 ```sh
 docker buildx imagetools inspect ghcr.io/cork-technology/cork-cli:v0.7.0 --format '{{.Manifest.Digest}}'
 gh attestation verify oci://ghcr.io/cork-technology/cork-cli@sha256:<digest> --repo Cork-Technology/cork-cli
 ```
 
-The image is composed from the signed apk channel above, so an image and an `apk add` install
-carry the same package bytes.
+The release builds the image from the signed apk channel above, so the image and an `apk add`
+install carry the same package bytes.
 </details>
 
 <details>
 <summary><b>No binary for your platform, or you want the source?</b></summary>
 
-The repository runs directly from source under Bun — see [Develop](#develop-run-from-source)
-below. Everything in this README works the same way from a checkout.
+The repository runs from source under Bun. See [Develop](#develop-run-from-source) below.
+Everything in this README works the same way from a checkout.
 </details>
 
 ## Use it with Claude Code (MCP)
 
-The MCP server exposes all 9 Cork tools to Claude Code (or any MCP client) over stdio. Claude
-can then read protocol state, run the bit-exact math, and build unsigned bundles and orders for
-you — without ever signing or broadcasting anything.
+The MCP server gives Claude Code (or any MCP client) all 9 Cork tools over stdio. Claude can
+then read protocol state, run the bit-exact math, and build unsigned bundles and orders for you.
+It never signs or broadcasts anything.
 
 ### 1. Register the server
 
-Register `ch mcp` with `claude mcp add`. **Pick one** of the two variants — they are
-alternatives that share the name `cork-defi`, not additive (`claude mcp remove cork-defi` first
-if you want to switch):
+Register `ch mcp` with `claude mcp add`. **Pick one** of the two variants. They share the name
+`cork-defi`, so they are alternatives, not additions. To switch, run
+`claude mcp remove cork-defi` first:
 
 ```sh
 # A) recommended — works out of the box, including live chain reads on public chains
@@ -157,22 +158,22 @@ claude mcp add cork-defi -- "$(which ch)" mcp
 claude mcp add cork-defi -e CORK_RPC_URL=https://your-rpc-endpoint -- "$(which ch)" mcp
 ```
 
-Chain-backed tools work **without any RPC setup**: the server ships with built-in default
-endpoints for Ethereum mainnet, Arbitrum, and Base, and fetches a fast public RPC from
-chainlist.org (with a circuit breaker and retry/backoff) if a default is unreachable — see
+Chain-backed tools work **without any RPC setup**. The server ships with built-in default
+endpoints for Ethereum mainnet, Arbitrum and Base. If a default is unreachable, the server
+fetches a fast public RPC from chainlist.org, with a circuit breaker and retry/backoff. See
 "How RPC endpoints are resolved" below. Variant B only overrides that.
 
-**Why `"$(which ch)"` and not plain `ch`.** Claude Code launches the server as a subprocess
-that may not inherit your shell's `PATH` (notably the desktop app), so a bare `ch` can fail
-with "command not found". `"$(which ch)"` resolves to the absolute path at `add` time. If the
-server won't connect, check this first — `claude mcp get cork-defi` shows the exact command it
-runs.
+**Why `"$(which ch)"` and not plain `ch`.** Claude Code launches the server as a subprocess.
+That subprocess may not inherit your shell's `PATH` (notably in the desktop app), so a bare `ch`
+can fail with "command not found". `"$(which ch)"` resolves to the absolute path at `add` time.
+If the server does not connect, check this first: `claude mcp get cork-defi` shows the exact
+command it runs.
 
-By default this registers the server **locally** (just you, just this project). `-s user` makes
-it available in every project. **Avoid `-s project` with the `-e CORK_RPC_URL=…` variant:**
-project scope writes a *committed* `.mcp.json`, and the RPC endpoint value must never enter
-git. Share via `-s project` with variant A only; let each teammate set their own endpoint
-locally.
+By default, the command registers the server **locally**: for you, in this project only.
+`-s user` makes it available in every project. **Do not use `-s project` with the
+`-e CORK_RPC_URL=…` variant.** Project scope writes a *committed* `.mcp.json`, and the RPC
+endpoint value must never enter git. Share with `-s project` only for variant A. Let each
+teammate set their own endpoint locally.
 
 <details>
 <summary><b>Run the MCP server from the container instead of a local binary</b></summary>
@@ -188,9 +189,9 @@ claude mcp add cork-defi -- "$(which docker)" run -i --rm ghcr.io/cork-technolog
 claude mcp add cork-defi -- "$(which docker)" run -i --rm -e CORK_RPC_URL=https://your-rpc-endpoint ghcr.io/cork-technology/cork-cli:v0.7.0 mcp
 ```
 
-`"$(which docker)"` for the same reason as `"$(which ch)"` above: the subprocess may not see
-your `PATH`. Podman works the same way (`"$(which podman)"`). The `-s project` warning applies
-unchanged — variant B puts the endpoint in the command line, so never commit it.
+Use `"$(which docker)"` for the same reason as `"$(which ch)"` above: the subprocess may not see
+your `PATH`. Podman works the same way (`"$(which podman)"`). The `-s project` warning still
+applies. Variant B puts the endpoint in the command line, so never commit it.
 </details>
 
 ### 2. Check it works
@@ -221,37 +222,38 @@ These work with **no RPC** (config-only or pure math):
 
 These read **live chain state** and work out of the box.
 `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05` is a real mainnet pool
-(sUSDe-vbUSDC); list current pools at `api-phoenix.cork.tech/v1/pools/`:
+(sUSDe-vbUSDC). To list current pools, open `api-phoenix.cork.tech/pools/v1/`:
 
-> - "Read the live state of Cork market `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05`."
+> - "Read the live state of Cork pool `0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05`."
 > - "What's the current cST swap rate for 1e18 collateral out of that pool?"
 > - "Is address `0xc0ffee…0001` whitelisted on that pool?"
 
-Arbitrum (chainId 42161) and Base (8453) are **full** deployments like mainnet: reads, bundle
-building, orders, and the MarketRegistry resources (registry-assets / registry-oracle /
-registry-recipes / registry-denominations / registry-feeds / derive-cork-pool, plus
-`cork_prepare_market` oracle deploys and `create-pool`) all work there. `derive-cork-pool`
-predicts the pool a JIT LOP fill would create — the recipe's oracle, the off-chain-resolved
-constraint, pool id, and cST/cPT tokens — before anything is deployed or signed.
+Arbitrum (chainId 42161) and Base (8453) are **full** deployments, like mainnet. Reads, bundle
+building and orders work there. So do the MarketRegistry resources (registry-assets /
+registry-oracle / registry-recipes / registry-denominations / registry-feeds / derive-cork-pool),
+`cork_prepare_market` oracle deploys and `create-pool`. `derive-cork-pool` predicts the pool that
+a JIT LOP fill would create, before anything is deployed or signed. It returns the recipe's
+oracle, the off-chain-resolved constraint, the pool id, and the cST/cPT tokens.
 
-Each chain hosts a **set of contract generations**, one of them primary (`phoenix/v0.5` on
-Arbitrum and Base since 2026-10-09, Distribution `phoenix/v0.5-rc.1`; `phoenix/v0.4-rc.1`, the same
-contracts with the 0.4.0 JIT adapter, and the previous `phoenix/v0.3-rc.1` set stay active). A prepare
-targets the primary unless you pass `generation: "<label>"`; a read of an existing pool follows
-the generation the pool lives on and reports it as `data.generation` (with `alsoIn` naming any other
-set that shares the pool manager). `protocol-config` lists a
-chain's generations; `cork_capabilities topic:"generations"` explains the model. To move funds
-between generations, `generation: "previous"` names the older active set, `account-state` without a
-poolId lists your positions across every generation, and `topic:"migration"` is the recipe.
+Each chain hosts a **set of contract generations**, and one of them is the primary. On Arbitrum
+and Base, the primary is `phoenix/v0.5` since 2026-10-09 (Distribution `phoenix/v0.5-rc.1`).
+`phoenix/v0.4-rc.1` (the same contracts with the 0.4.0 JIT adapter) and the previous
+`phoenix/v0.3-rc.1` set stay active. A prepare targets the primary unless you pass
+`generation: "<label>"`. A read of an existing pool follows the generation that holds the pool
+and reports it as `data.generation`. Its `alsoIn` names any other set that shares the pool
+manager. `protocol-config` lists a chain's generations, and
+`cork_capabilities topic:"generations"` explains the model. To move funds between generations:
+`generation: "previous"` names the older active set, `account-state` without a poolId lists
+your positions across every generation, and `topic:"migration"` gives the recipe.
 
-Reading a pool that exists on no generation of the queried chain returns `unavailable` with
-`pool_not_found`, naming every pool manager it asked. That is expected; it is not a broken
-install. `chain_read_failed` means the chain answered with a revert.
+If you read a pool that exists on no generation of the queried chain, the tool returns
+`unavailable` with `pool_not_found`. The warning names every pool manager it asked. This is
+expected; it is not a broken install. `chain_read_failed` means the chain answered with a revert.
 
 <details>
 <summary><b>Remote / HTTP transport (<code>ch mcp --http</code>) and the server env contract</b></summary>
 
-The same server also speaks **Streamable HTTP** — the shape a hosted deployment serves:
+The same server also speaks **Streamable HTTP**, the transport a hosted deployment serves:
 
 ```sh
 ch mcp --http                # serves on :8080 — endpoint /mcp, health /healthz, docs /docs/signing
@@ -267,27 +269,27 @@ claude mcp add --transport http cork-defi http://localhost:8080/mcp
 claude mcp add --transport http cork-defi https://your-deployment/mcp --header "Authorization: Bearer <token>"
 ```
 
-All env is read server-side at process start; clients cannot override any of it per call. That
-is deliberate: server reads run on the server's own RPC configuration, and signing/broadcasting
-are always client-side (see `cork_capabilities topic:"signing"`).
+The server reads all env at process start, and clients cannot override any of it per call. This
+is deliberate: server reads use the server's own RPC configuration, and signing and broadcasting
+always stay client-side (see `cork_capabilities topic:"signing"`).
 
 | Env | Effect |
 |---|---|
-| `CORK_MCP_TOKEN` | When set, `/mcp` requires `Authorization: Bearer <token>`; unset = open (put auth/rate-limits at your ingress). Never logged. Also unlocks the full `/readyz` view. |
-| `CORK_MCP_DIAGNOSTICS_TOKEN` | A read-only bearer that unlocks the full `/readyz` view (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) without gating `/mcp`. Without a bearer `/readyz` answers the summary: one `degraded` flag per subsystem. Never logged. |
+| `CORK_MCP_TOKEN` | When set, `/mcp` requires `Authorization: Bearer <token>`. Unset, `/mcp` is open: put auth and rate limits at your ingress. Never logged. Also unlocks the full `/readyz` view. |
+| `CORK_MCP_DIAGNOSTICS_TOKEN` | A read-only bearer that unlocks the full `/readyz` view (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) without gating `/mcp`. Without a bearer, `/readyz` answers the summary: one `degraded` flag per subsystem. Never logged. |
 | `CORK_RPC_URL` | Explicit RPC endpoint override for chain reads (else built-in defaults + chainlist fallback). |
-| `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target (Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl — those builds say so); `ch version` shows which binding a binary carries. |
-| `CORK_VENUE_URL` | Override the venue API base (default api-phoenix.cork.tech). With `CORK_CONFIG_FILE` naming a staging set this is the whole staging switch — see "Point one install at staging" in docs/cli.md. |
-| `CORK_CONFIG_FILE` / `CORK_CONFIG_NO_OVERRIDE` | A local `config.json` that adds or replaces whole deployment sets, moves a chain's primary, or restricts the visible sets (`only`); `=1` on the second turns the layer off. Results the override shaped warn `config_override_active`. |
+| `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target. Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl; those builds say so. `ch version` shows which binding a binary carries. |
+| `CORK_VENUE_URL` | Overrides the venue API base (default api-phoenix.cork.tech). Together with a `CORK_CONFIG_FILE` that names a staging set, it is the whole staging switch. See "Point one install at staging" in docs/cli.md. |
+| `CORK_CONFIG_FILE` / `CORK_CONFIG_NO_OVERRIDE` | A local `config.json` that adds or replaces whole deployment sets, moves a chain's primary, or restricts the visible sets (`only`). `=1` on the second turns the layer off. Each result that the override shaped warns `config_override_active`. |
 | `CORK_PROBE_BUDGET` | Default eth_call budget of the offers probe walk, per side (integer 1..25; default 6; a per-call `probeBudget` input wins). Values outside the range are ignored. |
-| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Address-config fetch/cache knobs — the config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire). |
+| `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Fetch and cache settings for the address config. The config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire). |
 
-`GET /docs/signing` serves the sign-and-broadcast guide as markdown — the same constant that
-backs `cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the
-three surfaces cannot drift.
+`GET /docs/signing` serves the sign-and-broadcast guide as markdown. One constant backs it,
+`cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the three
+surfaces cannot drift.
 
-The hosted deployment runs in a Phala Confidential VM; [`packaging/VERIFY.md`](packaging/VERIFY.md)
-is the end-to-end recipe to prove — without trusting Cork — that an endpoint runs exactly the
+The hosted deployment runs in a Phala Confidential VM. [`packaging/VERIFY.md`](packaging/VERIFY.md)
+is the end-to-end recipe to prove, without trusting Cork, that an endpoint runs exactly the
 attested image built from the tagged source.
 </details>
 
@@ -335,62 +337,61 @@ alias ch='docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-techno
 ch query registry-assets --chain-id 42161
 ```
 
-Flags, positionals, `--json`, and `--rpc-url` work as documented. Environment variables such
-as `CORK_RPC_URL` or `ENVIO_API_TOKEN` go to the container with `-e NAME=value`.
+Flags, positionals, `--json`, and `--rpc-url` work as documented. Pass environment variables
+such as `CORK_RPC_URL` or `ENVIO_API_TOKEN` to the container with `-e NAME=value`.
 </details>
 
 **Full command reference:** [`docs/cli.md`](docs/cli.md) — every command with a one-liner,
 grouped by workflow.
 
-**Output is prose by default and JSON on request.** A person at a terminal gets a readable
-summary; ask for the wire format with a bare `--json`, or set `CORK_JSON=1` to make JSON the
-default in a shell. Supplying input *as* `--json '<object>'` also returns JSON — handing the
-tool the wire shape is itself a machine-readable intent — so scripts that pass the wire shape
-keep working unchanged.
+**Output is prose by default and JSON on request.** At a terminal, you get a readable summary.
+To get the wire format, pass a bare `--json`, or set `CORK_JSON=1` to make JSON the default in a
+shell. Input given *as* `--json '<object>'` also returns JSON. The tool reads the wire shape as
+a machine-readable intent, so scripts that pass the wire shape keep working unchanged.
 
-**Prose is colored on a terminal, plain everywhere else.** SGR styling follows the usual
-conventions — off when the stream is piped, [`NO_COLOR`](https://no-color.org) disables,
-`FORCE_COLOR=1` forces (e.g. in CI logs), `TERM=dumb` disables — implemented in-tree with
-zero dependencies. Color never changes a character: stripping the escapes yields the exact
-plain output, and JSON output never carries them.
+**Prose is colored on a terminal and plain everywhere else.** SGR styling follows the usual
+conventions: it is off when the stream is piped, [`NO_COLOR`](https://no-color.org) disables
+it, `FORCE_COLOR=1` forces it (e.g. in CI logs), and `TERM=dumb` disables it. The code is
+in-tree, with zero dependencies. Color never changes a character: strip the escapes and you get
+the exact plain output. JSON output never carries escapes.
 
-**Exit codes map the envelope state** so scripts can branch: `0` ok · `2` invalid input · `3`
+**Exit codes map the envelope state**, so scripts can branch: `0` ok · `2` invalid input · `3`
 unavailable · `4` conflict · `1` unexpected error. Chain-backed commands resolve an RPC
-automatically (see below); pass `--rpc-url <url>` (or set `CORK_RPC_URL`) to override.
+automatically (see below). To override it, pass `--rpc-url <url>` or set `CORK_RPC_URL`.
 
 <details>
 <summary><b>Input forms, flag spelling, and amount sugar</b></summary>
 
-Input has three interchangeable forms. `--json '<object>'` is canonical and identical to what
-the MCP server receives; `--input '<object>'` is the same thing under a name that cannot be
-confused with the output flag; or pass subcommands/positionals plus flags named after the
-tool's own schema fields — usually what you want by hand. Every discriminated action/kind is
-its own subcommand (`ch prepare pool exercise …`, `ch submit rfq-open …`,
-`ch track verify market-ref …`) with a variant-scoped `--help`/`--explain`:
+Input has three interchangeable forms. `--json '<object>'` is canonical: it is identical to what
+the MCP server receives. `--input '<object>'` is the same thing, under a name that you cannot
+confuse with the output flag. The third form is subcommands or positionals plus flags named
+after the tool's own schema fields; by hand, this is usually what you want. Every discriminated
+action or kind is its own subcommand (`ch prepare pool exercise …`, `ch submit rfq-open …`,
+`ch track verify market-ref …`), with a variant-scoped `--help`/`--explain`:
 
 ```sh
 ch query cork-pool --chain-id 1 --pool-id 0xd16e343d58ab0d5985086dfd4ff8128ea714be3c1275184f1bf11c0ede02cf05
 ```
 
-Flags win over keys in a JSON blob, so a saved blob can be reused with one value overridden.
-Flag spelling is forgiving — `--chainid`, `--chain-id` and `--chainId` are the same flag (help
-displays the kebab form). Object-valued fields (`--filters`, `--for-self`) take a JSON string;
-union-typed fields accept a raw string too (`ch decode tx --data 0x…` — no quoting gymnastics).
-Amount fields accept exact human sugar: `1000e18` and `1_000000` expand by integer arithmetic
-(a fractional remainder like `1.23e1` is refused with teaching, and sugar applies to flags only
-— JSON blobs stay the exact wire form). `--chain-id` also takes network names (`arbitrum`,
+Flags win over keys in a JSON blob, so you can reuse a saved blob and override one value. Flag
+spelling is forgiving: `--chainid`, `--chain-id` and `--chainId` are the same flag (help shows
+the kebab form). Object-valued fields (`--filters`, `--for-self`) take a JSON string. Union-typed
+fields also accept a raw string (`ch decode tx --data 0x…`, with no quoting gymnastics). Amount
+fields accept exact human sugar: `1000e18` and `1_000000` expand by integer arithmetic. The tool
+refuses a fractional remainder like `1.23e1` and teaches the fix. Sugar applies to flags only;
+JSON blobs stay the exact wire form. `--chain-id` also takes network names (`arbitrum`,
 `mainnet`, `base`, `sepolia`), and a mistyped action name gets a did-you-mean refusal.
 </details>
 
 <details>
 <summary><b>Vocabulary: canonical names, synonyms, and retired names</b></summary>
 
-The taxonomy in one line: a **cork-pool** is one expiry of a **market** (the family of pools
-over one collateral/reference pair — an *instance* of it, not an AMM pool); a **trading-pair**
-is a pair listed for trading on the LOP venue book; the **orderbook** holds that pair's resting
-orders; **rollover-orders** are orders whose execution migrates a position to a successor pool.
-Accepted synonyms agree with the taxonomy; retired names never silently work — they answer
-with their replacement:
+The taxonomy: a **cork-pool** is one expiry of a **market**. A market is the family of pools
+over one collateral/reference pair; a pool is an *instance* of it, not an AMM pool. A
+**trading-pair** is a pair listed for trading on the LOP venue book. The **orderbook** holds
+that pair's resting orders. **rollover-orders** are orders that migrate a position to a
+successor pool when they execute. Accepted synonyms agree with the taxonomy. Retired names never
+silently work: they answer with their replacement.
 
 | Canonical | Accepted synonyms | Retired names (teach their replacement) |
 |---|---|---|
@@ -413,12 +414,12 @@ with their replacement:
 prepare → simulate → sign → send recipe, and the stability promise.
 
 `@cork/schemas` and `@cork/core` are publish-ready library packages (ESM-only, Node ≥ 22 / Bun,
-`sideEffects: false`, types shipped). Until they land on a registry, install from a packed
-tarball: `bun pm pack` in each package directory rewrites `workspace:*` to real versions, and
-the tarballs npm-install cleanly.
+`sideEffects: false`, types shipped). They are not on a registry yet, so install from a packed
+tarball. Run `bun pm pack` in each package directory: it rewrites `workspace:*` to real
+versions, and the tarballs npm-install cleanly.
 
-The root export is the full SDK; domain subpaths let you load only the tier you need — a
-consumer of the pure math never loads the venue client or an RPC transport:
+The root export is the full SDK. Domain subpaths let you load only the tier you need. For
+example, a consumer of the pure math never loads the venue client or an RPC transport:
 
 <!-- example: fragment -->
 ```ts
@@ -447,11 +448,11 @@ import { buildMakerOrder, hashLopOrder } from "@cork/core/orders";
 | `@cork/core/indexer` | HyperSync/HyperRPC event-archive access for full-decentralized reads. |
 | `@cork/core/config` | Deployment config, CREATE2 attestations, implementation + TEE guards. |
 
-The public surface — every export name on the root and each subpath, type exports included — is
-pinned by a drift gate (`packages/core/test/api-surface.test.ts`): an accidental addition or
-removal fails CI until the fixture is regenerated deliberately. Package shape is audited on
-every `bun run verify:publish` with `publint --strict` and `arethetypeswrong` (all entry points
-resolve green under node16-ESM and bundler resolution).
+A drift gate (`packages/core/test/api-surface.test.ts`) pins the public surface: every export
+name on the root and on each subpath, type exports included. An accidental addition or removal
+fails CI until someone regenerates the fixture deliberately. Every `bun run verify:publish`
+audits the package shape with `publint --strict` and `arethetypeswrong`. All entry points
+resolve green under node16-ESM and bundler resolution.
 
 ## Packages
 
@@ -461,70 +462,70 @@ The monorepo behind the binary:
 |---|---|
 | `@cork/schemas` | zod v4 single source of truth: hex-typed primitives, the 9-tool registry, `z.toJSONSchema` projection to MCP input schemas. |
 | `@cork/core` | Deterministic bit-exact ports of on-chain math (`MathHelper`, `TransferHelper`, `ConstraintRateAdapter._calculateRate`, `PoolLib.preview*`), the committed-descent impairment floor, `MarketId`/CREATE2 derivation, chain reads (viem), the Bundler3 encoder/recursive decoder, and the shared tool dispatch (`runTool`). |
-| `@cork/mcp` | MCP server projecting the registry via the low-level `Server` API (advertises JSON Schema directly; avoids the SDK's bundled-zod coupling). Stdio entry `packages/mcp/src/bin.ts` (package bin `cork-mcp`). |
-| `@cork/cli` | commander projection of the same registry — one command per tool at its `cliPath`. The `ch` binary compiles this package (plus the embedded MCP server) into one file. |
+| `@cork/mcp` | MCP server that projects the registry through the low-level `Server` API. It advertises JSON Schema directly and avoids the SDK's bundled-zod coupling. Stdio entry `packages/mcp/src/bin.ts` (package bin `cork-mcp`). |
+| `@cork/cli` | commander projection of the same registry: one command per tool at its `cliPath`. The `ch` binary compiles this package (plus the embedded MCP server) into one file. |
 
 ## How RPC endpoints are resolved
 
-Chain-backed reads pick an endpoint in this order, so the tools "just work" on public chains
-while staying overridable:
+Chain-backed reads pick an endpoint in this order. The tools "just work" on public chains, and
+you can still override them:
 
-1. **Explicit** — `CORK_RPC_URL` (env) or `--rpc-url` (CLI). Used verbatim, no probing, no
-   fallback.
+1. **Explicit** — `CORK_RPC_URL` (env) or `--rpc-url` (CLI). The tool first proves, with one
+   `eth_chainId` call, that the endpoint serves the requested chain, and refuses it otherwise. It
+   never falls back.
 2. **Built-in default** — a committed endpoint for the chain (Ethereum mainnet, Arbitrum,
-   Base). Tried with retries + exponential backoff; a per-endpoint **circuit breaker** stops
-   hammering one that's down.
+   Base). The tool tries it with retries and exponential backoff. A per-endpoint **circuit
+   breaker** stops calls to an endpoint that is down.
 3. **chainlist.org fallback** — for public chains (mainnet, Arbitrum, Base, Sepolia), the tool
-   fetches candidate public RPCs just-in-time, latency-probes them in parallel, **verifies each
-   reports the right chainId**, and uses the fastest healthy one. The private staging vnet
-   (49222) is not on chainlist, so it needs an explicit RPC.
+   fetches candidate public RPCs just-in-time. It latency-probes them in parallel, **verifies
+   that each reports the right chainId**, and uses the fastest healthy one. The private staging
+   vnet (49222) is not on chainlist, so it needs an explicit RPC.
 
-The chosen endpoint and breaker state are cached in-process and on disk
-(`~/.cache/cork-helper-cli/`, override with `CORK_RPC_CACHE_FILE`) so repeated calls skip
+The tool caches the chosen endpoint and the breaker state in-process and on disk
+(`~/.cache/cork-helper-cli/`, override with `CORK_RPC_CACHE_FILE`), so repeated calls skip
 re-probing. When a read falls back to a community RPC, the result envelope carries an
-`rpc_fallback` warning naming the host.
+`rpc_fallback` warning that names the host.
 
-> Note: the built-in default endpoints embed access tokens and are committed intentionally.
-> This is a deliberate exception to the "never commit an RPC URL" rule, which
-> still applies to `CORK_RPC_URL` / `CORK_TEST_RPC` — those stay environment-only.
+> Note: the built-in default endpoints embed access tokens, and we commit them intentionally.
+> This is a deliberate exception to the "never commit an RPC URL" rule. The rule still applies
+> to `CORK_RPC_URL` / `CORK_TEST_RPC`: those stay environment-only.
 
 ## Design invariants
 
 - **One typed core.** MCP, CLI, and SDK are thin projections of the same `runTool` dispatch and
-  the same registry — no logic forks between surfaces.
-- **Prepare ≠ sign ≠ submit**. Preparation returns unsigned bytes; nothing is signed or
-  broadcast by these tools. The one side-effecting tool (`cork_submit`) only relays a
-  caller-signed payload.
-- **Reconstruct, never trust a supplied parse**. `cork_decode` re-derives Cork calldata
-  (recursively unwrapping Bundler3 multicall/reenter) from bytes; unknown legs are surfaced
-  raw, never silently dropped.
-- **Honest phase-gating.** Unimplemented tool variants return an `unavailable` envelope with a
-  reason code — never a fabricated result.
-- **Bit-exact math.** Every Solidity operation is ported with matching floor/ceil rounding and
-  verified against independently-computed golden vectors **and** live on-chain reads.
+  the same registry. No logic forks between surfaces.
+- **Prepare ≠ sign ≠ submit**. A prepare returns unsigned bytes. These tools never sign or
+  broadcast anything. The one side-effecting tool (`cork_submit`) only relays a caller-signed
+  payload.
+- **Reconstruct, never trust a supplied parse**. `cork_decode` re-derives Cork calldata from
+  bytes and unwraps Bundler3 multicall/reenter recursively. It shows unknown legs raw and never
+  drops them silently.
+- **Honest phase-gating.** An unimplemented tool variant returns an `unavailable` envelope with
+  a reason code, never a fabricated result.
+- **Bit-exact math.** We port every Solidity operation with matching floor/ceil rounding. We
+  verify each port against independently computed golden vectors **and** live on-chain reads.
 
 ## Verification (empirical, not asserted)
 
-- **Golden vectors** are derived independently of the TS implementation: Foundry unit-test
+- **Golden vectors** come from sources independent of the TS implementation: Foundry unit-test
   literals (`computeT`, `calculateTimeDecayFee`), Python integer arithmetic (`_calculateRate`
   refill, impairment floor), and `cast`/`foundry` (`MarketId` keccak, CREATE2, CorkAdapter
   action + Bundler3 multicall byte-parity).
 - **Fork parity** (`packages/core/test/fork-parity.test.ts`) reproduces on-chain `swapRate`,
   `previewSwap`, `previewUnwindSwap`, and `MarketId` **wei-for-wei** against the live vnet
-  fixture pool, and checks the full `runTool` handler stack too. All reads are pinned to one
-  block so the permissionlessly-mutable test oracle cannot race the comparison.
-- The committed-descent impairment floor is proven **≤ a brute-force adversary simulation**
-  across a horizon matrix (conservative-safe: the floor is never optimistic).
-- **Release binaries** are double-built: two independent CI builds must be byte-identical, and
-  every asset carries a GitHub attestation you can verify (see Install).
+  fixture pool. It also checks the full `runTool` handler stack. The test pins all reads to one
+  block, so the permissionlessly-mutable test oracle cannot race the comparison.
+- A test proves the committed-descent impairment floor is **≤ a brute-force adversary
+  simulation** across a horizon matrix. The floor is conservative-safe: it is never optimistic.
+- **Release binaries** are double-built: two independent CI builds must be byte-identical. Every
+  asset carries a GitHub attestation that you can verify (see Install).
 - **The container image** is built from the signed apk channel, and its digest carries the same
   GitHub attestation (`gh attestation verify oci://…`, see Install).
 
 ## Develop (run from source)
 
-The sources are TypeScript run directly by **[Bun](https://bun.sh)** (Node's native
-type-stripping can't run this code — it uses TypeScript parameter properties). Bun 1.3 is
-pinned in `mise.toml`.
+**[Bun](https://bun.sh)** runs the TypeScript sources directly. Node's native type-stripping
+cannot run this code, because it uses TypeScript parameter properties. `mise.toml` pins Bun 1.3.
 
 ```sh
 git clone git@github.com:Cork-Technology/cork-cli.git
@@ -563,10 +564,10 @@ CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
 bun run eval               # see evals/README.md for grading, env knobs, held-out rule
 ```
 
-`CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) are read from the
-environment and must never be committed. Without `CORK_TEST_RPC` the fork-parity/bundle-sim
-suites self-skip; chain-backed tools still run at request time via the built-in default RPCs +
-chainlist fallback.
+The tools read `CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) from the
+environment. Never commit them. Without `CORK_TEST_RPC`, the fork-parity/bundle-sim suites
+self-skip. Chain-backed tools still run at request time through the built-in default RPCs and
+the chainlist fallback.
 
 ## Status
 
@@ -574,59 +575,66 @@ Implemented + tested:
 
 - **cork_capabilities** — tool list, `search`, `topic` docs, and `topic: "verify"` (re-derives
   deployed addresses via CREATE2 from prod.toml salt + Sourcify init-code hash).
-- **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs (erc20/permit2/GeneralAdapter1),
-  plus a plain-English `summary` of what those legs do; also LOP orders, single logs, and whole receipts.
-- **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate / impairment-floor
-  (chain-backed, block-pinnable); recipe-rate-constraint (2.1.0: the `recipe.resolve` staticcall — the step
-  that produces the constraint a JIT order carries and signs).
-- **cork_prepare_phoenix** — all 13 adapter actions on mainnet **and** Arbitrum; auto-built funding
-  legs (erc20-approve / permit2 — always in the same transaction as the action; there is no
-  pre-funded mode) for value-in actions and owner==adapter share-burn
-  actions; **sweep-back legs** that return the unspent remainder of any funded slippage cap to
-  `account`, so it is not left on the adapter where anyone can take it; **pre-flight guards** for
-  expiry, pause (the global breaker and the per-pool bit for this action), and whitelist (which
-  checks *two* addresses — see below); a plain-English `summary` of what the bundle will do; and the
-  authority-onboard / authority-revoke ops. deposit / swap / unwind-swap / exercise bundles are
-  proven to **execute** against the live vnet.
+- **cork_decode** — Bundler3 calldata, recursively, incl. non-Cork legs
+  (erc20/permit2/GeneralAdapter1), plus a plain-English `summary` of what those legs do. It also
+  decodes LOP orders, single logs, and whole receipts.
+- **cork_compute** — rollover-premium-floor (pure); cst-swap-rate / unwind-rate /
+  impairment-floor (chain-backed, block-pinnable); recipe-rate-constraint (2.1.0: the
+  `recipe.resolve` staticcall, which produces the constraint a JIT order carries and signs).
+- **cork_prepare_phoenix** — all 13 adapter actions on mainnet, Arbitrum One and Base, plus the
+  authority-onboard / authority-revoke ops. It builds funding legs automatically (erc20-approve /
+  permit2) for value-in actions and owner==adapter share-burn actions. The funding legs always
+  run in the same transaction as the action; there is no pre-funded mode. **Sweep-back legs**
+  return the unspent remainder of any funded slippage cap to `account`, so it is not left on the
+  adapter where anyone can take it. **Pre-flight guards** check expiry, pause (the global
+  breaker and the per-pool bit for this action), and whitelist (which checks *two* addresses —
+  see below). A plain-English `summary` says what the bundle will do. We proved that deposit /
+  swap / unwind-swap / exercise bundles **execute** against the live vnet.
 
-  Note the whitelist asymmetry: a gated pool checks the bundle's `initiator()` (you, via the
-  adapter's own modifier) **and** `msg.sender` (the *adapter*, via the pool manager). Both must be
-  whitelisted, so checking only your own address can read as a false green.
+  Note the whitelist asymmetry. A gated pool checks the bundle's `initiator()` (you, through the
+  adapter's own modifier) **and** `msg.sender` (the *adapter*, through the pool manager). Both
+  must be whitelisted. If you check only your own address, you can get a false green.
 - **cork_prepare_orders** — 1inch maker-order EIP-712 typed data (incl. extension orders and
-  JIT-market orders with adapter pre-flight checks) + cancel calldata, order hash proven equal to
-  on-chain `hashOrder`; rollover-intent ERC-7683 OrderData (CorkSettler domain, intent hash
-  recomputed locally, settler-mode gate checked), signed by the cPT holder; rollover-fill, the
-  unsigned `BaseFiller.execute` calldata with which the source cST holder fills that order and
-  pays the premium. Orders live in the 1inch **bit** invalidator,
-  which keys on `(maker, nonce)` rather than order hash, so the nonce is derived per
-  `clientRequestId`: give each order you want live at the same time its own id, or they share a bit
-  and filling one invalidates the others.
-- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode[, oracleSalt])` oracle-wrapper
-  txs, `deployFixedRateOracle(rate)` fixed-rate oracle txs, and `CorkMarketCreator.createNewPool`
-  txs that create a JIT pool ahead of the fill (permissionless, idempotent; Arbitrum + Base; built
-  on the selected generation's registry wire).
-- **cork_query** — chain reads, each following the pool's or the selected generation (cork-pool — one expiry of a market / account-state incl. balances +
-  funding allowances for both spenders / pool-whitelist / protocol-config (incl. the chain's generations) / registry-assets /
-  registry-oracle / registry-recipes / registry-denominations / registry-feeds / derive-cork-pool —
-  predict a pool's oracle, pool id, constraint, and cST/cPT before it exists); venue-discovered,
-  chain-verified reads labeled `provenance.mode: "hybrid"` (cork-pools, orderbook, fills,
-  trading-pairs — the LOP pair listings, rollover-orders, rfqs — incl. single-RFQ lookup via
-  `filters.rfqId`); an event-derived subset (cork-pools, trading-pairs, fills, rollover
-  fills/contracts) also serves `full-decentralized` mode over HyperSync, never the venue.
-- **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call dry-run
-  on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt, orderHash /
-  submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks indexer).
-- **cork_submit** — the one side-effecting tool: relays caller-signed/authored payloads to the venue
-  (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`, `rfq-counter`), recomputing commitments
-  before relay.
+  JIT-market orders with adapter pre-flight checks) and cancel calldata. We proved its order hash
+  equal to on-chain `hashOrder`. It also builds rollover-intent ERC-7683 OrderData (CorkSettler
+  domain, intent hash recomputed locally, settler-mode gate checked), which the cPT holder signs.
+  And it builds rollover-fill: the unsigned `BaseFiller.execute` calldata with which the source
+  cST holder fills that order and pays the premium. Orders live in the 1inch **bit**
+  invalidator, which keys on `(maker, nonce)` rather than order hash. So the tool derives the
+  nonce per `clientRequestId`. Give each order that you want live at the same time its own id.
+  Otherwise the orders share a bit, and a fill of one invalidates the others. To share a bit on
+  purpose (one-cancels-the-other), name an `ocoGroup`.
+- **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode[, oracleSalt])`
+  oracle-wrapper txs, `deployFixedRateOracle(rate)` fixed-rate oracle txs, and
+  `CorkMarketCreator.createNewPool` txs that create a JIT pool ahead of the fill. All are
+  permissionless and idempotent, on Arbitrum + Base, and built on the selected generation's
+  registry wire.
+- **cork_query** — chain reads. Each read follows the pool's generation or the selected one:
+  cork-pool (one expiry of a market), account-state (incl. balances + funding allowances for
+  both spenders), pool-whitelist, protocol-config (incl. the chain's generations),
+  registry-assets, registry-oracle, registry-recipes, registry-denominations, registry-feeds, and
+  derive-cork-pool (predicts a pool's oracle, pool id, constraint, and cST/cPT before it exists).
+  Venue-discovered, chain-verified reads carry the label `provenance.mode: "hybrid"`:
+  cork-pools, orderbook, fills, trading-pairs (the LOP pair listings), rollover-orders, and rfqs
+  (incl. single-RFQ lookup via `filters.rfqId`). An event-derived subset (cork-pools,
+  trading-pairs, fills, rollover fills/contracts) also serves `full-decentralized` mode over
+  HyperSync, never the venue.
+- **cork_track** — verify (artifact digest, marketRef MarketId re-hash), simulate (eth_call
+  dry-run on frozen bytes: `wouldRevert` + reason BEFORE signing), reconcile (txHash receipt,
+  orderHash / submissionRef lifecycle vs the settler's on-chain `orderStatus()` — chain outranks
+  indexer).
+- **cork_submit** — the one side-effecting tool. It relays caller-signed/authored payloads to
+  the venue (`rollover-order`, `lop-order`, `rfq-open`, `rfq-answer`, `rfq-counter`) and
+  recomputes commitments before relay.
 
-Deliberately gated (`unavailable` with a reason, never faked): only `cork_compute` rfq-quote — a
-pricing model deferred by product decision (a Fusion-style decaying-premium order is the
-modeled-quote-free alternative). Everything else advertised above is activated, including
-`cork_query` whitelisted-addresses enumeration, `cork_compute` dutch-auction-price (pure-local
-Fusion v3.1 pricing), `cork_decode` order/event/receipt, `cork_prepare_orders` taker-fill +
-finalize-maker-order, and the `cork_prepare_phoenix` authority-onboard / authority-revoke ops.
+Deliberately gated (`unavailable` with a reason, never faked): only `cork_compute` rfq-quote. It
+is a pricing model, deferred by product decision. A Fusion-style decaying-premium order is the
+alternative that needs no modeled quote. Everything else advertised above is activated,
+including `cork_query` whitelisted-addresses enumeration, `cork_compute` dutch-auction-price
+(pure-local Fusion v3.1 pricing), `cork_decode` order/event/receipt, `cork_prepare_orders`
+taker-fill + finalize-maker-order, and the `cork_prepare_phoenix` authority-onboard /
+authority-revoke ops.
 
-Roadmap: `account-state` nonce/invalidator state, and Safe support — the latter phased by design
-(message-signature and transaction-confirmation are distinct problems, and these tools never
-confirm a Safe transaction).
+Roadmap: `account-state` nonce and invalidator state. Safe support is partial by design. The
+tools verify ERC-1271 signatures and decode Safe envelopes, but they never confirm a Safe
+transaction.

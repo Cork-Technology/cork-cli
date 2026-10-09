@@ -2678,8 +2678,8 @@ const CATALOG: Mutant[] = [
     // The README names only one side of the trade again.
     id: "docs-rollover-readme-half-told",
     file: "README.md",
-    find: "signed by the cPT holder; rollover-fill, the\n  unsigned `BaseFiller.execute` calldata with which the source cST holder fills that order and\n  pays the premium.",
-    replace: "signed by the cPT holder.",
+    find: "which the cPT holder signs.\n  And it builds rollover-fill: the unsigned `BaseFiller.execute` calldata with which the source\n  cST holder fills that order and pays the premium.",
+    replace: "which the cPT holder signs.",
     tests: [T.docsFreshness],
   },
   {
