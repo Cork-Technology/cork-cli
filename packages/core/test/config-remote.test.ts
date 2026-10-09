@@ -288,18 +288,19 @@ describe("resolveRollover", () => {
       seededAtBlock: 503918966,
       contractsVersion: "v0.2.0",
       wire: "0.2",
-      label: "phoenix/v0.4-rc.1",
+      label: "phoenix/v0.5",
+      alsoIn: ["phoenix/v0.4-rc.1"],
       status: "active",
       primary: true,
     });
-    expect(arb.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "0.2" });
+    expect(arb.generation).toEqual({ label: "phoenix/v0.5", status: "active", distribution: "phoenix/v0.5-rc.1", wire: "0.2" });
     const base = await resolveRollover(8453);
     expect(base.rollover).toMatchObject({ factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", seededAtBlock: 51153216, wire: "0.2" });
   });
   it("the whole flattened list rides along: rc.2 (phoenix/v0.3-rc.1) stays ACTIVE beside the primary, and Arbitrum's July set is RETIRED", async () => {
     const arb = (await resolveRollover(42161)).rollover!;
     expect(arb.generations.map((g) => [g.label, g.status, g.primary, g.wire])).toEqual([
-      ["phoenix/v0.4-rc.1", "active", true, "0.2"],
+      ["phoenix/v0.5", "active", true, "0.2"], // shared with phoenix/v0.4-rc.1: ONE entry
       ["phoenix/v0.3-rc.1", "active", false, "rc.2"],
       ["arbitrum-v1.1", "retired", false, "rc.1"],
     ]);
@@ -307,7 +308,7 @@ describe("resolveRollover", () => {
     expect(arb.generations[2]).toMatchObject({ factory: "0xBBcC54c637c26b484A8c57b5695c04e09daCE13A", exactSettler: "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D", partialSettler: "0x8e9Ca640338D3bDbFe3781D7178cA73Af66f366a", seededAtBlock: 484973917, retired: "2026-08-13" });
     // Base has never had a RETIRED generation.
     const base = (await resolveRollover(8453)).rollover!;
-    expect(base.generations.map((g) => [g.label, g.status])).toEqual([["phoenix/v0.4-rc.1", "active"], ["phoenix/v0.3-rc.1", "active"]]);
+    expect(base.generations.map((g) => [g.label, g.status])).toEqual([["phoenix/v0.5", "active"], ["phoenix/v0.3-rc.1", "active"]]);
     expect(rolloverGenerations(base).find((g) => g.label === "phoenix/v0.3-rc.1")?.seededAtBlock).toBe(49917191);
   });
   it("a generation label selects THAT set's block as the top-level fields; the list is unchanged", async () => {
@@ -323,7 +324,7 @@ describe("resolveRollover", () => {
     const bad = await resolveRollover(42161, undefined, "nope");
     expect(bad.rollover).toBeUndefined();
     expect(bad.refusal?.code).toBe("generation_unknown");
-    expect(bad.refusal?.message).toContain("phoenix/v0.4-rc.1 (active, primary)");
+    expect(bad.refusal?.message).toContain("phoenix/v0.5 (active, primary)");
   });
   it("is undefined for chains without a rollover deployment", async () => {
     const r = await resolveRollover(1);
@@ -412,13 +413,15 @@ describe("generations in the bundled defaults", () => {
   it("42161: four generations in resolution order (primary, other active in config order, read-only last), each block declaring its wire", async () => {
     const { generations, primary } = await resolveGenerations(42161);
     expect(generations.map((g) => [g.label, g.status, g.primary])).toEqual([
-      ["phoenix/v0.4-rc.1", "active", true],
+      ["phoenix/v0.5", "active", true],
+      ["phoenix/v0.4-rc.1", "active", false],
       ["phoenix/v0.3-rc.1", "active", false],
       ["arbitrum-v1.1", "active", false],
       ["arbitrum-legacy", "read-only", false],
     ]);
-    expect(primary?.label).toBe("phoenix/v0.4-rc.1");
+    expect(primary?.label).toBe("phoenix/v0.5");
     expect(generations.map((g) => [g.phoenix?.wire, g.marketRegistry?.wire, g.rollover?.wire])).toEqual([
+      ["10-field", "nested", "0.2"],
       ["10-field", "nested", "0.2"],
       ["8-field", "flat", "rc.2"],
       ["8-field", "legacy", "rc.1"],
@@ -436,7 +439,7 @@ describe("generations in the bundled defaults", () => {
       controller: "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
       wire: "10-field",
     });
-    expect(r.generation).toEqual({ label: "phoenix/v0.4-rc.1", status: "active", distribution: "phoenix/v0.4-rc.1", wire: "10-field" });
+    expect(r.generation).toEqual({ label: "phoenix/v0.5", status: "active", distribution: "phoenix/v0.5-rc.1", wire: "10-field" });
     // Base carries the SAME set except bundler3 (Morpho's per-chain deployment, read from the
     // adapter's own BUNDLER3() immutable on Base).
     expect((await resolveDeployment(8453)).deployment).toMatchObject({ poolManager: "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D", bundler3: "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4", wire: "10-field" });
@@ -448,7 +451,7 @@ describe("generations in the bundled defaults", () => {
     expect(mr.marketRegistry).toMatchObject({ registry: "0xa78d8137B01058dD23e545b6557209eBBc9611F1", adapter: "0x8902a88912a334263fe3d731d03c267715b9374f", marketCreator: "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C", contractsVersion: "0.3.3", wire: "flat" });
     expect(mr.generation).toMatchObject({ label: "phoenix/v0.3-rc.1", wire: "flat" });
     // The primary registry is the 0.5.0 nested-wire set.
-    expect((await resolveMarketRegistry(42161)).marketRegistry).toMatchObject({ registry: "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", adapter: "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104", marketCreator: "0x1A074F17647504D1c50B436074a74d051D502dEa", contractsVersion: "0.5.0", deployedAtBlock: 503851928, wire: "nested" });
+    expect((await resolveMarketRegistry(42161)).marketRegistry).toMatchObject({ registry: "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", adapter: "0x960Cd94B31121806b1b0Ff02230D189Ad0310616", marketCreator: "0x1A074F17647504D1c50B436074a74d051D502dEa", contractsVersion: "0.6.0", deployedAtBlock: 503851928, wire: "nested" });
     expect((await resolveMarketRegistry(8453)).marketRegistry).toMatchObject({ deployedAtBlock: 51145039, wire: "nested" });
   });
   it("arbitrum-v1.1 keeps the previous production stack and the legacy registry; arbitrum-legacy keeps the old read-path pair (read-only)", async () => {

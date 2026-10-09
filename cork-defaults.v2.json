@@ -4,8 +4,8 @@
   "updated": "2026-09-22",
   "lopAddresses": {
     "1": "0x111111125421cA6dc452d289314280a0f8842A65",
-    "42161": "0x111111125421cA6dc452d289314280a0f8842A65",
-    "8453": "0x111111125421cA6dc452d289314280a0f8842A65"
+    "8453": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "42161": "0x111111125421cA6dc452d289314280a0f8842A65"
   },
   "$fusionComment": "1inch Fusion settlement reference set (third-party, classification only — the ACTIVE settlement is always decoded from the order's own extension bytes). current = the v3.1 layout this tool prices (fusion-protocol deployments@master, CREATE3, code verified on-chain 2026-07-28: mainnet=Settlement, arbitrum=SimpleSettlement; base verified 2026-08-07: runtime byte-identical to Arbitrum's SimpleSettlement except ONE 20-byte immutable, the chain's WETH — 0x4200…0006 vs 0x82aF…Bab1); legacy = recognized-but-refused older layouts (v2 present on all three chains; v1 is mainnet-only and LOP v3 era).",
   "fusionSettlements": {
@@ -16,13 +16,13 @@
         "0xA88800CD213dA5Ae406ce248380802BD53b47647"
       ]
     },
-    "42161": {
+    "8453": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
       "legacy": [
         "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
       ]
     },
-    "8453": {
+    "42161": {
       "current": "0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5",
       "legacy": [
         "0xfb2809A5314473E1165f6B58018E20ed8F07B840"
@@ -49,9 +49,225 @@
         }
       }
     },
-    "42161": {
-      "primary": "phoenix/v0.4-rc.1",
+    "8453": {
+      "primary": "phoenix/v0.5",
       "sets": {
+        "phoenix/v0.5": {
+          "status": "active",
+          "distribution": "phoenix/v0.5-rc.1",
+          "phoenix": {
+            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
+            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
+            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
+            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "contractsVersion": "v1.4.0-rc.1",
+            "wire": "10-field"
+          },
+          "marketRegistry": {
+            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
+            "adapter": "0x960Cd94B31121806b1b0Ff02230D189Ad0310616",
+            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
+            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
+            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
+            "recipes": {
+              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
+              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
+              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
+            },
+            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
+            "contractsVersion": "0.6.0",
+            "deployedAtBlock": 51145039,
+            "wire": "nested",
+            "jitPermitWire": "bytes"
+          },
+          "rollover": {
+            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 51153216,
+            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
+            "modules": {
+              "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990",
+              "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f"
+            },
+            "contractsVersion": "v0.2.0",
+            "wire": "0.2"
+          },
+          "forSelf": {
+            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
+            "contractsVersion": "v0.2.0-rc.1"
+          }
+        },
+        "phoenix/v0.4-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.4-rc.1",
+          "phoenix": {
+            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
+            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
+            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
+            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "contractsVersion": "v1.4.0-rc.1",
+            "wire": "10-field"
+          },
+          "marketRegistry": {
+            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
+            "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
+            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
+            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
+            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
+            "recipes": {
+              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
+              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
+              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
+            },
+            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
+            "contractsVersion": "0.5.0",
+            "deployedAtBlock": 51145039,
+            "wire": "nested",
+            "jitPermitWire": "vrs"
+          },
+          "rollover": {
+            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 51153216,
+            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
+            "modules": {
+              "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990",
+              "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f"
+            },
+            "contractsVersion": "v0.2.0",
+            "wire": "0.2"
+          },
+          "forSelf": {
+            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
+            "contractsVersion": "v0.2.0-rc.1"
+          }
+        },
+        "phoenix/v0.3-rc.1": {
+          "status": "active",
+          "distribution": "phoenix/v0.3-rc.1",
+          "phoenix": {
+            "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
+            "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
+            "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
+            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
+            "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "contractsVersion": "v1.3.0-rc.1",
+            "wire": "8-field"
+          },
+          "marketRegistry": {
+            "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
+            "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
+            "marketCreator": "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C",
+            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
+            "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
+            "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
+            "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
+            "recipes": {
+              "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
+              "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
+              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
+              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"
+            },
+            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
+            "contractsVersion": "0.3.3",
+            "deployedAtBlock": 49775886,
+            "wire": "flat"
+          },
+          "rollover": {
+            "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
+            "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
+            "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 49917191,
+            "baseFiller": "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d",
+            "contractsVersion": "v0.1.0-rc.2",
+            "wire": "rc.2"
+          }
+        }
+      }
+    },
+    "42161": {
+      "primary": "phoenix/v0.5",
+      "sets": {
+        "phoenix/v0.5": {
+          "status": "active",
+          "distribution": "phoenix/v0.5-rc.1",
+          "phoenix": {
+            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
+            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
+            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
+            "bundler3": "0x1FA4431bC113D308beE1d46B0e98Cb805FB48C13",
+            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "contractsVersion": "v1.4.0-rc.1",
+            "wire": "10-field"
+          },
+          "marketRegistry": {
+            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
+            "adapter": "0x960Cd94B31121806b1b0Ff02230D189Ad0310616",
+            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
+            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
+            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
+            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
+            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
+            "recipes": {
+              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
+              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
+              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
+              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
+            },
+            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
+            "contractsVersion": "0.6.0",
+            "deployedAtBlock": 503851928,
+            "wire": "nested",
+            "jitPermitWire": "bytes"
+          },
+          "rollover": {
+            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
+            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
+            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
+            "settlerDomain": {
+              "name": "CorkSettler",
+              "version": "1.0.0"
+            },
+            "seededAtBlock": 503918966,
+            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
+            "modules": {
+              "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990",
+              "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f"
+            },
+            "contractsVersion": "v0.2.0",
+            "wire": "0.2"
+          },
+          "forSelf": {
+            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
+            "contractsVersion": "v0.2.0-rc.1"
+          }
+        },
         "phoenix/v0.4-rc.1": {
           "status": "active",
           "distribution": "phoenix/v0.4-rc.1",
@@ -82,7 +298,8 @@
             "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
             "contractsVersion": "0.5.0",
             "deployedAtBlock": 503851928,
-            "wire": "nested"
+            "wire": "nested",
+            "jitPermitWire": "vrs"
           },
           "rollover": {
             "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
@@ -94,7 +311,10 @@
             },
             "seededAtBlock": 503918966,
             "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
-            "modules": { "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990", "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f" },
+            "modules": {
+              "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990",
+              "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f"
+            },
             "contractsVersion": "v0.2.0",
             "wire": "0.2"
           },
@@ -193,108 +413,6 @@
           }
         }
       }
-    },
-    "8453": {
-      "primary": "phoenix/v0.4-rc.1",
-      "sets": {
-        "phoenix/v0.4-rc.1": {
-          "status": "active",
-          "distribution": "phoenix/v0.4-rc.1",
-          "phoenix": {
-            "poolManager": "0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D",
-            "constraintAdapter": "0x2f9d816191B390A429174902E4A276A019cBf554",
-            "corkAdapter": "0x71eB628c3A40FB3896613804847840426f9284A7",
-            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
-            "whitelistManager": "0x8aF6659d864cB632bcadF0744Fb8B5eE78fBEA51",
-            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
-            "contractsVersion": "v1.4.0-rc.1",
-            "wire": "10-field"
-          },
-          "marketRegistry": {
-            "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5",
-            "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
-            "marketCreator": "0x1A074F17647504D1c50B436074a74d051D502dEa",
-            "controller": "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5",
-            "wrapperFactory": "0x942F2da75E6941D726EaB197E10735B7B6a3C867",
-            "fixedRateOracleFactory": "0x8e7331da266458C87E3870fe01969f4b421b306B",
-            "aggregatorAdapterFactory": "0xFE9a3bEc21f095EeeC1B62F76A5c241a2C5517A2",
-            "recipes": {
-              "liquidity": "0x679Cbd016587c423f342e5Ba31e58356228c964d",
-              "nav": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3",
-              "fixed": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49",
-              "impairment": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9"
-            },
-            "owner": "0x9fb663359947C55A9E3d7905dDB15708e309b8d4",
-            "contractsVersion": "0.5.0",
-            "deployedAtBlock": 51145039,
-            "wire": "nested"
-          },
-          "rollover": {
-            "factory": "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65",
-            "exactSettler": "0x0F2Ce7a5b817865ebFf50c58439B9A27E38f452E",
-            "partialSettler": "0x5E19Be0743fE521d8BF85b5A558356675499bE9e",
-            "settlerDomain": {
-              "name": "CorkSettler",
-              "version": "1.0.0"
-            },
-            "seededAtBlock": 51153216,
-            "baseFiller": "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224",
-            "modules": { "ownerTokenPull": "0x9c86e0f05b7cc99dab3d9c32aa8264af7dc32990", "postRolloverDstCptTransfer": "0x84e69211601882091d1a36a5ccdbc1eebb82908f" },
-            "contractsVersion": "v0.2.0",
-            "wire": "0.2"
-          },
-          "forSelf": {
-            "adapter": "0x3864902695DC930Df406ef5dEB74c4DC249e23f1",
-            "contractsVersion": "v0.2.0-rc.1"
-          }
-        },
-        "phoenix/v0.3-rc.1": {
-          "status": "active",
-          "distribution": "phoenix/v0.3-rc.1",
-          "phoenix": {
-            "poolManager": "0x02803Bb52D2184f906F45B50C66AA969C2E37263",
-            "constraintAdapter": "0xA880bc161F7c738d206E15c788b47a864558d5b7",
-            "corkAdapter": "0xfa8A94046f0bC16Da683Aa8219bd960FDAF572AD",
-            "bundler3": "0x6BFd8137e702540E7A42B74178A4a49Ba43920C4",
-            "whitelistManager": "0xEEd30E98abDC4da6d9Ac15c1184C9d046cA0Ccd6",
-            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
-            "contractsVersion": "v1.3.0-rc.1",
-            "wire": "8-field"
-          },
-          "marketRegistry": {
-            "registry": "0xa78d8137B01058dD23e545b6557209eBBc9611F1",
-            "adapter": "0x8902a88912a334263fe3d731d03c267715b9374f",
-            "marketCreator": "0x0aCccE0ef90da8b8d95DBFeE2ADaaED9b566586C",
-            "controller": "0x6b65D663e0B445BAf1870D5af806d57Ebb2C82A1",
-            "wrapperFactory": "0xD488B245EF2c168fFb284a79ef9304DaC803CEC6",
-            "fixedRateOracleFactory": "0x36f5DDb60695B09E5f41CA94eB551994F5541085",
-            "aggregatorAdapterFactory": "0x3A5073aFc49e36f886fA55b5Db09BF485Eb65677",
-            "recipes": {
-              "liquidity": "0xb881DB48ad6DA84a8F0D1cE4150Caf7Ae016Dc55",
-              "nav": "0xAeD3D0e3C86A994d88741C285657c3e78550f66d",
-              "fixed": "0x133ac0fA9e3d44A34B8cE4E4B8D468758fd165C1",
-              "impairment": "0x7340BfbEdF3657a7bBCe0dD2b4ab205754cc9eCA"
-            },
-            "owner": "0x9d4F5785Aa606407318b1DB4370aAFE550d7Cf58",
-            "contractsVersion": "0.3.3",
-            "deployedAtBlock": 49775886,
-            "wire": "flat"
-          },
-          "rollover": {
-            "factory": "0x697A6A2d5e09dc1CaBD0AA46678E053567275F82",
-            "exactSettler": "0xF4ffd4b3FAedb784b04d1883119840515f224C2f",
-            "partialSettler": "0xC0fbA28687D16e9A94527F7864C7c8D41f1E6B4e",
-            "settlerDomain": {
-              "name": "CorkSettler",
-              "version": "1.0.0"
-            },
-            "seededAtBlock": 49917191,
-            "baseFiller": "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d",
-            "contractsVersion": "v0.1.0-rc.2",
-            "wire": "rc.2"
-          }
-        }
-      }
     }
   },
   "$implementationsComment": "Approved implementations per interface ROLE (interface-first model, 2026-08-12; the same schema is proposed for the distribution repo — see github.com/Cork-Technology/distribution/issues/1): the INTERFACE is what this tool supports; an implementation joins `approved` only after the behavioral suite passes against it (the fork harnesses: JitOrderRoundTrip210, cork-periphery JitFill210/032 + pool groups; the 0.5.0/1.4.0-rc.1 hashes join on the Distribution component records' verified runtime equivalence, 2026-09-22, ahead of this repo's own nested-wire round trip). Hashes are keccak256(eth_getCode) — equal to EXTCODEHASH for deployed code — captured live 2026-08-12 (0.3.3 / v1.3.0-rc.1 / legacy) and 2026-09-22 (0.5.0 / v1.4.0-rc.1), each cross-checked against the Distribution record's codeHash. `proxy: eip1967` marks a role whose address is a proxy: the guard resolves the implementation from the EIP-1967 slot and hashes THAT code, because the proxy's own code never changes on an upgrade. Per chain per role the list is the UNION of every generation's live code hash, because every generation's code is approved; the guard checks the code behind the address of the generation IN USE (the legacy generation resolves through the same roles — the legacyMarketRegistry/legacyJitAdapter role names of schema 1 are gone). Roles resolve against the generation blocks that already own the addresses — no address is duplicated here.",
@@ -309,6 +427,40 @@
         "proxy": "eip1967",
         "approved": [
           "0xda2db6d29d610aece5f4faa313ae92bf55d38b7587391eb6f33b78ff563d49eb"
+        ]
+      }
+    },
+    "8453": {
+      "corkAdapter": {
+        "approved": [
+          "0xc8c05b7eb9f80d0207025ecb09beefaf046965e4ee81c8476513109be47b81f6",
+          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
+        ]
+      },
+      "whitelistManager": {
+        "proxy": "eip1967",
+        "approved": [
+          "0xc3757fe479d4a44aa3a3954159ba1281747b6de0dc78a58139390bfd9c2f4cb0",
+          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
+        ]
+      },
+      "marketRegistry": {
+        "approved": [
+          "0x455b91170500a48e745346e799831271e709da030ef3a05016b33d3200106a26",
+          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284"
+        ]
+      },
+      "jitAdapter": {
+        "approved": [
+          "0x24a11fba142a4b681a3bfbadf0ed74566fdf6281102137794d35c217f004225d",
+          "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
+          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
+        ]
+      },
+      "marketCreator": {
+        "approved": [
+          "0x2fde0d65ebd999c5bb7202f80a8dd1f8b0bc86b405237c93ea4a096e88c08766",
+          "0x2f7dd61e18e4d3ca5d432771ee2eeb7000b3e609f26c151eb57dc147e5310287"
         ]
       }
     },
@@ -335,42 +487,10 @@
       },
       "jitAdapter": {
         "approved": [
+          "0x24a11fba142a4b681a3bfbadf0ed74566fdf6281102137794d35c217f004225d",
           "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
           "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320",
           "0x60ce947daf8a8db2b1eb581903bcc74caef76488a4849cc4a0427a3e9606e9d1"
-        ]
-      },
-      "marketCreator": {
-        "approved": [
-          "0x2fde0d65ebd999c5bb7202f80a8dd1f8b0bc86b405237c93ea4a096e88c08766",
-          "0x2f7dd61e18e4d3ca5d432771ee2eeb7000b3e609f26c151eb57dc147e5310287"
-        ]
-      }
-    },
-    "8453": {
-      "corkAdapter": {
-        "approved": [
-          "0xc8c05b7eb9f80d0207025ecb09beefaf046965e4ee81c8476513109be47b81f6",
-          "0x097673dfa72affbbf3e6f3858e4a80c88fc9e5c52d1a7a5f3906b213a9da621a"
-        ]
-      },
-      "whitelistManager": {
-        "proxy": "eip1967",
-        "approved": [
-          "0xc3757fe479d4a44aa3a3954159ba1281747b6de0dc78a58139390bfd9c2f4cb0",
-          "0x538475aa44f636c9446b60cd79513d7b0f655cac2917c58cb3efb9ae89c49d07"
-        ]
-      },
-      "marketRegistry": {
-        "approved": [
-          "0x455b91170500a48e745346e799831271e709da030ef3a05016b33d3200106a26",
-          "0xcd625f21c50005aa8b8e0a6f72ebd3385d062bc975f32f90f6d5fc914ed9b284"
-        ]
-      },
-      "jitAdapter": {
-        "approved": [
-          "0x2fe70bacb5c81095f8ba03bdb1eeb4f6d1969787d82e140f5c8642f77f52d35a",
-          "0x5b6c36ca1be5a6187bd76ba759b0c6514bc1519af4d15030b90d16f884650320"
         ]
       },
       "marketCreator": {

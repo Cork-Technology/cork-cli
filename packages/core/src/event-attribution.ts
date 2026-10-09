@@ -120,7 +120,16 @@ export async function protocolEmittersFor(chainId: number): Promise<ProtocolEmit
     const whitelistManager = g.phoenix?.whitelistManager as `0x${string}` | undefined;
     if (whitelistManager) out.push({ address: whitelistManager, role: "whitelistManager", generation: standing });
   }
-  return out;
+  // One row per (address, role): sets that share a contract (phoenix/v0.5 and phoenix/v0.4-rc.1
+  // share all but the JIT adapter) must not attribute — or scan — the same emitter twice. The
+  // first set in list order (the primary first) keeps the row.
+  const seen = new Set<string>();
+  return out.filter((e) => {
+    const key = `${e.address.toLowerCase()}:${e.role}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** The minimal log shape both sources produce: viem receipt logs (bigint block, numeric index)

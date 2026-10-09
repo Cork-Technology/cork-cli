@@ -147,9 +147,126 @@ const T = {
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
   nested: "packages/core/test/market-registry-nested.test.ts",
+  v05: "packages/core/test/market-registry-v05.test.ts",
+  poolGeneration: "packages/core/test/pool-generation.test.ts",
 };
 
 const CATALOG: Mutant[] = [
+  // ── phoenix/v0.5: the bytes JIT permit row and sets that share contracts (2026-10-09) ──
+  {
+    // The 0.5.0 adapter's wrapper (market, enableJitMint) in the wrong order.
+    id: "v05-bytes-wrapper-nesting-swapped",
+    file: "packages/core/src/market-registry.ts",
+    find: "const JIT_PARAMS_NESTED_BYTES_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: \"enableJitMint\", type: \"bool\" },",
+    replace: "const JIT_PARAMS_NESTED_BYTES_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"enableJitMint\", type: \"bool\" },\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },",
+    tests: [T.v05],
+  },
+  {
+    // The bytes row encodes as the v/r/s row: the 0.5.0 adapter misreads every permit.
+    id: "v05-bytes-row-ignored-on-encode",
+    file: "packages/core/src/market-registry.ts",
+    find: `  if (permitWire === "bytes") {
+    if (wire !== "nested")`,
+    replace: `  if (false) {
+    if (wire !== "nested")`,
+    tests: [T.v05],
+  },
+  {
+    // The bytes row decodes as the v/r/s row.
+    id: "v05-bytes-row-ignored-on-decode",
+    file: "packages/core/src/market-registry.ts",
+    find: `  if (permitWire === "bytes") {
+    const out = decodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI`,
+    replace: `  if (false) {
+    const out = decodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI`,
+    tests: [T.v05],
+  },
+  {
+    // A 65-byte signature is carried raw instead of split: decode loses v/r/s.
+    id: "v05-bytes-row-65-not-split",
+    file: "packages/core/src/market-registry.ts",
+    find: "  if (size(row.signature) === 65) return",
+    replace: "  if (size(row.signature) === 0) return",
+    tests: [T.v05],
+  },
+  {
+    // The set's declared row is not read: phoenix/v0.5 encodes v/r/s and refuses ERC-1271.
+    id: "v05-permit-wire-not-read",
+    file: "packages/core/src/handlers/jit.ts",
+    find: `permitWire: mr.jitPermitWire ?? ("vrs" as JitPermitWire),`,
+    replace: `permitWire: "vrs" as JitPermitWire,`,
+    tests: [T.v05],
+  },
+  {
+    // Decode reads every adapter's permits with the v/r/s row.
+    id: "v05-decode-permit-wire-not-read",
+    file: "packages/core/src/jit-extension.ts",
+    find: `const permitWire = generations.find((g) => g.label === hit.label)?.marketRegistry?.jitPermitWire ?? "vrs";`,
+    replace: `const permitWire = "vrs" as const;`,
+    tests: [T.v05],
+  },
+  {
+    // The JIT permit approval says eoa-only on the bytes row.
+    id: "v05-approval-wallets-ignore-wire",
+    file: "packages/core/src/order-approvals.ts",
+    find: `  return permitWire === "bytes" ? "eoa+contract" : "eoa-only";`,
+    replace: `  return "eoa-only";`,
+    tests: [T.v05],
+  },
+  {
+    // Readiness treats a contract maker's bytes-row JIT permit as unsignable.
+    id: "v05-readiness-ignores-bytes-row",
+    file: "packages/core/src/handlers/maker-readiness.ts",
+    find: `  const makerCanSignJitPermit = jit?.permitWire === "bytes" ? true : f.makerCanSignEcdsa;`,
+    replace: `  const makerCanSignJitPermit = f.makerCanSignEcdsa;`,
+    tests: [T.makerReadiness],
+  },
+  {
+    // \`previous\` lands on a set that is the primary's own deployment under another label.
+    id: "previous-shared-anchors-not-skipped",
+    file: "packages/core/src/generations.ts",
+    find: "&& !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));",
+    replace: ");",
+    tests: [T.migration],
+  },
+  {
+    // A shared rollover stack is listed twice: every settler read and every log scan doubles.
+    id: "rollover-shared-stack-not-deduped",
+    file: "packages/core/src/generations.ts",
+    find: `    if (first !== undefined) {
+      first.alsoIn = [...(first.alsoIn ?? []), g.label];
+      continue;
+    }`,
+    replace: `    if (first !== undefined && false) {
+      first.alsoIn = [...(first.alsoIn ?? []), g.label];
+      continue;
+    }`,
+    tests: [T.configRemote],
+  },
+  {
+    // A contract two sets share is attributed (and scanned) twice.
+    id: "emitters-shared-contract-not-deduped",
+    file: "packages/core/src/event-attribution.ts",
+    find: "    if (seen.has(key)) return false;",
+    replace: "    if (seen.has(key) && false) return false;",
+    tests: [T.eventAttribution],
+  },
+  {
+    // A pool on a shared pool manager reports one label silently.
+    id: "pool-generation-shared-not-reported",
+    file: "packages/core/src/generations.ts",
+    find: "      const alsoIn = reads.filter((o) => o.g.label !== r.g.label && o.poolManager.toLowerCase() === pm).map((o) => o.g.label);",
+    replace: "      const alsoIn: GenerationLabel[] = [];",
+    tests: [T.poolGeneration],
+  },
+  {
+    // A set whose pool manager another set owns reads as "no positions".
+    id: "positions-shared-with-dropped",
+    file: "packages/core/src/handlers/query-positions.ts",
+    find: "      ...(owner !== undefined ? { sharedWith: owner } : {}),",
+    replace: "",
+    tests: [T.migration],
+  },
   {
     // A keystore others can read is refused, the way ssh refuses a loose key.
     id: "keystore-permission-check-dropped",
@@ -2480,8 +2597,8 @@ const CATALOG: Mutant[] = [
     // consumer at once: classification, scans, emitters, decode labels.
     id: "rollover-generations-active-list-dropped",
     file: "packages/core/src/generations.ts",
-    find: "    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
-    replace: "    ...live.slice(0, 1).map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
+    find: "  for (const [g, status] of [...live.map((g) => [g, \"active\"] as const), ...retired.map((g) => [g, \"retired\"] as const)]) {",
+    replace: "  for (const [g, status] of [...live.slice(0, 1).map((g) => [g, \"active\"] as const), ...retired.map((g) => [g, \"retired\"] as const)]) {",
     tests: [T.rollover, T.hypersync, T.eventAttribution, T.decodeTx, T.generations],
   },
   {
@@ -2490,8 +2607,8 @@ const CATALOG: Mutant[] = [
     // strips the label from the rc.2 set's decode name.
     id: "rollover-generations-primary-flag-everywhere",
     file: "packages/core/src/generations.ts",
-    find: "    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),",
-    replace: "    ...live.map((g) => entry(g, g.rollover!, \"active\", true)),",
+    find: "    const e = entry(g, g.rollover!, status, status === \"active\" && out.length === 0);",
+    replace: "    const e = entry(g, g.rollover!, status, status === \"active\");",
     tests: [T.decodeTx, T.rollover, T.generations],
   },
   {
@@ -2509,8 +2626,8 @@ const CATALOG: Mutant[] = [
     // replacements" enumeration.
     id: "rollover-generations-retired-first",
     file: "packages/core/src/generations.ts",
-    find: "  return [\n    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),\n    ...retired.map((g) => entry(g, g.rollover!, \"retired\", false)),\n  ];",
-    replace: "  return [\n    ...retired.map((g) => entry(g, g.rollover!, \"retired\", false)),\n    ...live.map((g, i) => entry(g, g.rollover!, \"active\", i === 0)),\n  ];",
+    find: "  for (const [g, status] of [...live.map((g) => [g, \"active\"] as const), ...retired.map((g) => [g, \"retired\"] as const)]) {",
+    replace: "  for (const [g, status] of [...retired.map((g) => [g, \"retired\"] as const), ...live.map((g) => [g, \"active\"] as const)]) {",
     tests: [T.generations, T.configRemote, T.rollover],
   },
   // ── generation model (0.6): ordering, selection, classification, resolver threading ────────
@@ -6536,8 +6653,8 @@ const CATALOG: Mutant[] = [
     // counts (ERC-2612 is ECDSA-only) — the 2026-09-11 incident's exact blind spot.
     id: "readiness-hatch-ignores-signer",
     file: "packages/core/src/handlers/maker-readiness.ts",
-    find: "      const hatch = (extensionHatch || permitsCoverMakerAsset) && f.makerCanSignEcdsa !== false;",
-    replace: "      const hatch = extensionHatch || permitsCoverMakerAsset;",
+    find: "      const extensionOpen = extensionHatch && f.makerCanSignEcdsa !== false;\n      const jitOpen = permitsCoverMakerAsset && makerCanSignJitPermit !== false;",
+    replace: "      const extensionOpen = extensionHatch;\n      const jitOpen = permitsCoverMakerAsset;",
     tests: [T.makerReadiness],
   },
   {
@@ -6963,8 +7080,8 @@ const CATALOG: Mutant[] = [
     // first is the flat wire's instinct and a different byte layout.
     id: "nested-wrapper-nesting-swapped",
     file: "packages/core/src/market-registry.ts",
-    find: '      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: "enableJitMint", type: "bool" },',
-    replace: '      { name: "enableJitMint", type: "bool" },\n      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },',
+    find: "const JIT_PARAMS_NESTED_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },\n      { name: \"enableJitMint\", type: \"bool\" },",
+    replace: "const JIT_PARAMS_NESTED_ABI = [\n  {\n    type: \"tuple\" as const,\n    components: [\n      { name: \"enableJitMint\", type: \"bool\" },\n      { name: \"market\", type: \"tuple\", components: MARKET_PARAMS_NESTED_COMPONENTS },",
     tests: [T.nested, T.extraData],
   },
   {
@@ -7383,8 +7500,8 @@ const CATALOG: Mutant[] = [
     // wrong pools and a prepare would target the wrong adapter under the right-looking label.
     id: "mig-previous-resolves-to-primary",
     file: "packages/core/src/generations.ts",
-    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
-    replace: "  const previous = list.find((g) => g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
+    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined) && !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));",
+    replace: "  const previous = list.find((g) => g.status === \"active\" && needs.every((k) => g[k] !== undefined) && !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));",
     tests: [T.migration],
   },
   {
@@ -7392,8 +7509,8 @@ const CATALOG: Mutant[] = [
     // with no settler (or a phoenix call on a registry-only set).
     id: "mig-previous-needs-ignored",
     file: "packages/core/src/generations.ts",
-    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined));",
-    replace: "  const previous = list.find((g) => !g.primary && g.status === \"active\");",
+    find: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && needs.every((k) => g[k] !== undefined) && !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));",
+    replace: "  const previous = list.find((g) => !g.primary && g.status === \"active\" && !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));",
     tests: [T.migration],
   },
   {

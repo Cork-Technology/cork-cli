@@ -1,7 +1,7 @@
 // Offline chain stub for agent evals: a fake resolved RPC whose client serves the canonical
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
-import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
+import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, permitSignatureBytes, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
@@ -49,7 +49,7 @@ const IMPLEMENTATION_ROLE_ADDRESSES = new Set(
 // The rollover generations — read from config like the registry above (the pinned-literal rot
 // class): the retired-settler task's expected teaching and the sweep fixture's settler identity
 // must track config, not a copy. RC2_* name the rollover v0.1.0-rc.2 set (the phoenix/v0.3-rc.1
-// generation's block — active, no longer primary since phoenix/v0.4-rc.1); RETIRED_* the July
+// generation's block — active, no longer primary since phoenix/v0.4-rc.1, now phoenix/v0.5); RETIRED_* the July
 // 2026 set (arbitrum-v1.1's block).
 const ROLLOVERS_42161 = rolloverGenerationsOf(GENERATIONS_42161);
 const RC2_ROLLOVER = ROLLOVERS_42161.find((g) => g.wire === "rc.2" && g.status === "active")!;
@@ -265,12 +265,16 @@ function readContract(args: { address: string; functionName: string; args?: unkn
     // the (MarketParams, enableJitMint) wrapper on a 0.5.0 one). The stub answers as a FAITHFUL
     // adapter of that generation would; tests wrap it to lie.
     case "decodeExtraData": {
-      const wire = registryBlockOf(chainId, args.address)?.wire ?? "nested";
+      const block = registryBlockOf(chainId, args.address);
+      const wire = block?.wire ?? "nested";
       const bytes = (args.args as [`0x${string}`])[0];
       if (wire === "nested") {
-        const d = decodeJitExtraData("nested", bytes);
+        // The adapter's permit row: v/r/s on 0.4.0 (phoenix/v0.4-rc.1), bytes on 0.5.0 (phoenix/v0.5).
+        const permitWire = block?.jitPermitWire ?? "vrs";
+        const d = decodeJitExtraData("nested", bytes, permitWire);
         const { enableJitMint, oracleSalt, ...market } = d.params;
-        return [{ market: { ...market, oracleSalt: oracleSalt ?? `0x${"00".repeat(32)}` }, enableJitMint }, d.permits];
+        const permits = permitWire === "bytes" ? d.permits.map((q) => ({ token: q.token, value: q.value, deadline: q.deadline, signature: permitSignatureBytes(q) })) : d.permits;
+        return [{ market: { ...market, oracleSalt: oracleSalt ?? `0x${"00".repeat(32)}` }, enableJitMint }, permits];
       }
       const d = decodeJitExtraData("flat", bytes);
       const { extraData, oracleSalt: _noSalt, ...rest } = d.params;

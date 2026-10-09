@@ -5,9 +5,14 @@ EIP-712 and ERC-1271, ERC-2612 permits, ERC-4626, CREATE2. **Chain:** Base (8453
 also runs on Arbitrum One (42161) with only the chain id and the asset addresses changed, because
 both contract sets live at identical addresses on both chains.
 
-**Status (2026-09-25).** A chain hosts a set of contract generations, one of them primary. The
-primary on Base and Arbitrum One is **`phoenix/v0.4-rc.1`**: Market Registry contracts release **0.5.0**
-(registry `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5`) on the Phoenix 1.4.0-rc.1 pool manager. Its
+**Status (2026-10-09).** A chain hosts a set of contract generations, one of them primary. The
+primary on Base and Arbitrum One is **`phoenix/v0.5`** (Distribution `phoenix/v0.5-rc.1`): Market
+Registry contracts release **0.6.0**, which is the 0.5.0 registry with a new JIT adapter,
+CorkLimitOrderAdapter 0.5.0 at `0x960Cd94B31121806b1b0Ff02230D189Ad0310616`. Its JIT permit is one
+`bytes` signature, so a Safe can sign it through ERC-1271. Every other contract is shared with
+`phoenix/v0.4-rc.1` (adapter `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104`, v/r/s permits only),
+which stays active: pass `generation: "phoenix/v0.4-rc.1"` to target it. The shared 0.5.0 registry
+is `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5`, on the Phoenix 1.4.0-rc.1 pool manager. Its
 registry holds registered assets since 2026-09-23 (14 on Base). No pool exists on it yet: every
 pool the venue lists today lives on the previous set, **`phoenix/v0.3-rc.1`**, contracts release **0.3.3**
 (registry `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. The
@@ -679,8 +684,8 @@ it, and a refuted row is dropped and counted.
 
 ### Migrating between generations
 
-Cork redeploys as a new generation and the previous one keeps working. The primary is `phoenix/v0.4-rc.1`
-and `phoenix/v0.3-rc.1` stays active. `cork-cli` supports both at the same time:
+Cork redeploys as a new generation and the previous one keeps working. The primary is `phoenix/v0.5`;
+`phoenix/v0.4-rc.1` (the same contracts with the 0.4.0 JIT adapter) and `phoenix/v0.3-rc.1` stay active. `cork-cli` supports both at the same time:
 
 - `ch query account-state --chain-id 8453 --account <you>` with no `--pool-id` lists every pool
   where you hold cST or cPT, tagged with its generation and its expiry.
@@ -755,13 +760,14 @@ Every result names the generation it answered from (`data.generation`), and `--g
 <label>` selects a non-primary set for a prepare. Installed copies of the tool pick up redeployed
 addresses within an hour (remote config, `cork-defaults.v2.json`).
 
-The primary set on Base and Arbitrum One (`phoenix/v0.4-rc.1`, contracts release **0.5.0** on the Phoenix
-1.4.0-rc.1 pool manager; identical addresses on both chains):
+The primary set on Base and Arbitrum One (`phoenix/v0.5`, contracts release **0.6.0** on the Phoenix
+1.4.0-rc.1 pool manager; identical addresses on both chains). `phoenix/v0.4-rc.1` has the same
+addresses except the JIT adapter, `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` (0.4.0, v/r/s permits):
 
 | Role | Address |
 |---|---|
 | MarketRegistry 0.5.0 | `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5` |
-| CorkLimitOrderAdapter (JIT hook, nested wire) | `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104` |
+| CorkLimitOrderAdapter 0.5.0 (JIT hook, nested wire, `bytes` permit) | `0x960Cd94B31121806b1b0Ff02230D189Ad0310616` |
 | CorkMarketCreator (holds `POOL_CREATOR_ROLE`) | `0x1A074F17647504D1c50B436074a74d051D502dEa` |
 | LiquidityPriceRecipe | `0x679Cbd016587c423f342e5Ba31e58356228c964d` |
 | LiquidityNavRecipe | `0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3` |

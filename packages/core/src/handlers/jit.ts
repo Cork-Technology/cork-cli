@@ -4,12 +4,12 @@ import { type ChainId, Envelope } from "@cork/schemas";
 import { size, sliceHex } from "viem";
 import { rateOracleAbi } from "../chain/abis.ts";
 import { type LopOrder } from "../orders.ts";
-import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, type JITMarketParams, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
+import { buildDeployFixedRateOracleCall, decodeJitExtension, deriveJitMarket, diffJitExtraData, flattenNestedJitParams, jitAdapterAbi, jitAdapterNestedAbi, jitAdapterNestedBytesAbi, type JITMarketParams, permitOfBytesRow, marketCreatorNestedAbi, MAX_FEE_PERCENTAGE_FALLBACK, type PermitParams, predictShares, rateOverrideCoherence, readForeignSharePool, readRoleHolder, type ResolvedConstraint, wireCodec, ZERO_ORACLE_SALT } from "../market-registry.ts";
 import { cachedContractConstant, refreshContractConstant } from "../chain/constants-cache.ts";
 import * as legacyRegistry from "../market-registry-legacy.ts";
 import { deprecatedEnabled, deprecatedGateMessage } from "../deprecation.ts";
 import { resolveGenerations } from "../config-remote.ts";
-import { marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
+import { type JitPermitWire, marketRegistryForWire, type MarketRegistryWire, type PhoenixWire } from "../generations.ts";
 import { poolManagerAbi } from "../chain/abis.ts";
 import { approvedImplementationChecks, type ImplementationCheck, implementationRefusals, JIT_IMPLEMENTATION_ROLES, unapprovedCodeAllowed } from "../implementations.ts";
 import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable } from "./shared.ts";
@@ -186,6 +186,8 @@ export type JitLadderResult =
       marketCreator?: `0x${string}` | undefined;
       /** The registry wire the bytes are encoded for, and the pool-manager width the id follows. */
       wire: MarketRegistryWire;
+      /** The adapter's permit row, declared by the set (`vrs` 0.4.0 / flat, `bytes` 0.5.0). */
+      permitWire: JitPermitWire;
       phoenixWire: PhoenixWire;
       /** The generation the adapter/registry pair came from (dep, guard scope and shares follow it). */
       generation?: { label: string };
@@ -235,7 +237,7 @@ export function permitVrsOfWire(p: PermitWireRow, path: Array<string | number>):
     if (size(p.signature) !== 65) {
       throw new ToolInputError("cork_prepare_orders", [{
         path: [...path, "signature"],
-        message: `the permit signature is ${size(p.signature)} bytes; the JIT adapter of this generation (CorkLimitOrderAdapter 0.4.0 on the nested wire) takes a 65-byte ECDSA signature only (r‖s‖v from an EOA). A contract wallet's ERC-1271 signature cannot authorize this permit: create the pool first (cork_prepare_market create-pool), then rest the order without a JIT mint`,
+        message: `the permit signature is ${size(p.signature)} bytes; the JIT adapter of this deployment set (CorkLimitOrderAdapter 0.4.0 on phoenix/v0.4-rc.1, or the flat adapter) takes a 65-byte ECDSA signature only (r‖s‖v from an EOA). A contract wallet's ERC-1271 signature cannot authorize this permit here: target phoenix/v0.5 (generation: "phoenix/v0.5", adapter 0.5.0, ERC-1271 accepted), or create the pool first (cork_prepare_market create-pool), then rest the order without a JIT mint`,
       }]);
     }
     return { r: sliceHex(p.signature, 0, 32), s: sliceHex(p.signature, 32, 64), v: Number(BigInt(sliceHex(p.signature, 64, 65))) };
@@ -247,9 +249,20 @@ export function permitVrsOfWire(p: PermitWireRow, path: Array<string | number>):
 }
 
 /** Parse the ERC-2612 permit wire rows into bigint params — ONE spelling for the maker and
- *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). */
-export function parsePermitWires(permits: JitMarketWireParams["permits"]): PermitParams[] {
-  return (permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), ...permitVrsOfWire(p, ["action", "jitMarket", "permits", i]) }));
+ *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). The
+ *  set's declared permit wire decides what a signature may be: `vrs` (CorkLimitOrderAdapter
+ *  0.4.0, the flat adapter) takes 65-byte ECDSA only; `bytes` (0.5.0, set phoenix/v0.5) also
+ *  takes a contract wallet's ERC-1271 bytes, carried verbatim. */
+export function parsePermitWires(permits: JitMarketWireParams["permits"], permitWire: JitPermitWire = "vrs"): PermitParams[] {
+  return (permits ?? []).map((p, i) => {
+    const path = ["action", "jitMarket", "permits", i];
+    const base = { token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline) };
+    if (permitWire === "bytes" && p.signature !== undefined) {
+      if ([p.v, p.r, p.s].some((x) => x !== undefined)) permitVrsOfWire(p, path); // refuses both forms, with its teaching
+      return permitOfBytesRow({ ...base, signature: p.signature });
+    }
+    return { ...base, ...permitVrsOfWire(p, path) };
+  });
 }
 
 /**
@@ -329,7 +342,7 @@ export async function runJitPreflightLadder(args: {
   let constraint: ResolvedConstraint | undefined = jm.constraint
     ? { rateMin: BigInt(jm.constraint.rateMin), rateMax: BigInt(jm.constraint.rateMax), rateChangePerDayMax: BigInt(jm.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(jm.constraint.rateChangeCapacityMax) }
     : undefined;
-  const base = { adapter: mr.adapter, registry: mr.registry, marketCreator: mr.marketCreator, wire, phoenixWire, ...(mrGeneration ? { generation: { label: mrGeneration.label } } : {}), recipe, rateOverride, extraData, oracleSalt, warnings } as const;
+  const base = { adapter: mr.adapter, registry: mr.registry, marketCreator: mr.marketCreator, wire, permitWire: mr.jitPermitWire ?? ("vrs" as JitPermitWire), phoenixWire, ...(mrGeneration ? { generation: { label: mrGeneration.label } } : {}), recipe, rateOverride, extraData, oracleSalt, warnings } as const;
 
   // Chain pre-flights + constraint resolution; every gap is disclosed, never guessed.
   const resolved = await getRpc(ctx, chainId);
@@ -501,7 +514,7 @@ export async function buildTakerJitInteraction(args: {
   if (ladder.gate) return { gate: ladder.gate };
   const { recipe, rateOverride, extraData, oracleSalt, constraint, warnings, wire, phoenixWire } = ladder;
   const codec = wireCodec(wire);
-  let jit: TakerJitReport = { adapter: ladder.adapter, hook: "takerInteraction (taker-side — always mints)", recipe, wire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
+  let jit: TakerJitReport = { adapter: ladder.adapter, hook: "takerInteraction (taker-side — always mints)", recipe, wire, permitWire: ladder.permitWire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
 
   if (ladder.verified) {
     const { client, boundController, source, oracle, derived } = ladder.verified;
@@ -554,11 +567,11 @@ export async function buildTakerJitInteraction(args: {
       warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the interaction is built but the cST side-match is unverified` });
     }
   }
-  const permits = parsePermitWires(jm.permits);
+  const permits = parsePermitWires(jm.permits, ladder.permitWire);
   const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
-  const hookBytes = codec.encodeExtraData(jitParams, permits);
+  const hookBytes = codec.encodeExtraData(jitParams, permits, ladder.permitWire);
   if (ladder.verified) {
-    const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, extraData: hookBytes, params: jitParams, permits, chainId, ctx, artifact: "interaction" });
+    const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, permitWire: ladder.permitWire, extraData: hookBytes, params: jitParams, permits, chainId, ctx, artifact: "interaction" });
     if ("gate" in layout) return { gate: layout.gate };
     jit.extraDataLayout = layout.status;
   }
@@ -576,6 +589,8 @@ export type TakerJitReport = {
   recipe: `0x${string}`;
   /** The registry wire the interaction bytes are encoded for + the generation it targets. */
   wire?: MarketRegistryWire;
+  /** The JIT adapter's permit row (`vrs` = 65-byte ECDSA only, `bytes` = ECDSA or ERC-1271). */
+  permitWire?: JitPermitWire;
   generation?: string;
   /** Decode round-trip: what the adapter's own decodeExtraData read back from the bytes we built. */
   extraDataLayout?: string;
@@ -764,6 +779,7 @@ export async function verifyExtraDataLayout(a: {
   client: { readContract: (args: { address: `0x${string}`; abi: typeof jitAdapterAbi | typeof jitAdapterNestedAbi; functionName: "decodeExtraData"; args: [`0x${string}`] }) => Promise<unknown> };
   adapter: `0x${string}`;
   wire: MarketRegistryWire;
+  permitWire?: JitPermitWire;
   extraData: `0x${string}`;
   params: JITMarketParams;
   permits: readonly PermitParams[];
@@ -773,7 +789,10 @@ export async function verifyExtraDataLayout(a: {
 }): Promise<{ status: string } | { gate: Envelope }> {
   let decoded: { params: JITMarketParams; permits: PermitParams[] };
   try {
-    if (a.wire === "nested") {
+    if (a.wire === "nested" && a.permitWire === "bytes") {
+      const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedBytesAbi as never, functionName: "decodeExtraData", args: [a.extraData] })) as readonly [Parameters<typeof flattenNestedJitParams>[0][0], readonly { token: `0x${string}`; value: bigint; deadline: bigint; signature: `0x${string}` }[]];
+      decoded = { params: flattenNestedJitParams([out[0], []]).params, permits: out[1].map(permitOfBytesRow) };
+    } else if (a.wire === "nested") {
       const out = (await a.client.readContract({ address: a.adapter, abi: jitAdapterNestedAbi, functionName: "decodeExtraData", args: [a.extraData] })) as Parameters<typeof flattenNestedJitParams>[0];
       decoded = flattenNestedJitParams(out);
     } else {

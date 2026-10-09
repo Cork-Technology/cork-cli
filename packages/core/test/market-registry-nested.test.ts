@@ -1,5 +1,7 @@
 // The NESTED registry wire (market-registry 0.5.0, Distribution phoenix/v0.4-rc.1 — the primary
-// generation on Arbitrum One + Base since 2026-09-22): every codec row pinned against vectors the
+// generation on Arbitrum One + Base from 2026-09-22 until phoenix/v0.5 took the primary; this suite
+// names the set EXPLICITLY, so it keeps proving the older set while it stays configured; the
+// phoenix/v0.5 half, with the bytes permit row, is market-registry-v05.test.ts): every codec row pinned against vectors the
 // DEPLOYED contracts computed themselves (42161, 2026-09-22 — adapter.encodeExtraData /
 // decodeExtraData, pm.getId, recipe.encodeExtraData), the selectors + word layouts of the calls
 // this build emits at them, and the handler paths that bind the primary (JIT maker, create-pool,
@@ -32,7 +34,6 @@ import {
   marketRegistryForWire,
   type PermitParams,
   POOL_MANAGER_MARKET_CREATED_10_TOPIC,
-  primaryOf,
   readRoleHolder,
   RECIPE_CATALOG,
   runTool,
@@ -48,7 +49,11 @@ import { parsePermitWires, resolveFeeRule } from "../src/handlers/jit.ts";
 const WAD = 10n ** 18n;
 const NOW = 1_790_000_000n; // the eval stub's clock
 const EXPIRY = (NOW + 20n * 86_400n).toString(); // inside the registry's 30-day creation bound
-const PRIMARY = primaryOf(generationsOf(BUNDLED_DEFAULTS, 42161))!;
+/** The deployment set this suite proves — named, never "the primary" (the primary moves). */
+const V04 = "phoenix/v0.4-rc.1";
+const PRIMARY = generationsOf(BUNDLED_DEFAULTS, 42161).find((g) => g.label === V04)!;
+/** The eval stub, with every handler call targeting phoenix/v0.4-rc.1. */
+const v04Ctx = (): HandlerContext => ({ ...stubContext(), generation: V04 });
 const FLAT = marketRegistryForWire(generationsOf(BUNDLED_DEFAULTS, 42161), "flat")!;
 const NESTED_MR = PRIMARY.marketRegistry!;
 const STUB_ORACLE = "0x14115b5fdab3afcd72cf03785041c720100edb0e"; // the stub's deployed pair wrapper
@@ -296,7 +301,7 @@ describe("nested wire — the 10-field identity and the calls this build emits (
 type Client = { readContract: (a: { functionName: string; args?: unknown[]; address?: string }) => Promise<unknown> } & Record<string, unknown>;
 /** The eval stub with one client view replaced. */
 function wrapped(patch: (client: Client) => Partial<Client>): HandlerContext {
-  const base = stubContext();
+  const base = v04Ctx();
   return {
     ...base,
     resolveRpc: async (chainId, url) => {
@@ -312,7 +317,7 @@ const makerJit = (ctx: HandlerContext, id: string, jm: Record<string, unknown> =
 
 describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
   it("builds a nested-wire extension at the 0.5.0 adapter: 10-field identity, verified round-trip, wire + generation echoed, salt carried", async () => {
-    const env = await makerJit(stubContext(), "nested-maker-0001", { oracleSalt: SAMPLE.oracleSalt, swapFeePercentage: "1000000000000000000" });
+    const env = await makerJit(v04Ctx(), "nested-maker-0001", { oracleSalt: SAMPLE.oracleSalt, swapFeePercentage: "1000000000000000000" });
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as { extension: `0x${string}`; jit: { adapter: string; wire: string; generation: string; derivedPoolId: string; extraDataLayout: string; constraint: Record<string, string>; predictedCorkSwapToken?: string } };
     expect(d.jit.adapter.toLowerCase()).toBe((NESTED_MR.adapter as string).toLowerCase());
@@ -331,7 +336,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
     expect(d.jit.predictedCorkSwapToken?.toLowerCase()).toBe(CST.toLowerCase());
     // The decode labels it by CLASSIFICATION: the primary's adapter → its generation, its wire.
     const built = env.data as { typedData: { message: Record<string, string> } };
-    const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: d.extension } }, stubContext());
+    const decoded = await runTool("cork_decode", { kind: "order", chainId: 42161, data: { ...built.typedData.message, extension: d.extension } }, v04Ctx());
     expect(decoded.state).toBe("ok");
     const jit = (decoded.data as { jit: Record<string, unknown> }).jit;
     expect(jit).toMatchObject({ verification: "trusted", generation: "phoenix/v0.4-rc.1", wire: "nested", oracleSalt: SAMPLE.oracleSalt, extraData: "0x" });
@@ -340,21 +345,21 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
 
   it("the recipe-bytes alias: additionalData alone is accepted with a deprecation_notice; extraData + a DIFFERENT additionalData refuses as invalid input", async () => {
     const anchor = `0x${WAD.toString(16).padStart(64, "0")}` as const;
-    const alias = await makerJit(stubContext(), "nested-maker-0002", { additionalData: anchor });
+    const alias = await makerJit(v04Ctx(), "nested-maker-0002", { additionalData: anchor });
     expect(alias.state, JSON.stringify(alias.warnings)).toBe("ok");
     expect(alias.warnings.find((w) => w.code === "deprecation_notice")?.message).toContain("extraData");
     expect(decodeJitExtension("nested", (alias.data as { extension: `0x${string}` }).extension).params.extraData).toBe(anchor);
-    const same = await makerJit(stubContext(), "nested-maker-0003", { additionalData: anchor, extraData: anchor });
+    const same = await makerJit(v04Ctx(), "nested-maker-0003", { additionalData: anchor, extraData: anchor });
     expect(same.state).toBe("ok");
     expect(same.warnings.some((w) => w.code === "deprecation_notice")).toBe(false);
-    const err = await makerJit(stubContext(), "nested-maker-0004", { additionalData: anchor, extraData: "0xdead" }).catch((e: unknown) => e);
+    const err = await makerJit(v04Ctx(), "nested-maker-0004", { additionalData: anchor, extraData: "0xdead" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ToolInputError);
     expect(JSON.stringify((err as ToolInputError).issues)).toContain("two spellings");
     expect(JSON.stringify((err as ToolInputError).issues)).toContain("jitMarket");
   });
 
   it("a non-zero oracleSalt on a FLAT-wire generation is refused as invalid input naming the generation (its deploy has no salt field)", async () => {
-    const flat = { ...stubContext(), generation: FLAT.label };
+    const flat = { ...v04Ctx(), generation: FLAT.label };
     const err = await makerJit(flat, "nested-maker-0005", { oracleSalt: SAMPLE.oracleSalt, constraint: JIT_TASK_CONSTRAINT }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ToolInputError);
     expect(JSON.stringify((err as ToolInputError).issues)).toContain("oracleSalt");
@@ -367,7 +372,7 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
   });
 
   it("the input's `generation` label rides into ctx: naming the flat set on the INPUT builds flat bytes at the flat adapter", async () => {
-    const env = await makerJit(stubContext(), "nested-maker-0007", { constraint: JIT_TASK_CONSTRAINT }, { generation: FLAT.label });
+    const env = await makerJit(v04Ctx(), "nested-maker-0007", { constraint: JIT_TASK_CONSTRAINT }, { generation: FLAT.label });
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     expect((env.data as { jit: { adapter: string; wire: string; generation: string } }).jit).toMatchObject({ wire: "flat", generation: FLAT.label });
     expect((env.data as { jit: { adapter: string } }).jit.adapter.toLowerCase()).toBe((FLAT.marketRegistry!.adapter as string).toLowerCase());
@@ -431,15 +436,15 @@ describe("the JIT maker path binds the PRIMARY (nested) generation", () => {
   });
 
   it("the fee rule follows the phoenix wire: 99e18 builds on the 10-field primary, 100e18 refuses naming InvalidFees; the flat generation refuses above 5e18", async () => {
-    const rule = await resolveFeeRule(42161, "adapter", stubContext());
+    const rule = await resolveFeeRule(42161, "adapter", v04Ctx());
     expect(rule).toMatchObject({ phoenixWire: "10-field", maxAllowed: 100n * WAD - 1n });
-    const high = await makerJit(stubContext(), "nested-maker-0013", { swapFeePercentage: (99n * WAD).toString() });
+    const high = await makerJit(v04Ctx(), "nested-maker-0013", { swapFeePercentage: (99n * WAD).toString() });
     expect(high.state, JSON.stringify(high.warnings)).toBe("ok");
-    const tooHigh = await makerJit(stubContext(), "nested-maker-0014", { swapFeePercentage: (100n * WAD).toString() });
+    const tooHigh = await makerJit(v04Ctx(), "nested-maker-0014", { swapFeePercentage: (100n * WAD).toString() });
     expect(tooHigh.state).toBe("unavailable");
     expect(tooHigh.warnings[0]?.code).toBe("invalid_order_terms");
     expect(tooHigh.warnings[0]?.message).toContain("InvalidFees");
-    const flatHigh = await makerJit({ ...stubContext(), generation: FLAT.label }, "nested-maker-0015", { swapFeePercentage: (6n * WAD).toString(), constraint: JIT_TASK_CONSTRAINT });
+    const flatHigh = await makerJit({ ...v04Ctx(), generation: FLAT.label }, "nested-maker-0015", { swapFeePercentage: (6n * WAD).toString(), constraint: JIT_TASK_CONSTRAINT });
     expect(flatHigh.state).toBe("unavailable");
     expect(flatHigh.warnings[0]?.message).toContain("5e18 (5%)");
   });
@@ -467,7 +472,7 @@ describe("cork_prepare_market on the nested primary", () => {
   const REF = JIT_TASK_PAIR.referenceAsset;
 
   it("create-pool builds the 0.5.0 creator's createNewPool(MarketParams) with extraData + oracleSalt, the 10-field id and the creator as `to`", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "nested-create-0001", action: { type: "create-pool", collateralAsset: CA, referenceAsset: REF, expiryTimestamp: EXPIRY, recipe: LIQUIDITY_RECIPE, oracleSalt: SAMPLE.oracleSalt, swapFeePercentage: "1000000000000000000" } }, stubContext());
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "nested-create-0001", action: { type: "create-pool", collateralAsset: CA, referenceAsset: REF, expiryTimestamp: EXPIRY, recipe: LIQUIDITY_RECIPE, oracleSalt: SAMPLE.oracleSalt, swapFeePercentage: "1000000000000000000" } }, v04Ctx());
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as { to: string; calldata: `0x${string}`; wire: string; phoenixWire: string; generation: string; oracleSalt: string; pool: { poolId: string; exists: boolean }; constraint: Record<string, string>; scales: Record<string, string> };
     expect(d.to.toLowerCase()).toBe((NESTED_MR.marketCreator as string).toLowerCase());
@@ -483,22 +488,22 @@ describe("cork_prepare_market on the nested primary", () => {
   });
 
   it("deploy-oracle carries the salt on the nested wire (selector 0x5475abdc) and refuses a non-zero salt on the flat generation", async () => {
-    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "nested-deploy-0001", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav", oracleSalt: SAMPLE.oracleSalt } }, stubContext());
+    const env = await runTool("cork_prepare_market", { chainId: 42161, clientRequestId: "nested-deploy-0001", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav", oracleSalt: SAMPLE.oracleSalt } }, v04Ctx());
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
     const d = env.data as { calldata: `0x${string}`; to: string; oracleSalt: string; wire: string };
     expect(d.calldata.slice(0, 10)).toBe("0x5475abdc");
     expect(bodyWord(d.calldata, 3)).toBe(SAMPLE.oracleSalt);
     expect(d).toMatchObject({ wire: "nested", oracleSalt: SAMPLE.oracleSalt });
     expect(d.to.toLowerCase()).toBe(NESTED_MR.registry.toLowerCase());
-    const flat = await runTool("cork_prepare_market", { chainId: 42161, generation: FLAT.label, clientRequestId: "nested-deploy-0002", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav", oracleSalt: SAMPLE.oracleSalt } }, stubContext()).catch((e: unknown) => e);
+    const flat = await runTool("cork_prepare_market", { chainId: 42161, generation: FLAT.label, clientRequestId: "nested-deploy-0002", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav", oracleSalt: SAMPLE.oracleSalt } }, v04Ctx()).catch((e: unknown) => e);
     expect(flat).toBeInstanceOf(ToolInputError);
-    const flatZero = await runTool("cork_prepare_market", { chainId: 42161, generation: FLAT.label, clientRequestId: "nested-deploy-0003", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, stubContext());
+    const flatZero = await runTool("cork_prepare_market", { chainId: 42161, generation: FLAT.label, clientRequestId: "nested-deploy-0003", action: { type: "deploy-oracle", collateralAsset: CA, referenceAsset: REF, mode: "nav" } }, v04Ctx());
     expect((flatZero.data as { calldata: string }).calldata.slice(0, 10)).toBe("0x7f1d68cf");
   });
 });
 
 describe("cork_query registry-* and derive-cork-pool on the nested primary", () => {
-  const ctx = stubContext();
+  const ctx = v04Ctx();
 
   it("registry-denominations lists unit ADDRESSES with best-effort symbols; filters.label refuses with teaching (→ filters.address); filters.address looks one up", async () => {
     const list = await runTool("cork_query", { resource: "registry-denominations", chainId: 42161 }, ctx);

@@ -68,7 +68,13 @@ encoded bytes, with the order salt committing to the extension. Taker-side, the 
 `adapter ++ extraData` bytes ride in the fill's `args`, with their length packed at takerTraits
 bits 200–223.
 
-### 2b. The `nested` layout — Market Registry 0.5.0 (`phoenix/v0.4-rc.1`, the primary)
+### 2b. The `nested` layout — Market Registry 0.5.0 and 0.6.0 (`phoenix/v0.4-rc.1`, and `phoenix/v0.5`, the primary)
+
+The two sets share this layout and differ only in the permit row, which the set declares as
+`marketRegistry.jitPermitWire`: `phoenix/v0.4-rc.1` (adapter 0.4.0, `0x3E01…B104`) carries
+`(token, value, deadline, uint8 v, bytes32 r, bytes32 s)`; `phoenix/v0.5` (adapter 0.5.0,
+`0x960C…0616`) carries `(token, value, deadline, bytes signature)`, which a contract wallet signs
+through ERC-1271. The rest of this section is common to both.
 
 The 0.5.0 adapter wraps the market creator's own struct instead of flattening it:
 

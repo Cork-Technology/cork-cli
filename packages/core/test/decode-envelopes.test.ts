@@ -240,7 +240,7 @@ describe("the reference ForSelf adapter of a generation is Cork's own deployment
   it("a ForSelf call at a generation's reference adapter is trusted and labeled with the generation; an integrator's adapter stays unverified", async () => {
     const ref = await runTool("cork_decode", { kind: "calldata", chainId: 8453, data: exerciseForSelf, to: BASE_PRIMARY_FORSELF }, ctx);
     expect(ref.state).toBe("ok");
-    expect((ref.data as { legs: Leg[] }).legs[0]).toMatchObject({ kind: "forself", verification: "trusted", generation: "phoenix/v0.4-rc.1" });
+    expect((ref.data as { legs: Leg[] }).legs[0]).toMatchObject({ kind: "forself", verification: "trusted", generation: "phoenix/v0.5" });
     expect(codes(ref)).toEqual([]);
     const prev = await runTool("cork_decode", { kind: "calldata", chainId: 42161, data: exerciseForSelf, to: ARB_PREVIOUS_FORSELF }, ctx);
     expect((prev.data as { legs: Leg[] }).legs[0]).toMatchObject({ kind: "forself", verification: "trusted", generation: "phoenix/v0.3-rc.1" });
@@ -258,14 +258,14 @@ describe("the reference ForSelf adapter of a generation is Cork's own deployment
     expect(leg).toMatchObject({ kind: "forself", verification: "mismatch", expectedTarget: vouched });
     expect(decodeSingleCall(call(vouched), { forSelf: vouched })).toMatchObject({ kind: "forself", verification: "trusted" });
     // The reference list still wins over the vouched one: a generation's own adapter is trusted and labeled.
-    expect(decodeSingleCall(call(BASE_PRIMARY_FORSELF), { forSelf: vouched, forSelfAdapters: [{ address: BASE_PRIMARY_FORSELF, label: "phoenix/v0.4-rc.1" }] })).toMatchObject({ verification: "trusted", generation: "phoenix/v0.4-rc.1" });
+    expect(decodeSingleCall(call(BASE_PRIMARY_FORSELF), { forSelf: vouched, forSelfAdapters: [{ address: BASE_PRIMARY_FORSELF, label: "phoenix/v0.5" }] })).toMatchObject({ verification: "trusted", generation: "phoenix/v0.5" });
   });
 
   it("kind:tx — a signed tx TO the reference adapter names it in toLabel with its generation", async () => {
     const raw = await signer.signTransaction({ type: "eip1559", chainId: 8453, nonce: 0, to: BASE_PRIMARY_FORSELF, data: exerciseForSelf, gas: 300_000n, maxFeePerGas: 1_000_000n, maxPriorityFeePerGas: 1_000n });
     const env = await runTool("cork_decode", { kind: "tx", data: raw }, ctx);
     expect(env.state).toBe("ok");
-    expect((env.data as { toLabel: string }).toLabel).toBe("forSelfAdapter (reference, phoenix/v0.4-rc.1 generation)");
+    expect((env.data as { toLabel: string }).toLabel).toBe("forSelfAdapter (reference, phoenix/v0.5 generation)");
     expect(codes(env)).toEqual([]);
   });
 });

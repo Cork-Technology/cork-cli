@@ -10,12 +10,12 @@
 //
 // Lives in its own module because market-registry-legacy.ts imports market-registry.ts: the
 // dispatcher needs both decoders and would close an import cycle from either.
-import { classifyAddress, type MarketRegistryWire, type ResolvedGeneration } from "./generations.ts";
+import { classifyAddress, type JitPermitWire, type MarketRegistryWire, type ResolvedGeneration } from "./generations.ts";
 import { decodeJitExtraData, type JITMarketParams, jitExtensionTarget, type PermitParams } from "./market-registry.ts";
 import * as legacyRegistry from "./market-registry-legacy.ts";
 
 export type DecodedJitExtension =
-  | { wire: Extract<MarketRegistryWire, "flat" | "nested">; generation: string; adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] }
+  | { wire: Extract<MarketRegistryWire, "flat" | "nested">; permitWire: JitPermitWire; generation: string; adapter: `0x${string}`; params: JITMarketParams; permits: PermitParams[] }
   | { wire: "legacy"; generation: string; adapter: `0x${string}`; params: legacyRegistry.JITMarketParams; permits: legacyRegistry.PermitParams[] };
 
 /** Decode a LOP v4 extension's JIT preInteraction by the CLASSIFICATION of its adapter: the
@@ -39,5 +39,7 @@ export function decodeJitExtensionFor(generations: readonly ResolvedGeneration[]
     const d = legacyRegistry.decodeJitExtension(extension);
     return { wire, generation: hit.label, adapter: d.adapter, params: d.params, permits: d.permits };
   }
-  return { wire, generation: hit.label, adapter: target.adapter, ...decodeJitExtraData(wire, target.extraData) };
+  // The ADAPTER pinpoints the set: two sets can share every other contract and differ only here.
+  const permitWire = generations.find((g) => g.label === hit.label)?.marketRegistry?.jitPermitWire ?? "vrs";
+  return { wire, permitWire, generation: hit.label, adapter: target.adapter, ...decodeJitExtraData(wire, target.extraData, permitWire) };
 }

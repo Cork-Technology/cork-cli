@@ -54,7 +54,9 @@ describe("docs freshness: zyfai-quickstart.md tracks the configured registry gen
   it("the config pins a nested-wire primary and a flat-wire active set on Base (the two generations the doc describes)", () => {
     expect(PRIMARY.wire).toBe("nested");
     expect(FLAT, "an ACTIVE flat-wire (0.3.x) registry on Base — the set the worked examples were captured against").toBeDefined();
-    expect(BASE.primary).toBe("phoenix/v0.4-rc.1");
+    expect(BASE.primary).toBe("phoenix/v0.5");
+    // The older nested set the doc names beside it keeps its own 0.4.0 adapter, and the doc shows it.
+    expect(has(quickstart, "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104")).toBe(true);
   });
 
   it("names the PRIMARY generation: registry, adapter, market creator and all four recipes from cork-defaults.v2.json", () => {

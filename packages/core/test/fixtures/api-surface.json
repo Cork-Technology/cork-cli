@@ -685,11 +685,19 @@
       "kind": "value"
     },
     {
+      "name": "JIT_PERMIT_WIRES",
+      "kind": "value"
+    },
+    {
       "name": "JitMarketParamsStruct",
       "kind": "type"
     },
     {
       "name": "JitMarketParamsWire",
+      "kind": "type"
+    },
+    {
+      "name": "JitPermitWire",
       "kind": "type"
     },
     {
@@ -2461,6 +2469,10 @@
       "kind": "value"
     },
     {
+      "name": "jitAdapterNestedBytesAbi",
+      "kind": "value"
+    },
+    {
       "name": "jitExtensionTarget",
       "kind": "value"
     },
@@ -2650,6 +2662,14 @@
     },
     {
       "name": "permit2ApproveTx",
+      "kind": "value"
+    },
+    {
+      "name": "permitOfBytesRow",
+      "kind": "value"
+    },
+    {
+      "name": "permitSignatureBytes",
       "kind": "value"
     },
     {
@@ -3014,6 +3034,10 @@
     },
     {
       "name": "sharePoolIdAbi",
+      "kind": "value"
+    },
+    {
+      "name": "sharesPrimaryAnchors",
       "kind": "value"
     },
     {
@@ -3859,6 +3883,14 @@
       "kind": "value"
     },
     {
+      "name": "JIT_PERMIT_WIRES",
+      "kind": "value"
+    },
+    {
+      "name": "JitPermitWire",
+      "kind": "type"
+    },
+    {
       "name": "LoadedOverride",
       "kind": "type"
     },
@@ -4152,6 +4184,10 @@
     },
     {
       "name": "sha256Hex",
+      "kind": "value"
+    },
+    {
+      "name": "sharesPrimaryAnchors",
       "kind": "value"
     },
     {
@@ -5919,6 +5955,10 @@
       "kind": "value"
     },
     {
+      "name": "jitAdapterNestedBytesAbi",
+      "kind": "value"
+    },
+    {
       "name": "jitExtensionTarget",
       "kind": "value"
     },
@@ -5944,6 +5984,14 @@
     },
     {
       "name": "oracleModeForSource",
+      "kind": "value"
+    },
+    {
+      "name": "permitOfBytesRow",
+      "kind": "value"
+    },
+    {
+      "name": "permitSignatureBytes",
       "kind": "value"
     },
     {

@@ -40,7 +40,10 @@ describe.each([8453, 42161] as const)("cork_decode of cork_prepare_market bytes,
         const leg = (dec.data as { legs: Leg[] }).legs[0]!;
         expect(leg).toMatchObject({ kind: "market", role, verification: "trusted" });
         // The primary's contract is the expected state and carries no label; another set's does.
-        expect(leg.generation).toBe(isPrimary ? undefined : g.label);
+        // A set that SHARES the primary's contract (phoenix/v0.4-rc.1 beside phoenix/v0.5) decodes
+        // as the primary's: the address, not the set name, decides.
+        const at = (gg: typeof g) => (role === "marketCreator" ? gg.marketRegistry!.marketCreator : gg.marketRegistry!.registry)!.toLowerCase();
+        expect(leg.generation).toBe(isPrimary || at(g) === at(primary!) ? undefined : g.label);
       }
     }
   });
@@ -70,7 +73,7 @@ describe.each([8453, 42161] as const)("cork_decode of cork_prepare_market bytes,
       const dec = await runTool("cork_decode", { kind: "tx", chainId, data: raw }, ctx);
       expect(dec.state, JSON.stringify(dec.warnings)).toBe("ok");
       expect(dec.warnings.some((w) => w.code === "unknown_target"), g.label).toBe(false);
-      expect(JSON.stringify(dec.data)).toContain(g.label === primary!.label ? '"marketRegistry"' : `marketRegistry (${g.label} generation)`);
+      expect(JSON.stringify(dec.data)).toContain(g.label === primary!.label || g.marketRegistry!.registry.toLowerCase() === primary!.marketRegistry!.registry.toLowerCase() ? '"marketRegistry"' : `marketRegistry (${g.label} generation)`);
     }
   });
 });

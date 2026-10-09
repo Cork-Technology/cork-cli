@@ -17,6 +17,7 @@
 //    exist beforehand — the pull is covered by an ERC-2612 permit embedded in the extension
 //    (EOAs only); and a JIT MINT additionally pulls collateral from the minting party into the
 //    Cork JIT adapter, which needs its own ERC-20 allowance.
+import type { JitPermitWire } from "./generations.ts";
 import { encodeFunctionData, parseAbi } from "viem";
 import { erc20Abi, permit2AllowanceAbi } from "./chain/abis.ts";
 
@@ -82,6 +83,20 @@ export function permit2ApproveTx(token: `0x${string}`, spender: `0x${string}`, a
 
 const lc = (a: string) => a.toLowerCase();
 
+/** Who can sign the JIT permit: the `vrs` row (CorkLimitOrderAdapter 0.4.0, the flat adapter)
+ *  carries 65-byte ECDSA only; the `bytes` row (0.5.0, set phoenix/v0.5) carries a contract
+ *  wallet's ERC-1271 signature too. Absent = `vrs`, the conservative answer. */
+function permitWallets(permitWire: JitPermitWire | undefined): ApprovalRequirement["wallets"] {
+  return permitWire === "bytes" ? "eoa+contract" : "eoa-only";
+}
+
+function permitContractPath(permitWire: JitPermitWire | undefined, who: "maker" | "taker"): string {
+  if (permitWire === "bytes") return `A CONTRACT ${who} signs it through ERC-1271 (pass its signature bytes as permits[].signature); create-pool AHEAD of the fill stays available as the permit-free path.`;
+  return who === "maker"
+    ? "A CONTRACT maker cannot produce this ECDSA signature; its path is cork_prepare_market create-pool — create the pool AHEAD of the fill (same derivation, idempotent), then approve the now-existing cST to the LOP and sign the order with no permits."
+    : "A CONTRACT taker cannot produce this signature; its path is cork_prepare_market create-pool (create the pool AHEAD of the fill), then mint the cST directly (cork_prepare_phoenix deposit), approve it to the LOP, and fill WITHOUT a taker JIT interaction.";
+}
+
 /** The maker's (underwriter's) grants. Every allowance must exist BEFORE the order rests —
  *  otherwise the order sits on the book fillable-looking and every fill attempt reverts. */
 export function makerApprovalRequirements(a: {
@@ -92,7 +107,7 @@ export function makerApprovalRequirements(a: {
   usePermit2: boolean;
   /** Absolute unix seconds from the makerTraits expiry slot; 0/undefined = no expiry. */
   orderExpiry?: bigint;
-  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` | null };
+  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; enableJitMint: boolean; predictedCorkSwapToken?: `0x${string}` | null; permitWire?: JitPermitWire };
 }): ApprovalRequirement[] {
   const out: ApprovalRequirement[] = [];
   const predictedCst = a.jit?.predictedCorkSwapToken;
@@ -103,8 +118,8 @@ export function makerApprovalRequirements(a: {
     out.push({
       role: "maker", stage: "with-order-signature", holder: a.maker, token: a.makerAsset,
       tokenRole: "makerAsset (predicted cST)", spender: a.lop, spenderRole: "1inch LOP",
-      mechanism: "erc2612-permit", amount, kind: "exact", wallets: "eoa-only",
-      note: "the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits, together with jitMarket.constraint = the constraint this prepare resolved (the pool's identity; without the pin an oracle tick re-derives a different cST than the permit covers). A CONTRACT maker cannot produce this ECDSA signature; its path is cork_prepare_market create-pool — create the pool AHEAD of the fill (same derivation, idempotent), then approve the now-existing cST to the LOP and sign the order with no permits.",
+      mechanism: "erc2612-permit", amount, kind: "exact", wallets: permitWallets(a.jit?.permitWire),
+      note: `the cST exists only after the fill creates the pool, so a prior approve is impossible — sign an ERC-2612 permit (owner = maker, spender = the LOP, value >= makingAmount) and pass it in jitMarket.permits, together with jitMarket.constraint = the constraint this prepare resolved (the pool's identity; without the pin an oracle tick re-derives a different cST than the permit covers). ${permitContractPath(a.jit?.permitWire, "maker")}`,
       unsignedTx: null,
     });
   } else if (a.usePermit2) {
@@ -155,7 +170,7 @@ export function takerApprovalRequirements(a: {
   lop: `0x${string}`;
   forSelfAdapter?: `0x${string}`;
   auction?: boolean;
-  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; predictedCorkSwapToken?: `0x${string}` | null };
+  jit?: { adapter: `0x${string}`; collateralAsset: `0x${string}`; predictedCorkSwapToken?: `0x${string}` | null; permitWire?: JitPermitWire };
 }): ApprovalRequirement[] {
   const out: ApprovalRequirement[] = [];
   const predictedCst = a.jit?.predictedCorkSwapToken;
@@ -169,8 +184,8 @@ export function takerApprovalRequirements(a: {
     out.push({
       role: "taker", stage: "with-order-signature", holder: a.taker, token: a.takerAsset,
       tokenRole: "takerAsset (predicted cST)", spender: a.lop, spenderRole: "1inch LOP",
-      mechanism: "erc2612-permit", amount, kind: "exact", wallets: "eoa-only",
-      note: "the taker delivers a cST that is minted DURING the fill — sign an ERC-2612 permit (owner = taker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits so the LOP can pull the just-minted token. A CONTRACT taker cannot produce this signature; its path is cork_prepare_market create-pool (create the pool AHEAD of the fill), then mint the cST directly (cork_prepare_phoenix deposit), approve it to the LOP, and fill WITHOUT a taker JIT interaction.",
+      mechanism: "erc2612-permit", amount, kind: "exact", wallets: permitWallets(a.jit?.permitWire),
+      note: `the taker delivers a cST that is minted DURING the fill — sign an ERC-2612 permit (owner = taker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits so the LOP can pull the just-minted token. ${permitContractPath(a.jit?.permitWire, "taker")}`,
       unsignedTx: null,
     });
   } else if (a.forSelfAdapter) {

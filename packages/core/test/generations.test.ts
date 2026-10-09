@@ -96,8 +96,8 @@ describe("generationsOf — resolution order: primary, other active (config orde
     expect(generationsOf({}, 7)).toEqual([]);
   });
   it("the bundled document resolves to the pinned generation order", () => {
-    expect(generationsOf(BUNDLED_DEFAULTS, 42161).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
-    expect(generationsOf(BUNDLED_DEFAULTS, 8453).map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]);
+    expect(generationsOf(BUNDLED_DEFAULTS, 42161).map((g) => g.label)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
+    expect(generationsOf(BUNDLED_DEFAULTS, 8453).map((g) => g.label)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]);
     expect(generationsOf(BUNDLED_DEFAULTS, 1).map((g) => g.label)).toEqual(["mainnet"]);
   });
 });
@@ -160,11 +160,18 @@ describe("classifyAddress — every role an address holds, per generation, in re
   });
   it("walks the bundled Arbitrum document: the shared 0.5.0 controller sits on both blocks of ONE generation; the 0.3.3 adapter is one generation's jitAdapter", () => {
     const arb = generationsOf(BUNDLED_DEFAULTS, 42161);
-    expect(classifyAddress(arb, "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "controller" }]);
+    // The 0.5.0 controller is shared by phoenix/v0.5 and phoenix/v0.4-rc.1: both labels, primary first.
+    expect(classifyAddress(arb, "0x66025095Ab3a7E60BA9C2b15e203822d5d3647b5")).toEqual([
+      { label: "phoenix/v0.5", status: "active", primary: true, role: "controller" },
+      { label: "phoenix/v0.4-rc.1", status: "active", primary: false, role: "controller" },
+    ]);
     expect(classifyAddress(arb, "0x8902a88912a334263fe3d731d03c267715b9374f")).toEqual([{ label: "phoenix/v0.3-rc.1", status: "active", primary: false, role: "jitAdapter" }]);
     expect(classifyAddress(arb, "0x983270AE48545665Cee4D7EF61C65fF3fdC8222D")).toEqual([{ label: "arbitrum-v1.1", status: "active", primary: false, role: "exactSettler" }]);
     expect(classifyAddress(arb, "0xc2De56fb1C7a85250ce69C37B4773767C77954AE")).toEqual([{ label: "arbitrum-legacy", status: "read-only", primary: false, role: "poolManager" }]);
-    expect(classifyAddress(arb, "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "recipe", recipeName: "impairment" }]);
+    expect(classifyAddress(arb, "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9")).toEqual([
+      { label: "phoenix/v0.5", status: "active", primary: true, role: "recipe", recipeName: "impairment" },
+      { label: "phoenix/v0.4-rc.1", status: "active", primary: false, role: "recipe", recipeName: "impairment" },
+    ]);
   });
 });
 

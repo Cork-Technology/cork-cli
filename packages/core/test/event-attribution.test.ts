@@ -44,8 +44,8 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     const byAddress = Object.fromEntries(emitters.map((e) => [e.address.toLowerCase(), e]));
     expect(byAddress[ACTIVE_EXACT.toLowerCase()]).toEqual({ address: ACTIVE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } });
     expect(byAddress[ACTIVE_PARTIAL.toLowerCase()]).toEqual({ address: ACTIVE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.3-rc.1", status: "active" } });
-    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
-    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
+    expect(byAddress[CANDIDATE_EXACT.toLowerCase()]).toEqual({ address: CANDIDATE_EXACT, role: "exactSettler", generation: { label: "phoenix/v0.5", status: "active" } });
+    expect(byAddress[CANDIDATE_PARTIAL.toLowerCase()]).toEqual({ address: CANDIDATE_PARTIAL, role: "partialSettler", generation: { label: "phoenix/v0.5", status: "active" } });
     // The July settlers: their ROLLOVER block is retired (venue-inadmissible, `retired` date), while
     // the chain generation arbitrum-v1.1 they belong to is ACTIVE — two facts, two fields.
     expect(byAddress[RETIRED_EXACT.toLowerCase()]).toMatchObject({ role: "exactSettler", generation: { label: "arbitrum-v1.1", status: "active" }, retired: "2026-08-13" });
@@ -56,17 +56,23 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     // The pre-2.1.0 adapter is a `jitAdapter` of an ACTIVE generation on the `legacy` wire — the
     // signature difference is a wire fact, gated at attribution, not a role of its own.
     expect(byAddress[LEGACY_JIT_ADAPTER.toLowerCase()]).toEqual({ address: LEGACY_JIT_ADAPTER, role: "jitAdapter", generation: { label: "arbitrum-v1.1", status: "active" }, wire: "legacy" });
-    // The nested wire's creation emitters: the 0.5.0 creator and the 10-field pool manager of
-    // phoenix/v0.4-rc.1 — and ONLY that generation's (a periphery creator / 8-field manager never
-    // emits those topics).
-    const nested = ARBITRUM.find((g) => g.label === "phoenix/v0.4-rc.1")!;
-    expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: { label: "phoenix/v0.4-rc.1", status: "active" } });
-    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: { label: "phoenix/v0.4-rc.1", status: "active" }, wire: "10-field" });
+    // The 0.5.0 adapter of phoenix/v0.5 is its own emitter; every contract phoenix/v0.5 SHARES
+    // with phoenix/v0.4-rc.1 is ONE row, labeled with the first set (the primary).
+    const v05 = ARBITRUM.find((g) => g.label === "phoenix/v0.5")!;
+    expect(byAddress[(v05.marketRegistry!.adapter as string).toLowerCase()]).toEqual({ address: v05.marketRegistry!.adapter, role: "jitAdapter", generation: { label: "phoenix/v0.5", status: "active" }, wire: "nested" });
+    for (const shared of [v05.marketRegistry!.marketCreator!, v05.phoenix!.poolManager, v05.rollover!.exactSettler]) {
+      expect(emitters.filter((e) => e.address.toLowerCase() === shared.toLowerCase()), shared).toHaveLength(1);
+    }
+    // The nested wire's creation emitters: the 0.5.0 creator and the 10-field pool manager the
+    // two sets share — and ONLY those (a periphery creator / 8-field manager never emits those topics).
+    const nested = v05;
+    expect(byAddress[nested.marketRegistry!.marketCreator!.toLowerCase()]).toEqual({ address: nested.marketRegistry!.marketCreator, role: "marketCreator", generation: { label: "phoenix/v0.5", status: "active" } });
+    expect(byAddress[nested.phoenix!.poolManager.toLowerCase()]).toEqual({ address: nested.phoenix!.poolManager, role: "poolManager", generation: { label: "phoenix/v0.5", status: "active" }, wire: "10-field" });
     // Since stage 2c EVERY pool manager is a poolManager emitter (each tagged with its wire, so
     // attribution admits only its own MarketCreated topic): four managers on Arbitrum, one creator.
     expect(emitters.filter((e) => e.role === "marketCreator")).toHaveLength(1);
     expect(emitters.filter((e) => e.role === "poolManager").map((e) => [e.generation.label, e.wire])).toEqual([
-      ["phoenix/v0.4-rc.1", "10-field"],
+      ["phoenix/v0.5", "10-field"],
       ["phoenix/v0.3-rc.1", "8-field"],
       ["arbitrum-v1.1", "8-field"],
       ["arbitrum-legacy", "8-field"],
@@ -74,16 +80,17 @@ describe("protocolEmittersFor — the emitter table is the deployment config, ev
     // The rollover BaseFillers (the 0.2 and rc.2 records; the July rc.1 record predates the
     // component baselines and names none) and every rollover factory ride along.
     expect(emitters.filter((e) => e.role === "baseFiller").map((e) => [e.address, e.generation.label])).toEqual([
-      ["0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", "phoenix/v0.4-rc.1"],
+      ["0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", "phoenix/v0.5"],
       ["0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d", "phoenix/v0.3-rc.1"],
     ]);
     expect(emitters.filter((e) => e.role === "factory")).toHaveLength(3);
-    // 3 rollover generations × (2 settlers + factory) + 2 BaseFillers + the three registry
-    // generations' JIT adapters + the nested creator + 4 pool managers + every configured
-    // whitelist manager (3: the read-only legacy set has none).
-    const whitelistManagers = ARBITRUM.filter((g) => g.phoenix?.whitelistManager !== undefined).length;
+    // 3 rollover stacks × (2 settlers + factory) + 2 BaseFillers + 4 JIT adapters (0.5.0, 0.4.0,
+    // flat, legacy) + the nested creator + 4 pool managers + every DISTINCT whitelist manager (3:
+    // phoenix/v0.5 and phoenix/v0.4-rc.1 share one; the read-only legacy set has none).
+    const whitelistManagers = new Set(ARBITRUM.flatMap((g) => (g.phoenix?.whitelistManager !== undefined ? [g.phoenix.whitelistManager.toLowerCase()] : []))).size;
     expect(whitelistManagers).toBe(3);
-    expect(emitters).toHaveLength(9 + 2 + 3 + 1 + 4 + whitelistManagers);
+    expect(emitters.filter((e) => e.role === "jitAdapter")).toHaveLength(4);
+    expect(emitters).toHaveLength(9 + 2 + 4 + 1 + 4 + whitelistManagers);
     // Primary first: the order is the config's flattening, not an address sort.
     expect(emitters.slice(0, 2).map((e) => e.address)).toEqual([CANDIDATE_EXACT, CANDIDATE_PARTIAL]);
   });

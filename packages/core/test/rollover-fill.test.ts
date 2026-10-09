@@ -121,7 +121,7 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     const env = await fill({ orderDigest: digest, signedOrder: payload });
     expect(env.state).toBe("ok");
     const d = env.data as Data;
-    expect(d).toMatchObject({ kind: "rollover-fill", to: BASE_FILLER, fillFunction: "execute", orderDigest: digest, settler: EXACT, settlerKind: "EXACT", settlerGeneration: "phoenix/v0.4-rc.1", jitMarketWire: "0.2", chainStatus: "Opened", cloneVerified: true, destination: FILLER, premiumCapEstimated: true });
+    expect(d).toMatchObject({ kind: "rollover-fill", to: BASE_FILLER, fillFunction: "execute", orderDigest: digest, settler: EXACT, settlerKind: "EXACT", settlerGeneration: "phoenix/v0.5", jitMarketWire: "0.2", chainStatus: "Opened", cloneVerified: true, destination: FILLER, premiumCapEstimated: true });
     expect(d.fillerSrcCst).toBe((10n ** 18n).toString());
     expect(d.premiumCap).toBe(requiredPremium(10n ** 18n, 62n).toString());
     expect(d.premiumCap).toBe("62");
@@ -385,7 +385,7 @@ describe("deploy-rollover-contract — the per-account clone", () => {
     const env = await deploy({}, { resolveRpc: stubRpc((c: StubCall) => (c.functionName === "predictRolloverContractOf" ? CLONE : c.functionName === "rolloverContractOf" ? "0x0000000000000000000000000000000000000000" : (() => { throw new Error(`no stub for ${c.functionName}`); })())) });
     expect(env.state).toBe("ok");
     // deployRolloverContract() — selector 0x39858cf6, no arguments.
-    expect(env.data).toMatchObject({ kind: "deploy-rollover-contract", to: FACTORY, calldata: "0x39858cf6", owner: FILLER, predictedRolloverContract: CLONE, existingRolloverContract: null, rolloverGeneration: "phoenix/v0.4-rc.1", wire: "0.2" });
+    expect(env.data).toMatchObject({ kind: "deploy-rollover-contract", to: FACTORY, calldata: "0x39858cf6", owner: FILLER, predictedRolloverContract: CLONE, existingRolloverContract: null, rolloverGeneration: "phoenix/v0.5", wire: "0.2" });
     expect(codes(env)).toEqual(["unsigned_artifact"]);
   });
 

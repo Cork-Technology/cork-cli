@@ -208,7 +208,7 @@ const market8: Market8 = {
 };
 const poolId8 = computeMarketId(market8, "8-field");
 
-// A 10-field market: the phoenix/v0.4-rc.1 pool manager, the primary on Arbitrum and Base.
+// A 10-field market: the pool manager phoenix/v0.5 (the primary on Arbitrum and Base) shares with phoenix/v0.4-rc.1.
 // The two fees are part of the struct AND the id. Two markets that differ only in a fee are two pools.
 const market10: Market10 = {
   ...market8,

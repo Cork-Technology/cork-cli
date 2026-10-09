@@ -41,6 +41,7 @@ const jitCtx = (over: Partial<MakerJitContext> = {}): MakerJitContext => ({
   enableJitMint: false,
   predictedCorkSwapToken: ASSET,
   permitTokens: [ASSET],
+  permitWire: "vrs",
   ...over,
 });
 
@@ -157,7 +158,29 @@ describe("assessMakerReadiness — has-code: allowance, balance, and the permit 
   it("both hatches are ERC-2612: a CONTRACT maker's permit does not count, and the message says so", () => {
     const r = assess({ allowanceToLop: 0n, makerCanSignEcdsa: false }, { extensionPermitToken: ASSET });
     expect(codes(r)).toEqual(["allowance-missing"]);
-    expect(r.reasons[0]!.message).toContain("ERC-2612 is ECDSA-only");
+    expect(r.reasons[0]!.message).toContain("this permit is ECDSA-only");
+  });
+
+  // The bytes permit row (CorkLimitOrderAdapter 0.5.0, set phoenix/v0.5): the share token checks a
+  // contract owner's signature with ERC-1271, so a contract maker's JIT permit counts.
+  it("bytes permit row: a CONTRACT maker's JIT permit is a hatch; the extension permit still is not", () => {
+    const facts = { allowanceToLop: 0n, makerCanSignEcdsa: false, mintCollateralAllowance: 10n ** 24n, mintCollateralBalance: 10n ** 24n } as const;
+    expect(assess(facts, { jit: jitCtx({ enableJitMint: true, permitWire: "bytes" }) })).toEqual({ status: "ready", reasons: [] });
+    // The same contract maker on the v/r/s row: no hatch.
+    expect(codes(assess(facts, { jit: jitCtx({ enableJitMint: true, permitWire: "vrs" }) }))).toEqual(["allowance-missing"]);
+    // The LOP-level extension permit runs only on the EOA fill path, whatever the JIT row is.
+    expect(codes(assess(facts, { extensionPermitToken: ASSET, jit: jitCtx({ enableJitMint: true, permitWire: "bytes", permitTokens: [OTHER_TOKEN], predictedCorkSwapToken: OTHER_TOKEN }) }))).toEqual(["allowance-missing"]);
+  });
+
+  it("bytes permit row: an unborn cST with a CONTRACT maker's permit is not the incident class", () => {
+    const mint = { mintCollateralAllowance: 10n ** 24n, mintCollateralBalance: 10n ** 24n } as const;
+    const r = assess({ makerAssetCode: "no-code", makerCanSignEcdsa: false, ...mint }, { jit: jitCtx({ enableJitMint: true, permitWire: "bytes" }) });
+    expect(r).toEqual({ status: "ready", reasons: [] });
+    expect(codes(r)).not.toContain("contract-maker-unborn-cst");
+    // ECDSA capability unknown is no longer a reason to say "unknown" on the bytes row.
+    expect(assess({ makerAssetCode: "no-code", makerCanSignEcdsa: null, ...mint }, { jit: jitCtx({ enableJitMint: true, permitWire: "bytes" }) }).status).toBe("ready");
+    expect(assess({ makerAssetCode: "no-code", makerCanSignEcdsa: null, ...mint }, { jit: jitCtx({ enableJitMint: true, permitWire: "vrs" }) }).status).toBe("unknown");
+    expect(assess({ makerAssetCode: "no-code", makerCanSignEcdsa: false }, { jit: jitCtx({ permitWire: "vrs" }) }).reasons[0]).toMatchObject({ code: "contract-maker-unborn-cst" });
   });
 
   it("hatch present but ECDSA capability unknown: unknown, not a verdict either way", () => {

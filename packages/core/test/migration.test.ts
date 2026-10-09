@@ -147,7 +147,13 @@ type PositionsData = {
 describe("generation aliases resolve in ONE place, to a label", () => {
   it("`previous` on 42161 for a phoenix call = phoenix/v0.3-rc.1 (the newest active non-primary set with a pool manager); `primary` = the primary; a plain label passes through", () => {
     expect(resolveGenerationAlias(ARBITRUM, "previous", ["phoenix"])).toMatchObject({ ok: true, label: "phoenix/v0.3-rc.1", alias: "previous" });
-    expect(resolveGenerationAlias(ARBITRUM, "primary", ["phoenix"])).toMatchObject({ ok: true, label: "phoenix/v0.4-rc.1", alias: "primary" });
+    expect(resolveGenerationAlias(ARBITRUM, "primary", ["phoenix"])).toMatchObject({ ok: true, label: "phoenix/v0.5", alias: "primary" });
+    // phoenix/v0.4-rc.1 shares the primary's pool manager, registry and factory: not "previous"
+    // (no funds of its own to migrate from), still reachable by its label.
+    for (const needs of [["phoenix"], ["marketRegistry"], ["rollover"], []] as const) {
+      expect(resolveGenerationAlias(ARBITRUM, "previous", needs), needs.join("+")).toMatchObject({ ok: true, label: "phoenix/v0.3-rc.1" });
+    }
+    expect(resolveGenerationAlias(ARBITRUM, "phoenix/v0.4-rc.1", ["phoenix"])).toEqual({ ok: true, label: "phoenix/v0.4-rc.1" });
     expect(resolveGenerationAlias(ARBITRUM, "arbitrum-v1.1", ["phoenix"])).toEqual({ ok: true, label: "arbitrum-v1.1" });
     expect(resolveGenerationAlias(ARBITRUM, undefined, ["phoenix"])).toEqual({ ok: true, label: undefined });
   });
@@ -233,18 +239,20 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
     expect(env.provenance.mode).toBe("full-decentralized");
     expect(asked).toHaveLength(1);
     expect(new Set(asked[0]!.map((a) => a.toLowerCase()))).toEqual(new Set([PRIMARY_PM, V03_PM, V11_PM, LEGACY_PM].map((a) => a.toLowerCase())));
-    expect(d.generations.map((g) => g.label)).toEqual(["phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
+    // Every set with a pool manager is listed; the manager two sets share is ASKED once (four above).
+    expect(d.generations.map((g) => g.label)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
     // Three positions (P_EMPTY dropped), each tagged with ITS generation.
     expect(d.positions.map((p) => [p.poolId, p.generation.label, p.expired])).toEqual([
       [P_OLD, "phoenix/v0.3-rc.1", false],
       [P_EXPIRED, "phoenix/v0.3-rc.1", true],
-      [P_NEW, "phoenix/v0.4-rc.1", false],
+      [P_NEW, "phoenix/v0.5", false],
     ]);
     expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString(), expiry: expiryIsoOfSeconds(NOW + 86_400n), balances: { corkSwapToken: (5n * WAD).toString(), corkPrincipalToken: (5n * WAD).toString() } });
     expect(d.positions[1]!.balances).toEqual({ corkSwapToken: "0", corkPrincipalToken: (7n * WAD).toString() });
     const S = (n: bigint) => n.toString();
     expect(d.byGeneration).toEqual([
-      { label: "phoenix/v0.4-rc.1", status: "active", pools: 1, corkSwapTokenTotal: S(3n * WAD), corkPrincipalTokenTotal: "0" },
+      { label: "phoenix/v0.5", status: "active", pools: 1, corkSwapTokenTotal: S(3n * WAD), corkPrincipalTokenTotal: "0" },
+      { label: "phoenix/v0.4-rc.1", status: "active", sharedWith: "phoenix/v0.5", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
       { label: "phoenix/v0.3-rc.1", status: "active", pools: 2, corkSwapTokenTotal: S(5n * WAD), corkPrincipalTokenTotal: S(12n * WAD) },
       { label: "arbitrum-v1.1", status: "active", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
       { label: "arbitrum-legacy", status: "read-only", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
@@ -334,7 +342,7 @@ describe("account-state WITHOUT filters.poolId — enumeration follows the mode'
     expect(d.positions.map((p) => [p.poolId, p.generation.label, p.expired])).toEqual([
       [P_OLD, "phoenix/v0.3-rc.1", false],
       [P_EXPIRED, "phoenix/v0.3-rc.1", true],
-      [P_NEW, "phoenix/v0.4-rc.1", false],
+      [P_NEW, "phoenix/v0.5", false],
     ]);
     // Token addresses come through whether the venue serves a string or an { address } object;
     // the venue's ISO-8601 `expiry` is normalised to unix seconds (the shape the scan serves and

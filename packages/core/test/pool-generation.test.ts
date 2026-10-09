@@ -178,7 +178,10 @@ describe("10-field reads: fees FROM the tuple, the views compared", () => {
     const env = await corkPool(ctxFor(PRIMARY_PM, { wire: "10-field" }));
     expect(env.state).toBe("ok");
     const d = env.data as { generation: Gen; wire: string; market: Record<string, string>; swapFeePercentage: string; scales: Record<string, string> };
-    expect(d.generation.label).toBe("phoenix/v0.4-rc.1");
+    expect(d.generation.label).toBe("phoenix/v0.5");
+    // The pool manager is shared with phoenix/v0.4-rc.1: the result says so, and how to pick it.
+    const shared = env.warnings.find((w) => w.code === "generation_shared");
+    expect(shared?.message).toMatch(/'phoenix\/v0\.5' and 'phoenix\/v0\.4-rc\.1'[\s\S]*generation: 'phoenix\/v0\.4-rc\.1'/);
     expect(d.wire).toBe("10-field");
     expect(d.market["swapFeePercentage"]).toBe(FEE.toString());
     expect(d.market["unwindSwapFeePercentage"]).toBe(FEE.toString());
@@ -208,7 +211,7 @@ describe("10-field reads: fees FROM the tuple, the views compared", () => {
     expect(d.verified).toBe(true);
     expect(d.wire).toBe("10-field");
     expect(d.marketIdRecomputed).toBe(id10);
-    expect(d.generation.label).toBe("phoenix/v0.4-rc.1");
+    expect(d.generation.label).toBe("phoenix/v0.5");
     // And an 8-field pool on v0.3 verifies on the 8-field hash.
     const id8 = computeMarketId(MARKET8, "8-field");
     const env8 = await runTool("cork_track", { chainId: CHAIN, mode: "verify", subject: { kind: "marketRef", poolId: id8 }, format: "concise" }, ctxFor(V03_PM));
@@ -322,7 +325,7 @@ describe("MarketCreated scans across generations", () => {
     const ok = attributeLogs([asReceiptLog(log7(V03_PM)), asReceiptLog(log9(PRIMARY_PM))], emitters);
     expect(ok.corkEvents.map((e) => [e.event, e.emitter.generation.label])).toEqual([
       ["MarketCreated (pool manager, 8-field)", "phoenix/v0.3-rc.1"],
-      ["MarketCreated (pool manager, 10-field)", "phoenix/v0.4-rc.1"],
+      ["MarketCreated (pool manager, 10-field)", "phoenix/v0.5"],
     ]);
     const crossed = attributeLogs([asReceiptLog(log7(PRIMARY_PM)), asReceiptLog(log9(V03_PM))], emitters);
     expect(crossed.corkEvents).toEqual([]);
@@ -349,7 +352,7 @@ describe("full-decentralized cork-pools asks BOTH MarketCreated topics", () => {
     expect(d.count).toBe(2);
     expect(d.items.map((r) => [r["poolManager"], r["wire"], r["generation"]])).toEqual([
       [V03_PM, "8-field", "phoenix/v0.3-rc.1"],
-      [PRIMARY_PM, "10-field", "phoenix/v0.4-rc.1"],
+      [PRIMARY_PM, "10-field", "phoenix/v0.5"],
     ]);
     expect(d.items[1]).toMatchObject({ swapFeePercentage: FEE.toString() });
   });
@@ -478,12 +481,15 @@ describe("emitter roles ↔ verified events parity", () => {
   it("the BaseFiller JITMarketCreated (three args) is its own selector, emitted by the `baseFiller` role of the generation that records it", async () => {
     expect(BASE_FILLER_JIT_MARKET_CREATED_TOPIC).toBe("0xa42f9e5c6639673ffcad0a9dd20a3a0bb70cd67dd2c9e099d5d6c081dafca217");
     expect(PROTOCOL_EVENTS[BASE_FILLER_JIT_MARKET_CREATED_TOPIC.toLowerCase()]).toEqual({ event: "JITMarketCreated (BaseFiller)", roles: ["baseFiller"] });
-    expect(classifyAddress(ARBITRUM, "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224")).toEqual([{ label: "phoenix/v0.4-rc.1", status: "active", primary: true, role: "baseFiller" }]);
+    expect(classifyAddress(ARBITRUM, "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224")).toEqual([
+      { label: "phoenix/v0.5", status: "active", primary: true, role: "baseFiller" },
+      { label: "phoenix/v0.4-rc.1", status: "active", primary: false, role: "baseFiller" },
+    ]);
     expect(classifyAddress(ARBITRUM, "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d")).toEqual([{ label: "phoenix/v0.3-rc.1", status: "active", primary: false, role: "baseFiller" }]);
     const emitters = await protocolEmittersFor(CHAIN);
     const log = { address: "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", topics: [BASE_FILLER_JIT_MARKET_CREATED_TOPIC, POOL, `0x${"00".repeat(12)}${ORACLE.slice(2)}`], data: encodeAbiParameters([{ type: "address" }], [RCV]) };
     const a = attributeLogs([log], emitters);
     expect(a.corkEvents).toHaveLength(1);
-    expect(a.corkEvents[0]).toMatchObject({ event: "JITMarketCreated (BaseFiller)", emitter: { role: "baseFiller", generation: { label: "phoenix/v0.4-rc.1", status: "active" } }, topic1: POOL });
+    expect(a.corkEvents[0]).toMatchObject({ event: "JITMarketCreated (BaseFiller)", emitter: { role: "baseFiller", generation: { label: "phoenix/v0.5", status: "active" } }, topic1: POOL });
   });
 });

@@ -191,13 +191,17 @@ export async function sweepPositions(
 
 /** Per-generation subtotals in RESOLUTION order (the primary first), one row per generation the
  *  sweep ASKED — a generation with no positions reports `pools: 0` and zero totals, so the
- *  reader sees "nothing on the new set yet" instead of a missing row. */
-export function summarizeByGeneration(asked: readonly ResolvedGeneration[], positions: readonly AccountPosition[]): Array<{ label: string; status: ResolvedGeneration["status"]; pools: number; corkSwapTokenTotal: bigint; corkPrincipalTokenTotal: bigint }> {
+ *  reader sees "nothing on the new set yet" instead of a missing row. A set whose pool manager
+ *  another set already owns (phoenix/v0.4-rc.1 beside phoenix/v0.5) carries `sharedWith`: its
+ *  pools are the same pools, counted on that set's row — its own zero is not "no positions". */
+export function summarizeByGeneration(asked: readonly ResolvedGeneration[], positions: readonly AccountPosition[], sharedWith: ReadonlyMap<string, string> = new Map()): Array<{ label: string; status: ResolvedGeneration["status"]; sharedWith?: string; pools: number; corkSwapTokenTotal: bigint; corkPrincipalTokenTotal: bigint }> {
   return asked.map((g) => {
     const mine = positions.filter((p) => p.generation.label === g.label);
+    const owner = sharedWith.get(g.label);
     return {
       label: g.label,
       status: g.status,
+      ...(owner !== undefined ? { sharedWith: owner } : {}),
       pools: mine.length,
       corkSwapTokenTotal: mine.reduce((acc, p) => acc + p.balances.corkSwapToken, 0n),
       corkPrincipalTokenTotal: mine.reduce((acc, p) => acc + p.balances.corkPrincipalToken, 0n),
@@ -244,12 +248,17 @@ export async function handleAccountPositions(
 
   // One address appears once (a manager two generations share is scanned once, attributed to
   // its FIRST generation in resolution order — the same rule configuredPoolManagerRefs applies).
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
+  const sharedWith = new Map<string, string>();
   const emitters: PositionsEmitter[] = [];
   for (const g of asked) {
     const pm = g.phoenix!.poolManager as `0x${string}`;
-    if (seen.has(pm.toLowerCase())) continue;
-    seen.add(pm.toLowerCase());
+    const owner = seen.get(pm.toLowerCase());
+    if (owner !== undefined) {
+      sharedWith.set(g.label, owner);
+      continue;
+    }
+    seen.set(pm.toLowerCase(), g.label);
     emitters.push({ poolManager: pm, wire: g.phoenix!.wire, label: g.label });
   }
 
@@ -270,7 +279,7 @@ export async function handleAccountPositions(
     for (const m of scan.rows) if (!byPool.has(String(m.poolId).toLowerCase())) byPool.set(String(m.poolId).toLowerCase(), m);
     const rows = [...byPool.values()];
     const positions = await sweepPositions(resolved.client, account, rows, generationOf, nowSecondsOf(ctx), ctx.atBlock);
-    const byGeneration = summarizeByGeneration(asked, positions);
+    const byGeneration = summarizeByGeneration(asked, positions, sharedWith);
     const scales = {
       balances: "cST / cPT share balances in 18-decimal share units (every generation's share tokens are 18 decimals) — collateral/reference balances are per-token, not per-position: read them with filters.poolId",
       expiry: "expiryTimestamp is unix SECONDS (the chain's integer); expiry is the same instant as strict ISO-8601 UTC at second precision (YYYY-MM-DDTHH:MM:SSZ) — one spelling for every source",

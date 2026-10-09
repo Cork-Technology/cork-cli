@@ -36,7 +36,7 @@ import { concatHex, decodeAbiParameters, decodeErrorResult, encodeAbiParameters,
 import type { Abi, PublicClient } from "viem";
 import { computeMarketId } from "./marketid.ts";
 import { cachedContractConstantBytes32, refreshContractConstant } from "./chain/constants-cache.ts";
-import type { MarketRegistryWire, PhoenixWire } from "./generations.ts";
+import type { JitPermitWire, MarketRegistryWire, PhoenixWire } from "./generations.ts";
 import type { Market, Market10, Market8 } from "./types.ts";
 
 const ZERO_ADDRESS = zeroAddress;
@@ -232,6 +232,17 @@ export const jitAdapterNestedAbi = parseAbi([
   "error OnlyLimitOrderProtocol()",
   "error OrderNotForPool()",
   "error ZeroAddress()",
+]);
+
+/** CorkLimitOrderAdapter 0.5.0 (market-registry 0.6.0, set phoenix/v0.5): the nested ABI with the
+ *  bytes permit row. Same selectors as 0.4.0; only the permit struct differs. */
+export const jitAdapterNestedBytesAbi = parseAbi([
+  "struct RateConstraintN { uint256 rateMin; uint256 rateMax; uint256 rateChangePerDayMax; uint256 rateChangeCapacityMax; }",
+  "struct MarketParamsN { address collateralAsset; address referenceAsset; uint256 expiryTimestamp; address recipe; uint256 rateOverride; RateConstraintN constraint; bytes extraData; bytes32 oracleSalt; uint256 swapFeePercentage; uint256 unwindSwapFeePercentage; }",
+  "struct JITMarketParamsN { MarketParamsN market; bool enableJitMint; }",
+  "struct PermitParamsB { address token; uint256 value; uint256 deadline; bytes signature; }",
+  "function encodeExtraData(JITMarketParamsN market, PermitParamsB[] permits) pure returns (bytes)",
+  "function decodeExtraData(bytes extraData) pure returns (JITMarketParamsN market, PermitParamsB[] permits)",
 ]);
 
 /** CorkMarketCreator 0.1.0 shipped by market-registry 0.5.0 (nested wire): createNewPool over the
@@ -528,7 +539,25 @@ export interface PermitParams {
   v: number;
   r: `0x${string}`;
   s: `0x${string}`;
+  /** The signature as bytes, for the `bytes` permit row only, when it is NOT a 65-byte ECDSA
+   *  signature (a contract wallet's ERC-1271 bytes); v/r/s are then zero. Absent: the row
+   *  carries r‖s‖v. */
+  signature?: `0x${string}` | undefined;
 }
+
+/** The signature bytes a `bytes` permit row carries: the raw signature, else r‖s‖v. */
+export function permitSignatureBytes(p: PermitParams): `0x${string}` {
+  return p.signature ?? concatHex([p.r, p.s, toHex(p.v, { size: 1 })]);
+}
+
+/** A decoded `bytes` permit row as PermitParams: a 65-byte signature splits into v/r/s, any
+ *  other length rides as `signature` with zero v/r/s. */
+export function permitOfBytesRow(row: { token: `0x${string}`; value: bigint; deadline: bigint; signature: `0x${string}` }): PermitParams {
+  const base = { token: row.token, value: row.value, deadline: row.deadline };
+  if (size(row.signature) === 65) return { ...base, r: sliceHex(row.signature, 0, 32), s: sliceHex(row.signature, 32, 64), v: Number(BigInt(sliceHex(row.signature, 64, 65))) };
+  return { ...base, v: 0, r: ZERO_WORD, s: ZERO_WORD, signature: row.signature };
+}
+const ZERO_WORD = `0x${"00".repeat(32)}` as const;
 
 /** The two registry wires this build's codecs implement (the `legacy` wire is the deprecated
  *  lane in market-registry-legacy.ts, reached through its own module). */
@@ -553,6 +582,18 @@ const PERMITS_ABI = {
     { name: "v", type: "uint8" },
     { name: "r", type: "bytes32" },
     { name: "s", type: "bytes32" },
+  ],
+};
+
+/** The `bytes` permit row (CorkLimitOrderAdapter 0.5.0): one signature the share token checks
+ *  with ECDSA for an EOA and ERC-1271 for a contract wallet. */
+const PERMITS_BYTES_ABI = {
+  type: "tuple[]" as const,
+  components: [
+    { name: "token", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+    { name: "signature", type: "bytes" },
   ],
 };
 
@@ -602,6 +643,17 @@ const JIT_PARAMS_NESTED_ABI = [
   },
   PERMITS_ABI,
 ];
+/** NESTED wire with the `bytes` permit row (market-registry 0.6.0's adapter). */
+const JIT_PARAMS_NESTED_BYTES_ABI = [
+  {
+    type: "tuple" as const,
+    components: [
+      { name: "market", type: "tuple", components: MARKET_PARAMS_NESTED_COMPONENTS },
+      { name: "enableJitMint", type: "bool" },
+    ],
+  },
+  PERMITS_BYTES_ABI,
+];
 
 type DecodedConstraint = { rateMin: bigint; rateMax: bigint; rateChangePerDayMax: bigint; rateChangeCapacityMax: bigint };
 type DecodedPermit = { token: `0x${string}`; value: bigint; deadline: bigint; v: number; r: `0x${string}`; s: `0x${string}` };
@@ -641,8 +693,14 @@ function nestedMarketParamsOf(p: Omit<JITMarketParams, "enableJitMint">): Nested
  *  the bytes member written as `additionalData` and the mint flag LAST; nested:
  *  abi.encode((MarketParams, enableJitMint), PermitParams[]) with `extraData`, `oracleSalt`, and
  *  the mint flag as the wrapper's second member. The adapter of that wire decodes exactly this. */
-export function encodeJitExtraData(wire: MarketRegistryWire, params: JITMarketParams, permits: readonly PermitParams[] = []): `0x${string}` {
+export function encodeJitExtraData(wire: MarketRegistryWire, params: JITMarketParams, permits: readonly PermitParams[] = [], permitWire: JitPermitWire = "vrs"): `0x${string}` {
   assertImplementedWire(wire);
+  if (permitWire === "bytes") {
+    if (wire !== "nested") throw new Error("encodeJitExtraData: the bytes permit row exists only on the nested wire (CorkLimitOrderAdapter 0.5.0)");
+    const rows = permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, signature: permitSignatureBytes(p) }));
+    return encodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI, [{ market: nestedMarketParamsOf(params), enableJitMint: params.enableJitMint }, rows]);
+  }
+  if (permits.some((p) => p.signature !== undefined)) throw new Error("encodeJitExtraData: a non-ECDSA permit signature cannot be encoded in the v/r/s permit row");
   const permitRows = permits.map((p) => ({ token: p.token, value: p.value, deadline: p.deadline, v: p.v, r: p.r, s: p.s }));
   if (wire === "flat") {
     if (!isZeroSalt(params.oracleSalt)) throw new Error("encodeJitExtraData: the flat (0.3.x) wire carries no oracleSalt — a non-zero salt cannot be encoded for a flat-wire adapter");
@@ -702,8 +760,12 @@ export function flattenNestedJitParams(out: readonly [{ market: NestedMarketPara
 
 /** Decode the adapter's extraData alone for the given wire — the same layout that wire's
  *  on-chain decodeExtraData helper returns, unwrapped into the flat TS shape. */
-export function decodeJitExtraData(wire: MarketRegistryWire, extraData: `0x${string}`): { params: JITMarketParams; permits: PermitParams[] } {
+export function decodeJitExtraData(wire: MarketRegistryWire, extraData: `0x${string}`, permitWire: JitPermitWire = "vrs"): { params: JITMarketParams; permits: PermitParams[] } {
   assertImplementedWire(wire);
+  if (permitWire === "bytes") {
+    const out = decodeAbiParameters(JIT_PARAMS_NESTED_BYTES_ABI, extraData) as unknown as readonly [{ market: NestedMarketParams; enableJitMint: boolean }, readonly { token: `0x${string}`; value: bigint; deadline: bigint; signature: `0x${string}` }[]];
+    return { params: flattenNestedJitParams([out[0], []]).params, permits: out[1].map(permitOfBytesRow) };
+  }
   if (wire === "flat") {
     const [p, permits] = decodeAbiParameters(JIT_PARAMS_FLAT_ABI, extraData) as [
       { collateralAsset: `0x${string}`; referenceAsset: `0x${string}`; expiryTimestamp: bigint; recipe: `0x${string}`; rateOverride: bigint; constraint: DecodedConstraint; additionalData: `0x${string}`; swapFeePercentage: bigint; unwindSwapFeePercentage: bigint; enableJitMint: boolean },
@@ -738,7 +800,7 @@ export function diffJitExtraData(encoded: { params: JITMarketParams; permits: re
   else {
     encoded.permits.forEach((ep, i) => {
       const dp = decoded.permits[i]!;
-      if (lc(ep.token) !== lc(dp.token) || ep.value !== dp.value || ep.deadline !== dp.deadline || ep.v !== dp.v || lc(ep.r) !== lc(dp.r) || lc(ep.s) !== lc(dp.s)) out.push(`permits[${i}]`);
+      if (lc(ep.token) !== lc(dp.token) || ep.value !== dp.value || ep.deadline !== dp.deadline || lc(permitSignatureBytes(ep)) !== lc(permitSignatureBytes(dp))) out.push(`permits[${i}]`);
     });
   }
   return out;
@@ -951,8 +1013,8 @@ export interface WireCodec {
   hasFeeCapView: boolean;
   /** The name the wire's own contracts use for the recipe bytes. */
   bytesField: "additionalData" | "extraData";
-  encodeExtraData: (params: JITMarketParams, permits?: readonly PermitParams[]) => `0x${string}`;
-  decodeExtraData: (extraData: `0x${string}`) => { params: JITMarketParams; permits: PermitParams[] };
+  encodeExtraData: (params: JITMarketParams, permits?: readonly PermitParams[], permitWire?: JitPermitWire) => `0x${string}`;
+  decodeExtraData: (extraData: `0x${string}`, permitWire?: JitPermitWire) => { params: JITMarketParams; permits: PermitParams[] };
   deployCall: (ca: `0x${string}`, ref: `0x${string}`, mode: OracleModeName, oracleSalt?: `0x${string}` | undefined) => `0x${string}`;
   creatorCreatePoolCall: (params: CreatorMarketParams) => `0x${string}`;
   verify: (client: Pick<PublicClient, "readContract">, a: Parameters<typeof recipeVerify>[2]) => Promise<boolean>;
@@ -985,8 +1047,8 @@ export const WIRES: Readonly<Record<ImplementedMarketRegistryWire, WireCodec>> =
     bindingChain: ["adapter.LIMIT_ORDER_PROTOCOL == the chain's LOP", "adapter.MARKET_CREATOR == the configured market creator", "creator.MARKET_REGISTRY == the configured registry", "creator.CONTROLLER → the controller whose POOL_CREATOR role the CREATOR holds", "adapter.POOL_MANAGER == creator.POOL_MANAGER == the generation's pool manager"],
     hasFeeCapView: false,
     bytesField: "extraData",
-    encodeExtraData: (params, permits) => encodeJitExtraData("nested", params, permits),
-    decodeExtraData: (bytes) => decodeJitExtraData("nested", bytes),
+    encodeExtraData: (params, permits, permitWire) => encodeJitExtraData("nested", params, permits, permitWire),
+    decodeExtraData: (bytes, permitWire) => decodeJitExtraData("nested", bytes, permitWire),
     deployCall: (ca, ref, mode, salt) => buildDeployOracleCall("nested", ca, ref, mode, salt),
     creatorCreatePoolCall: (params) => buildCreatorCreatePoolCall("nested", params),
     verify: (client, a) => recipeVerify("nested", client, a),

@@ -91,8 +91,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "gates",
     envelope: "unavailable",
     contract:
-      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
-    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only"],
+      "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses; generation_shared is its INFO sibling: a pool on a pool manager several sets share belongs to all of them, the result names the set it used and how to pass another); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
+    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only", "generation_shared"],
   },
   {
     family: "scan honesty",
@@ -404,7 +404,7 @@ plausible nonsense rather than failing.
 generation, but WHAT bounds them follows the pool manager's wire (\`cork_capabilities
 topic:"generations"\`): an 8-field manager (mainnet, \`phoenix/v0.3-rc.1\`, the older Arbitrum
 eras) caps each fee at 5e18 inclusive through \`MAX_FEE_PERCENTAGE\`; a 10-field manager
-(\`phoenix/v0.4-rc.1\`, the primary) has NO such getter and reverts \`InvalidFees()\` at or above
+(\`phoenix/v0.5\`, the primary, and \`phoenix/v0.4-rc.1\`) has NO such getter and reverts \`InvalidFees()\` at or above
 100e18 — and folds both fees into the \`Market\` struct, so they are part of the pool id.
 \`derive-cork-pool\` takes them as filters (default 0) for that reason; a fee that changes the
 identity is a different market, not a parameter of the same one.
@@ -607,7 +607,8 @@ Labels are the Distribution's names where one exists and the tool's own for the 
 | Chain | Label | Status | Contents |
 |---|---|---|---|
 | 1 | \`mainnet\` (primary) | active | the original chain-1 stack (8-field) |
-| 42161, 8453 | \`phoenix/v0.4-rc.1\` (**primary**) | active | phoenix 1.4.0-rc.1 (10-field), market-registry 0.5.0 (nested), rollover 0.2.0 (0.2), cork-periphery 0.2.0-rc.1 |
+| 42161, 8453 | \`phoenix/v0.5\` (**primary**) | active | the \`phoenix/v0.4-rc.1\` contracts with the market-registry 0.6.0 JIT adapter (CorkLimitOrderAdapter 0.5.0, \`bytes\` permit row, \`jitPermitWire: bytes\`) |
+| 42161, 8453 | \`phoenix/v0.4-rc.1\` | active | phoenix 1.4.0-rc.1 (10-field), market-registry 0.5.0 (nested), rollover 0.2.0 (0.2), cork-periphery 0.2.0-rc.1 |
 | 42161, 8453 | \`phoenix/v0.3-rc.1\` | active | phoenix v1.3.0-rc.1 (8-field), market-registry 0.3.3 (flat), rollover v0.1.0-rc.2 (rc.2) |
 | 42161 | \`arbitrum-v1.1\` | active | the previous production stack, where the venue's existing markets live (8-field; a pre-2.1.0 registry behind the deprecation gate; the retired July 2026 rollover set, rc.1) |
 | 42161 | \`arbitrum-legacy\` | read-only | the pre-launch calibration pools (8-field) |
@@ -883,13 +884,16 @@ exit from an old pool and an entry into a new one are therefore two ordinary cal
 
 ## The aliases on the \`generation\` input
 
-Every chain-backed input takes \`generation\`. Besides a label (\`phoenix/v0.4-rc.1\`,
+Every chain-backed input takes \`generation\`. Besides a label (\`phoenix/v0.5\`, \`phoenix/v0.4-rc.1\`,
 \`phoenix/v0.3-rc.1\`, \`arbitrum-v1.1\`) it takes two ALIASES:
 
 - \`primary\` — the same as omitting it: the chain's newest Distribution set.
 - \`previous\` — the newest ACTIVE non-primary generation that carries the contracts the call
   needs: a pool/phoenix call needs a pool manager, a registry call a market registry, a settler
-  call a rollover block. On Arbitrum and Base today that is \`phoenix/v0.3-rc.1\` for all three.
+  call a rollover block. A set that shares the primary's anchor contracts (the same pool manager,
+  registry and rollover factory) is skipped: it is the primary's own deployment under another label,
+  with no funds of its own to migrate from — so on Arbitrum and Base today \`previous\` is
+  \`phoenix/v0.3-rc.1\` for all three, never \`phoenix/v0.4-rc.1\` (name that one to target it).
   A chain with a single generation (mainnet) refuses \`previous\` as \`generation_unknown\`.
 
 \`all\` is NOT a selector: a prepare builds one artifact and a registry read answers for one

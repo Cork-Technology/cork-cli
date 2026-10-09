@@ -39,17 +39,17 @@ describe("cork_track verify forSelfAdapter — classified by its own bindings", 
   it("the reference adapter of the primary: verified, reference:true, combined surface, caller gate", async () => {
     const env = await verify(REFERENCE, rpc(REFERENCE, { CORK: PRIMARY.phoenix!.poolManager, LOP, WHITELIST: PRIMARY.phoenix!.whitelistManager! }));
     expect(env.state).toBe("ok");
-    expect(env.data as Data).toMatchObject({ verified: true, reference: true, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.4-rc.1" }, bindings: { poolManager: PRIMARY.phoenix!.poolManager, lop: LOP, whitelistManager: PRIMARY.phoenix!.whitelistManager } });
-    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.4-rc.1" });
+    expect(env.data as Data).toMatchObject({ verified: true, reference: true, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.5" }, bindings: { poolManager: PRIMARY.phoenix!.poolManager, lop: LOP, whitelistManager: PRIMARY.phoenix!.whitelistManager } });
+    expect(env.provenance.generation).toMatchObject({ label: "phoenix/v0.5" });
     expect(codes(env)).toEqual(["for_self_artifact"]);
-    expect(env.warnings[0]!.message).toMatch(/REFERENCE ForSelf adapter of the phoenix\/v0\.4-rc\.1 generation/u);
+    expect(env.warnings[0]!.message).toMatch(/REFERENCE ForSelf adapter of the phoenix\/v0\.5 generation/u);
   });
 
   it("an integrator's adapter bound to the primary: verified, reference:false, the message says whose code it is", async () => {
     const env = await verify(INTEGRATOR, rpc(INTEGRATOR, { CORK: PRIMARY.phoenix!.poolManager, LOP, WHITELIST: PRIMARY.phoenix!.whitelistManager! }));
     expect(env.state).toBe("ok");
-    expect(env.data as Data).toMatchObject({ verified: true, reference: false, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.4-rc.1" } });
-    expect(env.warnings[0]!.message).toMatch(/integrator-deployed ForSelf adapter bound to the phoenix\/v0\.4-rc\.1 generation.*its CODE is the integrator's to audit/u);
+    expect(env.data as Data).toMatchObject({ verified: true, reference: false, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.5" } });
+    expect(env.warnings[0]!.message).toMatch(/integrator-deployed ForSelf adapter bound to the phoenix\/v0\.5 generation.*its CODE is the integrator's to audit/u);
   });
 
   it("an adapter bound to the PREVIOUS generation's pool manager is classified there — pool-only (no LOP view) and pre-caller-gate (no WHITELIST view) are disclosed, not accused", async () => {
@@ -69,7 +69,7 @@ describe("cork_track verify forSelfAdapter — classified by its own bindings", 
       resolveRpc: rpc(arbPreviousRef, { CORK: arbPrimary.phoenix!.poolManager, LOP: LOP_ADDRESSES[42161]!, WHITELIST: arbPrimary.phoenix!.whitelistManager! }),
     });
     expect(env.state).toBe("ok");
-    expect(env.data as Data).toMatchObject({ verified: true, reference: false, generation: { label: "phoenix/v0.4-rc.1" } });
+    expect(env.data as Data).toMatchObject({ verified: true, reference: false, generation: { label: "phoenix/v0.5" } });
     // Bound where it belongs, it IS the reference adapter of the previous set.
     const home = ARB.find((g) => g.label === "phoenix/v0.3-rc.1")!.phoenix!;
     const ok = await runTool("cork_track", { mode: "verify", chainId: 42161, subject: { kind: "forSelfAdapter", adapter: arbPreviousRef } }, { nowSeconds: NOW, resolveRpc: rpc(arbPreviousRef, { CORK: home.poolManager, LOP: LOP_ADDRESSES[42161]! }) });
@@ -87,7 +87,7 @@ describe("cork_track verify forSelfAdapter — classified by its own bindings", 
     expect(wrongLop.warnings[0]!.message).toMatch(/LOP\(\) names 0x00000000000000000000000000000000000000ee, not the chain's 1inch LOP v4/u);
     const wrongWl = await verify(INTEGRATOR, rpc(INTEGRATOR, { CORK: PRIMARY.phoenix!.poolManager, LOP, WHITELIST: PREVIOUS.phoenix!.whitelistManager! }));
     expect(wrongWl.state).toBe("conflict");
-    expect(wrongWl.warnings[0]!.message).toMatch(/WHITELIST\(\) names .* not the phoenix\/v0\.4-rc\.1 generation's WhitelistManager/u);
+    expect(wrongWl.warnings[0]!.message).toMatch(/WHITELIST\(\) names .* not the phoenix\/v0\.5 generation's WhitelistManager/u);
   });
 
   it("a contract that refuses CORK() is not a ForSelf adapter; an empty account is a conflict; a transport failure is chain_read_failed, never a verdict", async () => {
@@ -114,12 +114,12 @@ describe("cork_track verify forSelfAdapter — classified by its own bindings", 
 });
 
 describe.skipIf(process.env["CORK_RPC_LIVE"] !== "1")("LIVE: an integrator's v0.4 adapter and the reference adapter on Base", () => {
-  it("the integrator's adapter is an integrator adapter of phoenix/v0.4-rc.1 with the combined surface and the caller gate; the reference adapter is Cork's", async () => {
+  it("the integrator's adapter is an integrator adapter of phoenix/v0.5 with the combined surface and the caller gate; the reference adapter is Cork's", async () => {
     const z = await runTool("cork_track", { mode: "verify", chainId: 8453, subject: { kind: "forSelfAdapter", adapter: INTEGRATOR } }, { nowSeconds: NOW });
     expect(z.state).toBe("ok");
-    expect(z.data as Data).toMatchObject({ verified: true, reference: false, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.4-rc.1" } });
+    expect(z.data as Data).toMatchObject({ verified: true, reference: false, surface: "combined", callerGate: true, generation: { label: "phoenix/v0.5" } });
     const r = await runTool("cork_track", { mode: "verify", chainId: 8453, subject: { kind: "forSelfAdapter", adapter: REFERENCE } }, { nowSeconds: NOW });
     expect(r.state).toBe("ok");
-    expect(r.data as Data).toMatchObject({ verified: true, reference: true, generation: { label: "phoenix/v0.4-rc.1" } });
+    expect(r.data as Data).toMatchObject({ verified: true, reference: true, generation: { label: "phoenix/v0.5" } });
   }, 60_000);
 });

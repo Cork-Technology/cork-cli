@@ -39,8 +39,9 @@ its unsigned artifact. Read each warning before deciding whether to sign or proc
 ## 2. Generations
 
 A chain hosts a set of contract generations. One is primary. On Arbitrum One and Base the primary
-is `phoenix/v0.4-rc.1` and the previous set is `phoenix/v0.3-rc.1`. A label names the Distribution record
-the contracts were cut in. Each result also carries that record name in `generation.distribution`.
+is `phoenix/v0.5` and the previous set is `phoenix/v0.3-rc.1`. `phoenix/v0.4-rc.1` stays active: it shares every
+contract with `phoenix/v0.5` except the JIT adapter, so `previous` skips it; name it to target it. A set
+records the Distribution its contracts were cut in. Each result also carries that record name in `generation.distribution`.
 
 Three rules cover every command:
 
@@ -278,7 +279,9 @@ out; `ch` warns before the transaction can revert.
 
 The JIT block (`--jit-market` on orders, the flags above on `create-pool`) names the recipe bytes
 `extraData`. The old name `additionalData` still works with a deprecation notice. The bytes follow
-the selected generation's wire: nested on `phoenix/v0.4-rc.1`, flat on `phoenix/v0.3-rc.1`.
+the selected generation's wire: nested on `phoenix/v0.5` and `phoenix/v0.4-rc.1`, flat on `phoenix/v0.3-rc.1`.
+The JIT permit row follows the set: `phoenix/v0.5` carries `permits[].signature` as bytes (ERC-1271 works);
+`phoenix/v0.4-rc.1` and the flat wire take 65-byte ECDSA only.
 
 ## 7. Inspect bytes — `ch decode`
 

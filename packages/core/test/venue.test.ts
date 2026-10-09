@@ -668,10 +668,10 @@ describe("footgun hardening: derive-and-clamp on submit + exact-arithmetic tripw
     expect(p.env.state).toBe("ok");
     expect(p.posted).toBe(1);
     expect(p.env.warnings.map((w) => w.code)).toEqual(["recipe_generation_notice"]);
-    expect(p.env.warnings[0]!.message).toMatch(/liquidity recipe of the primary phoenix\/v0\.4-rc\.1 generation/u);
+    expect(p.env.warnings[0]!.message).toMatch(/liquidity recipe of the primary phoenix\/v0\.5 generation/u);
     const q = await open(previousLiq);
     expect(q.env.state).toBe("ok");
-    expect(q.env.warnings[0]!.message).toMatch(/liquidity recipe of the phoenix\/v0\.3-rc\.1 generation \(active\), not the primary phoenix\/v0\.4-rc\.1.*passes on this RFQ silently/u);
+    expect(q.env.warnings[0]!.message).toMatch(/liquidity recipe of the phoenix\/v0\.3-rc\.1 generation \(active\), not the primary phoenix\/v0\.5.*passes on this RFQ silently/u);
     const u = await open("0x00000000000000000000000000000000000000ee");
     expect(u.env.state).toBe("ok");
     expect(u.env.warnings.map((w) => w.code)).toEqual(["recipe_not_found"]);

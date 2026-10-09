@@ -259,6 +259,11 @@ export async function getPoolDep(
   const g = r.generation;
   const ref: GenerationRef & { wire: PhoenixWire } = { label: g.label, status: g.status, ...(g.distribution !== undefined ? { distribution: g.distribution } : {}), wire: g.phoenix!.wire };
   const shares = { corkPrincipalToken: r.corkPrincipalToken, corkSwapToken: r.corkSwapToken };
+  // A pool on a pool manager several sets share belongs to all of them: say so, name the set the
+  // result used, and say how to pick another (only a label narrows; the pool cannot).
+  if (r.alsoIn.length > 0 && label === undefined) {
+    depWarn.push({ code: "generation_shared", message: `pool ${poolId} lives on pool manager ${r.poolManager}, which deployment sets ${[g.label, ...r.alsoIn].map((l) => `'${l}'`).join(" and ")} share — this result uses '${g.label}' (${g.primary ? "the primary" : "the first in list order"}); the sets differ in other contracts (for phoenix/v0.5 and phoenix/v0.4-rc.1, only the JIT adapter), so pass generation: '${r.alsoIn[0]}' to bind that set instead` });
+  }
   if (opts.purpose === "prepare" && g.status !== "active") {
     const refusal = envelope({
       state: "unavailable",

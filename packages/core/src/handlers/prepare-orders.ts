@@ -5,7 +5,7 @@ import { isAddressEqual, zeroHash } from "viem";
 import { type ChainId, ORDERS_TOPIC_REFERENCE, UNITS_TOPIC_REFERENCE, Envelope, executionEthTransaction, executionMakerLadder, executionMakerOrder, executionMakerOrderContractMaker, executionRolloverIntent, PrepareOrdersInput } from "@cork/schemas";
 import { allowedSenderSuffix, buildBitsInvalidateForOrder, buildCancelOrder, buildMakerOrder, buildTakerFill, classifyInvalidatorWord, decodeExtensionFields, decodeMakerTraits, encodeExtensionFields, hashLopOrder, isAllowedSender, LADDER_ID_MAX, ladderRungClientRequestId, LOP_ADDRESSES, type LopOrder, lopInvalidatorPlan, maskBits, planSlotSweep, readLopInvalidator, reconstructMakerOrder, type SlotSweepCandidate, slotCoordinates, type TakerFillResult } from "../orders.ts";
 import { annotateApprovalStatus, type ApprovalRequirement, approvalMissingWarning, makerApprovalRequirements, takerApprovalRequirements } from "../order-approvals.ts";
-import type { MarketRegistryWire } from "../generations.ts";
+import type { JitPermitWire, MarketRegistryWire } from "../generations.ts";
 import { buildDeployFixedRateOracleCall, buildJitExtension, deriveJitMarket, type JITMarketParams, predictShares, wireCodec } from "../market-registry.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
 import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, classifyRolloverSettler, hashJitMarketParams, retiredSettlerTeaching, type RolloverCall, type RolloverIntentArgs, standardRolloverHooks, RolloverJitWireError, ZERO_JIT_MARKET_HASH } from "../rollover.ts";
@@ -45,6 +45,8 @@ type MakerJitReport = {
   enableJitMint: boolean;
   /** The registry wire the extension bytes are encoded for + the generation it targets. */
   wire?: MarketRegistryWire;
+  /** The JIT adapter's permit row (`vrs` = 65-byte ECDSA only, `bytes` = ECDSA or ERC-1271). */
+  permitWire?: JitPermitWire;
   generation?: string;
   source?: NonNullable<Extract<JitLadderResult, { gate?: undefined }>["verified"]>["source"];
   oracle?: { address: `0x${string}` | null; deployed: boolean; rate?: bigint };
@@ -281,10 +283,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // maker tail below (cST prediction with maker-facing wording, extension encode) is local.
         const ladder = await runJitPreflightLadder({ ctx, chainId, lop, jm, side: "maker" });
         if (ladder.gate) return ladder.gate;
-        const { recipe, rateOverride, extraData: recipeBytes, oracleSalt, constraint, wire, phoenixWire } = ladder;
+        const { recipe, rateOverride, extraData: recipeBytes, oracleSalt, constraint, wire, permitWire, phoenixWire } = ladder;
         const codec = wireCodec(wire);
         warnings.push(...ladder.warnings);
-        jitData = { adapter: ladder.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint, wire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
+        jitData = { adapter: ladder.adapter, hook: "preInteraction (maker-side)", recipe, enableJitMint: jm.enableJitMint, wire, permitWire, ...(ladder.generation ? { generation: ladder.generation.label } : {}) };
 
         if (ladder.verified) {
           const { client, boundController, source, oracle, derived } = ladder.verified;
@@ -326,9 +328,18 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               if (!pred.exists && pred.status !== "unavailable") {
                 try {
                   const code = typeof (client as { getCode?: unknown }).getCode === "function" ? await (client as { getCode: (a: { address: `0x${string}` }) => Promise<`0x${string}` | undefined> }).getCode({ address: input.account }) : undefined;
-                  if (code !== undefined && code !== "0x") {
+                  // On the bytes permit row (phoenix/v0.5) a contract maker signs the permit through
+                  // ERC-1271, so one that already carries a permit over the cST rests as is.
+                  const permitCoversCst = cst !== undefined && cst !== null && (jm.permits ?? []).some((p) => p.token.toLowerCase() === cst.toLowerCase());
+                  if (code !== undefined && code !== "0x" && !(permitWire === "bytes" && permitCoversCst)) {
                     contractMakerPreRest = true;
-                    warnings.push({ code: "contract_maker_pre_rest", message: `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet: the JIT permit path is EOA-only, so create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place the cST → LOP allowance${jm.enableJitMint ? " and the collateral → JIT adapter allowance" : ""} from the account BEFORE the order rests — data.execution.then lists the steps in order` });
+                    const allowances = `the cST → LOP allowance${jm.enableJitMint ? " and the collateral → JIT adapter allowance" : ""}`;
+                    warnings.push({
+                      code: "contract_maker_pre_rest",
+                      message: permitWire === "bytes"
+                        ? `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet. Two paths: (1) sign the ERC-2612 permit over the predicted cST through the wallet's ERC-1271 (this set's JIT adapter takes signature bytes) and re-prepare with it in jitMarket.permits; or (2) create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place ${allowances} from the account BEFORE the order rests — data.execution.then lists path (2) in order`
+                        : `the maker ${input.account} is a CONTRACT account and the derived pool does not exist yet: this set's JIT adapter takes only an ECDSA permit (v/r/s), so create the pool first (cork_prepare_market create-pool with this order's jitMarket legs) and place ${allowances} from the account BEFORE the order rests — data.execution.then lists the steps in order`,
+                    });
                   }
                 } catch {
                   // unreadable code → nothing to say (the fill's ERC-1271 check decides later)
@@ -351,13 +362,13 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the extension is built but the cST side-match is unverified` });
           }
         }
-        const permits = parsePermitWires(jm.permits);
+        const permits = parsePermitWires(jm.permits, permitWire);
         const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData: recipeBytes, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
-        const extraData = codec.encodeExtraData(jitParams, permits);
+        const extraData = codec.encodeExtraData(jitParams, permits, permitWire);
         if (ladder.verified) {
           // Decode round-trip: the deployed adapter's own decoder is the layout oracle for the
           // bytes this build produced. A disagreement is the bytes-decoder failure class — refused.
-          const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
+          const layout = await verifyExtraDataLayout({ client: ladder.verified.client, adapter: ladder.adapter, wire, permitWire, extraData, params: jitParams, permits, chainId, ctx, artifact: "order" });
           if ("gate" in layout) return layout.gate;
           jitData = { ...jitData, extraDataLayout: layout.status };
         }
@@ -449,7 +460,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // order rests, or it sits on the book fillable-looking and every fill attempt reverts.
     const jitApprovalCtx =
       action.jitMarket && jitData && "adapter" in jitData
-        ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, enableJitMint: action.jitMarket.enableJitMint ?? false, ...("predictedCorkSwapToken" in jitData && jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+        ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, enableJitMint: action.jitMarket.enableJitMint ?? false, ...("permitWire" in jitData && jitData.permitWire ? { permitWire: jitData.permitWire } : {}), ...("predictedCorkSwapToken" in jitData && jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
         : undefined;
     const approvals = await annotateIfExplicitRpc(ctx, chainId, makerApprovalRequirements({
       maker: input.account,
@@ -1391,7 +1402,7 @@ async function buildTakerFillArtifact(a: {
   // liveness pre-flight already resolved — no extra chain-contact policy.
   const takerJitCtx =
     jitData && action.jitMarket
-      ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, ...(jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
+      ? { adapter: jitData.adapter, collateralAsset: action.jitMarket.collateralAsset, ...(jitData.permitWire ? { permitWire: jitData.permitWire } : {}), ...(jitData.predictedCorkSwapToken ? { predictedCorkSwapToken: jitData.predictedCorkSwapToken } : {}) }
       : undefined;
   let approvals = takerApprovalRequirements({
     taker: account,

@@ -49,6 +49,9 @@ export type PhoenixWire = (typeof PHOENIX_WIRES)[number];
  *  (0.5.x: (MarketParams, enableJitMint) + permits, extraData + oracleSalt, verify(7), deploy(4)). */
 export const MARKET_REGISTRY_WIRES = ["legacy", "flat", "nested"] as const;
 export type MarketRegistryWire = (typeof MARKET_REGISTRY_WIRES)[number];
+/** The JIT adapter's ERC-2612 permit row (see MarketRegistryBlockSchema.jitPermitWire). */
+export const JIT_PERMIT_WIRES = ["vrs", "bytes"] as const;
+export type JitPermitWire = (typeof JIT_PERMIT_WIRES)[number];
 
 /** Rollover wire: `rc.1` (the July 2026 v0.1.0-rc.1 set — OrderData 832 bytes, no jitMarketHash;
  *  RETIRED 2026-08-13, kept so a retired settler is named precisely, never encoded for), `rc.2`
@@ -105,6 +108,12 @@ export const MarketRegistryBlockSchema = z
     contractsVersion: z.string().optional(),
     deployedAtBlock: z.number().int().nonnegative().optional(),
     wire: z.enum(MARKET_REGISTRY_WIRES),
+    /** The JIT adapter's permit row, declared per set because two sets can share one registry and
+     *  differ ONLY in the adapter: `vrs` (token, value, deadline, v, r, s — CorkLimitOrderAdapter
+     *  0.4.0, the flat 0.3.x adapter) or `bytes` (token, value, deadline, bytes signature —
+     *  CorkLimitOrderAdapter 0.5.0 of market-registry 0.6.0, which a contract wallet can sign
+     *  through ERC-1271). Omitted = `vrs`. */
+    jitPermitWire: z.enum(JIT_PERMIT_WIRES).optional(),
   })
   .strip();
 export type MarketRegistryBlock = z.infer<typeof MarketRegistryBlockSchema>;
@@ -250,6 +259,22 @@ const describeList = (list: readonly ResolvedGeneration[]): string => list.map((
  *  ACTIVE set carrying every block kind in `needs` (no `needs` = any active non-primary set);
  *  none → `generation_unknown` naming the labels, so a chain with one generation (mainnet)
  *  refuses honestly instead of answering for the primary. */
+/** The contract that IS each block's deployment: a set whose anchors all equal the primary's is the
+ *  same deployment under another label. */
+const BLOCK_ANCHOR = {
+  phoenix: (g: ResolvedGeneration) => g.phoenix?.poolManager,
+  marketRegistry: (g: ResolvedGeneration) => g.marketRegistry?.registry,
+  rollover: (g: ResolvedGeneration) => g.rollover?.factory,
+} as const;
+
+/** True when every anchor the call needs (all three blocks when it names none) that both sets
+ *  carry is the same contract, and at least one is compared. */
+export function sharesPrimaryAnchors(g: ResolvedGeneration, primary: ResolvedGeneration, needs: readonly GenerationBlockKind[] = []): boolean {
+  const kinds = (needs.length > 0 ? needs : (Object.keys(BLOCK_ANCHOR) as GenerationBlockKind[])).filter((k): k is keyof typeof BLOCK_ANCHOR => k in BLOCK_ANCHOR);
+  const pairs = kinds.map((k) => [BLOCK_ANCHOR[k](g), BLOCK_ANCHOR[k](primary)] as const).filter(([x, y]) => x !== undefined && y !== undefined);
+  return pairs.length > 0 && pairs.every(([x, y]) => x!.toLowerCase() === y!.toLowerCase());
+}
+
 export function resolveGenerationAlias(
   list: readonly ResolvedGeneration[],
   label: GenerationLabel | undefined,
@@ -270,8 +295,12 @@ export function resolveGenerationAlias(
       },
     };
   }
-  // `previous`: the first non-primary ACTIVE set in resolution order that carries the blocks.
-  const previous = list.find((g) => !g.primary && g.status === "active" && needs.every((k) => g[k] !== undefined));
+  // `previous`: the first non-primary ACTIVE set in resolution order that carries the blocks AND
+  // is a different deployment of them. A set that shares the primary's anchor contracts (the
+  // same pool manager, registry and factory — phoenix/v0.4-rc.1 beside phoenix/v0.5, which differ
+  // only in the JIT adapter) holds no funds of its own to migrate FROM; it stays reachable by label.
+  const primary = primaryOf(list);
+  const previous = list.find((g) => !g.primary && g.status === "active" && needs.every((k) => g[k] !== undefined) && !(primary !== undefined && sharesPrimaryAnchors(g, primary, needs)));
   if (previous === undefined) {
     const kinds = needs.length > 0 ? ` carrying ${needs.join(" + ")} contracts` : "";
     return {
@@ -414,6 +443,9 @@ export function marketRegistryForWire(list: readonly ResolvedGeneration[], wire:
  *  interface under its historical name; classification, scan scoping, emitter attribution and
  *  decode labels all read this list). */
 export interface RolloverGenerationEntry {
+  /** Other sets that name this same rollover stack (same factory); the entry's `label` is the
+   *  first in list order. */
+  alsoIn?: GenerationLabel[];
   factory: `0x${string}`;
   exactSettler: `0x${string}`;
   partialSettler: `0x${string}`;
@@ -454,14 +486,27 @@ export function rolloverGenerationsOf(list: readonly ResolvedGeneration[]): Roll
     status,
     primary,
   });
+  // ONE entry per deployed rollover stack: two sets can share the same factory and settlers
+  // (phoenix/v0.5 and phoenix/v0.4-rc.1), and a second entry would read every settler and scan
+  // every log twice. The first set in list order keeps the entry; the others ride in `alsoIn`.
   const live = list.filter((g) => g.rollover !== undefined && g.rollover.retired === undefined);
   const retired = list.filter((g) => g.rollover !== undefined && g.rollover.retired !== undefined);
   // `list` is already primary-first, so the first live block belongs to the primary generation
   // whenever it has one; the flag lands on that entry and nowhere else.
-  return [
-    ...live.map((g, i) => entry(g, g.rollover!, "active", i === 0)),
-    ...retired.map((g) => entry(g, g.rollover!, "retired", false)),
-  ];
+  const seen = new Map<string, RolloverGenerationEntry>();
+  const out: RolloverGenerationEntry[] = [];
+  for (const [g, status] of [...live.map((g) => [g, "active"] as const), ...retired.map((g) => [g, "retired"] as const)]) {
+    const key = (g.rollover!.factory as string).toLowerCase();
+    const first = seen.get(key);
+    if (first !== undefined) {
+      first.alsoIn = [...(first.alsoIn ?? []), g.label];
+      continue;
+    }
+    const e = entry(g, g.rollover!, status, status === "active" && out.length === 0);
+    seen.set(key, e);
+    out.push(e);
+  }
+  return out;
 }
 
 // ── Pool-scoped generation resolution (one batched chain read) ──────────────────────────────────
@@ -478,6 +523,11 @@ export type PoolGenerationResolution =
       corkPrincipalToken: `0x${string}`;
       corkSwapToken: `0x${string}`;
       asked: Array<{ label: GenerationLabel; poolManager: `0x${string}` }>;
+      /** The OTHER sets whose pool manager is this same contract: two deployment sets can share
+       *  every phoenix contract and differ only elsewhere (phoenix/v0.5 and phoenix/v0.4-rc.1
+       *  differ only in the JIT adapter), so the pool alone cannot tell them apart. The first set
+       *  in list order (the primary first) wins; these are the labels it also belongs to. */
+      alsoIn: GenerationLabel[];
     }
   | {
       found: false;
@@ -533,7 +583,9 @@ export async function resolvePoolGeneration(
   const asked = reads.map((r) => ({ label: r.g.label, poolManager: r.poolManager, ...(r.error !== undefined ? { error: r.error } : {}) }));
   for (const r of reads) {
     if (r.shares !== undefined && r.shares[1].toLowerCase() !== ZERO) {
-      return { found: true, generation: r.g, poolManager: r.poolManager, corkPrincipalToken: r.shares[0], corkSwapToken: r.shares[1], asked: asked.map(({ label: l, poolManager }) => ({ label: l, poolManager })) };
+      const pm = r.poolManager.toLowerCase();
+      const alsoIn = reads.filter((o) => o.g.label !== r.g.label && o.poolManager.toLowerCase() === pm).map((o) => o.g.label);
+      return { found: true, generation: r.g, poolManager: r.poolManager, corkPrincipalToken: r.shares[0], corkSwapToken: r.shares[1], asked: asked.map(({ label: l, poolManager }) => ({ label: l, poolManager })), alsoIn };
     }
   }
   const causes = reads.filter((r) => r.shares === undefined).map((r) => (r as { cause?: unknown }).cause);
