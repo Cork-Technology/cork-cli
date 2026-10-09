@@ -358,7 +358,14 @@ export function registerWalletCommands(program: Command, deps: { env: Record<str
     .option("--json", "print as JSON")
     .action((file: string | undefined, opts: Record<string, unknown>) =>
       run(opts, async () => {
-        const text = file ? readFileSync(file, "utf8") : await (io.readStdin ?? defaultReadStdin)();
+        // The artifact is read before any key is touched, so a file that cannot be read is the
+        // caller's input, named as such — never the catch-all for errors that may carry key material.
+        let text: string;
+        try {
+          text = file ? readFileSync(file, "utf8") : await (io.readStdin ?? defaultReadStdin)();
+        } catch (e) {
+          throw new SignRefusal("artifact_unreadable", `cannot read the artifact to sign${file ? ` from ${file}` : " from standard input"} (${(e as NodeJS.ErrnoException)?.code ?? (e as Error)?.name ?? "error"}) — pass the path of a prepare result saved with --json, or pipe it in`);
+        }
         let doc: unknown;
         try {
           doc = JSON.parse(text);

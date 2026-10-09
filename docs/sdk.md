@@ -100,6 +100,7 @@ verification chain, and when the npm stage arrives.
 result envelope. Chain reads work with no configuration on Ethereum mainnet, Arbitrum One and
 Base. The SDK resolves a public RPC endpoint by itself.
 
+<!-- example: run-live -->
 ```ts
 import { runTool } from "@cork/core";
 
@@ -117,7 +118,10 @@ if (result.state === "ok") {
 
 Not sure which tool you need? Ask the SDK:
 
+<!-- example: run -->
 ```ts
+import { runTool } from "@cork/core";
+
 await runTool("cork_capabilities", { search: "unwind" });   // keyword → tool + filled template
 await runTool("cork_capabilities", { topic: "signing" });   // how to complete an unsigned artifact
 await runTool("cork_capabilities", { topic: "units" });     // the scale table (1e18 = 1.0 vs 1e18 = 1%)
@@ -127,6 +131,7 @@ await runTool("cork_capabilities", { topic: "units" });     // the scale table (
 
 Every tool returns the same shape:
 
+<!-- example: fragment -->
 ```ts
 { state, data, warnings, provenance, schemaVersion }
 ```
@@ -169,6 +174,7 @@ them.
 The root import gives you everything. Eight subpaths give you one tier each, so pure math never
 loads the venue client or an RPC transport:
 
+<!-- example: fragment -->
 ```ts
 import { runTool } from "@cork/core";                       // everything, with the envelope
 import { computeMarketId } from "@cork/core/math";          // pure math, zero IO
@@ -192,6 +198,7 @@ import { buildMakerOrder } from "@cork/core/orders";        // order primitives 
 The math tier works offline in any runtime. Here is the pool identity hash, the same derivation the
 contracts run:
 
+<!-- example: run -->
 ```ts
 import { computeMarketId, type Market8, type Market10 } from "@cork/core/math";
 
@@ -216,6 +223,7 @@ const market10: Market10 = {
   unwindSwapFeePercentage: 500_000_000_000_000_000n,    // 0.5%
 };
 const poolId10 = computeMarketId(market10, "10-field");
+console.log(poolId8, poolId10);           // two different pool ids
 ```
 
 `Market` is the union `Market8 | Market10`. `computeMarketId` takes the wire explicitly and refuses
@@ -238,6 +246,7 @@ money.
 This is the full life of an on-chain action. The SDK does steps 1 to 3 and step 5. Your wallet
 does step 4. Your RPC does step 6.
 
+<!-- example: fragment -->
 ```ts
 import { runTool } from "@cork/core";
 
@@ -301,6 +310,7 @@ kills the other. To share a bit on purpose, name an `ocoGroup`.
 
 `runTool` takes an optional third argument, the handler context:
 
+<!-- example: fragment -->
 ```ts
 await runTool(name, input, {
   nowSeconds: 1_800_000_000n,   // pin the clock; deadlines become reproducible
@@ -339,6 +349,7 @@ One rule: never commit an RPC URL. Pass endpoints through the environment.
 a path, the expectation, a "did you mean" suggestion and a corrected example. To validate earlier,
 for example at your own API boundary, use the schemas directly:
 
+<!-- example: fragment -->
 ```ts
 import { toolByName } from "@cork/schemas";
 

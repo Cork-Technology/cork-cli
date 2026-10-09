@@ -5,23 +5,30 @@ EIP-712 and ERC-1271, ERC-2612 permits, ERC-4626, CREATE2. **Chain:** Base (8453
 also runs on Arbitrum One (42161) with only the chain id and the asset addresses changed, because
 both contract sets live at identical addresses on both chains.
 
-**Status (2026-10-09).** A chain hosts a set of contract generations, one of them primary. The
-primary on Base and Arbitrum One is **`phoenix/v0.5`** (Distribution `phoenix/v0.5-rc.1`): Market
-Registry contracts release **0.6.0**, which is the 0.5.0 registry with a new JIT adapter,
-CorkLimitOrderAdapter 0.5.0 at `0x960Cd94B31121806b1b0Ff02230D189Ad0310616`. Its JIT permit is one
-`bytes` signature, so a Safe can sign it through ERC-1271. Every other contract is shared with
-`phoenix/v0.4-rc.1` (adapter `0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104`, v/r/s permits only),
-which stays active: pass `generation: "phoenix/v0.4-rc.1"` to target it. The shared 0.5.0 registry
-is `0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5`, on the Phoenix 1.4.0-rc.1 pool manager. Its
-registry holds registered assets since 2026-09-23 (14 on Base). No pool exists on it yet: every
-pool the venue lists today lives on the previous set, **`phoenix/v0.3-rc.1`**, contracts release **0.3.3**
-(registry `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. The
-worked examples below were run live on Base on 2026-09-25 and are shown as cork-cli `0.6.1-rc.1` reports them: the registry
-reads, the derivation and the order build against the primary, and the exercise against a live
-pool on the previous set. A prepare targets the primary unless you pass `--generation phoenix/v0.3-rc.1`.
-A read of an existing pool follows the generation the pool lives on. Treat this page as
-orientation and pull the authoritative values from the tool. `ch query protocol-config` lists both
-generations with every address and wire. Never hardcode them.
+**Status (2026-10-09).** A chain hosts a set of contract generations. One of them is the primary.
+On Base and Arbitrum One the primary is **`phoenix/v0.5`** (Distribution `phoenix/v0.5-rc.1`).
+It runs Market Registry contracts release **0.6.0**: the 0.5.0 registry
+`0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5` with a new JIT adapter, CorkLimitOrderAdapter 0.5.0 at
+`0x960Cd94B31121806b1b0Ff02230D189Ad0310616`, on the Phoenix 1.4.0-rc.1 pool manager
+`0xcC17…0C2D`. Its JIT permit is one `bytes` signature, so a Safe can sign it through ERC-1271.
+
+Two older sets stay active, and you select one with `--generation <label>`:
+
+- `phoenix/v0.4-rc.1` shares every contract with the primary except the JIT adapter
+  (`0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104`, which takes v/r/s permits only).
+- `phoenix/v0.3-rc.1` is the previous set: contracts release **0.3.3** (registry
+  `0xa78d8137B01058dD23e545b6557209eBBc9611F1`) on the Phoenix v1.3 pool manager. Most pools the
+  venue lists live there.
+
+On 2026-10-09 the venue listed 584 pools on Base: 551 on the previous set and 33 on the primary.
+Primary pools are short-dated, so pick a live one when you run the examples. A prepare targets the
+primary unless you pass `--generation`. A read of an existing pool follows the generation the pool
+lives on.
+
+We ran every example below live on Base on 2026-10-09 with cork-cli `0.7.1-rc.1`. The trimmed
+responses are that run. Treat them as orientation and take the real values from the tool:
+`ch query protocol-config` lists every generation with every address and wire. Never hardcode an
+address.
 
 This is a two-part handoff. Part one is a compact model of what Cork gives you and where your
 agent plugs in. Part two is `cork-cli`, a helper you drive from an MCP client or the shell to read
@@ -97,7 +104,7 @@ primary registry the sUSDe/mwUSDC oracle is not deployed yet, which changes one 
 
 ## 3. The flow, step by step
 
-Every command below ran live on Base on 2026-09-25 and returns an unsigned artifact or a plain
+Every command below ran live on Base on 2026-10-09. Each returns an unsigned artifact or a plain
 read. Trimmed responses follow each command. Conventions:
 
 - Replace `0xYOUR_SAFE` with the Safe you drive.
@@ -135,8 +142,9 @@ up by address:
 ```sh
 ch query registry-assets --chain-id 8453 --address 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca --json
 ```
+<!-- example: output data.items.0 -->
 ```jsonc
-// registry 0xe1f569f1…55c5, contractsVersion 0.5.0, generation phoenix/v0.4-rc.1
+// data.items[0]; data also names registry 0xe1f569f1…55c5, contractsVersion 0.6.0, generation phoenix/v0.5
 { "address": "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca", "name": "mwUSDC", "kind": "ERC4626",
   "priceSource": null,
   "navSource":   { "address": "0xc1256Ae5…A2Ca", "sourceType": "NAV", "sourceInterface": "ERC4626",
@@ -153,7 +161,8 @@ says `nav`. Fourteen assets are registered on Base today; `ch query registry-ass
 
 Two supporting tables explain how sources compare. Denominations map a unit to its symbol; on the
 0.5.0 registry they are keyed by unit address (five on Base: USD, ETH, wstETH, USDC, cbETH). Feeds
-are directed conversion edges with live answers (four on Base, all into USD). A pair whose sources
+are directed conversion edges with live answers (four on Base: ETH, USDC and cbETH into USD, and
+wstETH into ETH). A pair whose sources
 have no path to a common unit cannot get a price oracle.
 
 ```sh
@@ -210,15 +219,20 @@ A recipe is an approved contract address. Copy it from the registry, never from 
 ```sh
 ch query registry-recipes --chain-id 8453 --json
 ```
+<!-- example: output data -->
 ```jsonc
-// registry 0xe1f569f1…55c5, contractsVersion 0.5.0. The 0.5.0 recipes:
-{ "address": "0x679Cbd016587c423f342e5Ba31e58356228c964d", "source": "price" },   // LiquidityPriceRecipe
-{ "address": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3", "source": "nav"   },   // LiquidityNavRecipe: this pair
-{ "address": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49", "source": "fixed" },   // FixedRateRecipe
-{ "address": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9", "source": "nav"   }    // ApySpreadImpairmentRecipe
-// The 0.3.3 recipes stay approved beside them: 0xb881DB48…Dc55 (price), 0xAeD3D0e3…f66d (nav),
-// 0x133ac0fA…65C1 (fixed), 0x7340BfbE…9eCA (impairment).
+// data, trimmed: the primary's registry
+{ "generation": "phoenix/v0.5", "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", "contractsVersion": "0.6.0",
+  "items": [
+    { "address": "0x679Cbd016587c423f342e5Ba31e58356228c964d", "source": "price" },   // LiquidityPriceRecipe
+    { "address": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3", "source": "nav"   },   // LiquidityNavRecipe: this pair
+    { "address": "0xEC26bb7d911aFe374721Ecd963543f7e52468C49", "source": "fixed" },   // FixedRateRecipe
+    { "address": "0xd5e8F76AafA20aA9A8983A35B71Ad3A793070Ed9", "source": "nav"   }    // ApySpreadImpairmentRecipe
+  ] }
 ```
+
+The previous set has its own registry and its own four recipes. Add `--generation phoenix/v0.3-rc.1`
+to list them. A recipe works only on the registry that approves it.
 
 The liquidity policy: the rate may fall to 1 wei (`rateMin`), may never exceed twice the anchor
 (`rateMax`), may move one anchor per day (`rateChangePerDayMax`) with a total budget of three
@@ -227,8 +241,8 @@ had tracked the whole 10% loss within the hour.
 
 The impairment policy: you choose a duration and an annual spread. The band is
 `apy_spread × duration / 365 d`, the rate may move one day of the spread per day, with seven days
-of it available as a burst. Each recipe states its own limits, and they differ per generation: the
-`phoenix/v0.4-rc.1` recipe caps the spread at 100% a year and the duration at 30 days, and the
+of it available as a burst. Each recipe states its own limits, and they differ per generation. The
+0.5.0 recipe (on the primary and on `phoenix/v0.4-rc.1`) caps the spread at 100% a year and the duration at 30 days, and the
 duration must fit inside the pool's remaining life at the fill that creates the pool. The tool
 restates none of these: `rfq-open` asks the recipe (`resolve`, then `verify` with the pool expiry
 your block names) and returns its answer in `data.cover.resolved`, or a warning. A duration above
@@ -244,6 +258,7 @@ ch compute recipe-rate-constraint --chain-id 8453 --json \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --args-uints '["871637111019090856","1209600","10000000000000000000"]'
 ```
+<!-- example: output data -->
 ```jsonc
 // captured 2026-10-01: 14 days at 10% a year around the anchor 0.871637 = a 0.3836% band
 { "recipe": "0xd5e8F76A…0Ed9", "source": "nav",
@@ -283,8 +298,9 @@ ch query registry-oracle --chain-id 8453 --json \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca --oracle-mode nav
 ```
+<!-- example: output data -->
 ```jsonc
-{ "generation": "phoenix/v0.4-rc.1",
+{ "generation": "phoenix/v0.5",
   "oracle": { "address": "0x6df4a5EEd8dC546682253F5FDf2c1d8E17965836", "deployed": false, "deployable": true } }
 ```
 
@@ -301,7 +317,9 @@ the previous registry, where this pair's oracle has run since August:
 ch query registry-oracle --chain-id 8453 --json --generation previous \
   --collateral-asset 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2 \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca --oracle-mode nav
-# → "oracle": { "address": "0x9a1d1213…BF0E", "deployed": true, "rate": "871637111019090856", "rateScale": "ABSOLUTE, 1e18 = 1.0" }
+# → "generation": "phoenix/v0.3-rc.1",
+#   "oracle": { "address": "0x9a1d1213…BF0E", "deployed": true, "rate": "871637111019090856", "rateScale": "ABSOLUTE, 1e18 = 1.0" }
+#   (the rate on 2026-09-25; a NAV rate moves, and the examples below keep this anchor)
 ```
 
 Now ask the recipe what it would commit you to. This is the same staticcall a fill runs. Pass the
@@ -314,12 +332,13 @@ ch compute recipe-rate-constraint --chain-id 8453 --json \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --args-uints '["871637111019090856"]'
 ```
+<!-- example: output data -->
 ```jsonc
 { "recipe": "0xed6A6b04…87e3", "source": "nav",
   "constraint": { "rateMin": "1", "rateMax": "1743274222038181712",
                   "rateChangePerDayMax": "871637111019090856", "rateChangeCapacityMax": "2614911333057272568" },
   "rateOracle": { "address": "0x6df4a5EE…5836", "status": "predicted", "mode": "nav", "rate": null },
-  "note": "no live oracle — the recipe resolved from its fallback (the anchorRate in args); the fill deploys the oracle and re-checks with recipe.verify against the LIVE rate" }
+  "note": "no live oracle — the recipe resolved from its fallback (e.g. the anchorRate in args); the eventual fill deploys the oracle and re-checks with recipe.verify against the LIVE rate" }
 ```
 
 Without the anchor the call refuses with `recipe_refused` and `MalformedExtraData`. Once the
@@ -336,6 +355,7 @@ ch query derive-cork-pool --chain-id 8453 --json \
   --reference-asset 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca \
   --expiry "$EXP" --recipe 0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3 --args "$ANCHOR_HEX"
 ```
+<!-- example: output -->
 ```jsonc
 { "state": "ok", "data": {
   "recipe": "0xed6A6b04…87e3", "source": "nav",
@@ -431,7 +451,7 @@ do not fall back to a liquidity recipe under the impairment mode.
 Then watch for answers:
 
 ```sh
-ch query rfqs --chain-id 8453                      # every open RFQ (three were open on 2026-09-25)
+ch query rfqs --chain-id 8453                      # every open RFQ
 ch query rfq  --chain-id 8453 --rfq-id 'rfq_…'     # one RFQ with all its answers
 ch query rfqs --chain-id 8453 --watch              # alert when a requester accepts a quote nobody rested
 ```
@@ -464,19 +484,20 @@ ch decode order --chain-id 8453 --data '{…the signed order row…}' --json
 ```
 ```jsonc
 { "state": "ok", "data": { "jit": {
-  "verification": "trusted", "generation": "phoenix/v0.4-rc.1", "wire": "nested",
-  "adapter": "0x3E01C558fc0854e92e6ef2a84c19D6Bf9D82B104",
+  "verification": "trusted", "generation": "phoenix/v0.5", "wire": "nested",
+  "adapter": "0x960Cd94B31121806b1b0Ff02230D189Ad0310616",
   "collateralAsset": "0x211Cc4DD…5fE5d2", "referenceAsset": "0xc1256Ae5…A2Ca",
   "recipe": "0xed6A6b0448B89F35889Aaf6Df1bdEF27f83787e3", "rateOverride": "0",
   "constraint": { "rateMin": "1", "rateMax": "1743274222038181712", "rateChangePerDayMax": "871637111019090856", "rateChangeCapacityMax": "2614911333057272568" },
   "extraData": "0x…anchor…", "enableJitMint": true } } }
 ```
 
-Read `generation` and `wire`: `phoenix/v0.4-rc.1` and `nested` name the 0.5.0 adapter, whose payload wraps
-the creator's `MarketParams` with `extraData` and `oracleSalt` and the two fees inside the pool id.
-A row that decodes to `phoenix/v0.3-rc.1` and `flat` names the 0.3.3 adapter `0x8902a88912a334263fe3d731d03c267715b9374f`.
-The tool classifies the adapter first and decodes on that generation's layout. It never
-trial-decodes.
+Read `generation` and `wire`. `phoenix/v0.5` and `nested` name the primary's adapter. Its payload
+wraps the creator's `MarketParams`: `extraData`, `oracleSalt`, and the two fees, which are part
+of the pool id. `phoenix/v0.4-rc.1` names the older adapter `0x3E01…B104` on the same wire. A row
+that decodes to `phoenix/v0.3-rc.1` and `flat` names the 0.3.3 adapter
+`0x8902a88912a334263fe3d731d03c267715b9374f`. The tool identifies the adapter first and decodes
+with that generation's layout. It never decodes by trial.
 
 Pass your adapter as `--account`: the book is ranked for the address that calls the LOP, and for
 a ForSelf wallet that is the adapter, not the Safe. An empty book is a normal result; markets are
@@ -537,26 +558,30 @@ The arithmetic is fixed by the pool, so size the call before you build it. One c
 receive depends on the cST you hand in and the fee; the REF you pay depends on the rate, and the
 rate moves. That is the number your cap protects.
 
-No pool exists on the primary yet, so this run uses a live pool on the previous set: USDC/baseUSD,
-`0x38ed57ed18f87da879a0c7013e7abb4eb79170c7f9286a61dcac1da84ef365d5`, CA with 6 decimals. The tool
-follows the pool's generation on its own; the commands are identical for your pair.
+Your pair has no pool before its first fill, so this run uses a live pool on the primary with USDC
+as CA (6 decimals). Pick one that has not expired: `ch query cork-pools --chain-id 8453` lists the
+pools with their expiry. The run below used USDC/YCSUSDC, `0xe12aef66…319d`, which expires on
+2026-10-16. The tool follows the pool's generation; the commands are the same for your pair.
 
 ```sh
+POOL=0x…    # a live pool from ch query cork-pools
+
 # 1. Preview: what do 1000 CA cost in cST plus REF right now?
-ch compute cst-swap-rate --chain-id 8453 --json \
-  --pool-id 0x38ed57ed18f87da879a0c7013e7abb4eb79170c7f9286a61dcac1da84ef365d5 --collateral-assets-out 1000e6
+ch compute cst-swap-rate --chain-id 8453 --json --pool-id "$POOL" --collateral-assets-out 1000e6
 ```
+<!-- example: output -->
 ```jsonc
 { "state": "ok", "data": {
-  "generation": { "label": "phoenix/v0.3-rc.1", "status": "active", "distribution": "phoenix/v0.3-rc.1" },
-  "swapRate": "1090412000000000000", "cstSharesIn": "1000000000000000000000",
-  "referenceAssetsIn": "917084551527312612114", "fee": "0",
+  "generation": { "label": "phoenix/v0.5", "status": "active", "distribution": "phoenix/v0.5-rc.1", "alsoIn": ["phoenix/v0.4-rc.1"] },
+  "swapRate": "1076509000000000000", "cstSharesIn": "1000000000000000000000",
+  "referenceAssetsIn": "928928601618750981181", "fee": "0",
   "scales": { "swapRate": "1e18 = 1.0 (WAD)", "cstSharesIn": "cST shares, always 18-decimals",
               "referenceAssetsIn": "native decimals of the reference asset (18)", "fee": "native decimals of the collateral asset (6)" },
   "collateralDecimals": 6, "referenceDecimals": 18 } }
 ```
 
-Read it as: 1000 CA out cost 1000 cST plus 917.08 REF at 1.090412 CA per REF, no fee. Three
+Read it as: 1000 CA out cost 1000 cST plus 928.93 REF at 1.076509 CA per REF, with no fee.
+`alsoIn` says the pool manager is shared: the same pool is reachable through `phoenix/v0.4-rc.1`. Three
 numbers size the build. `cstSharesIn` is exact. `referenceAssetsIn` plus a margin becomes
 `maxReferenceAssetsIn`; the margin covers the rate moving before broadcast, and the unspent part
 comes back. `collateralAssetsOut` minus a small margin becomes `minCollateralAssetsOut`. A zero
@@ -564,9 +589,9 @@ preview means the market cannot pay right now, not that the cover is free.
 
 ```sh
 # 2. Build the unsigned exercise. Bounds from the preview: 1000e18 cST in, floor 995 CA out,
-#    cap 1100e18 REF in (20% over 917.08). Take the numbers from YOUR preview.
+#    cap 1100e18 REF in (18% over 928.93). Take the numbers from YOUR preview.
 ch exercise --chain-id 8453 --account 0xYOUR_SAFE --client-request-id exercise-0001 --json \
-  --pool-id 0x38ed57ed18f87da879a0c7013e7abb4eb79170c7f9286a61dcac1da84ef365d5 \
+  --pool-id "$POOL" \
   --cst-shares-in 1000e18 --receiver 0xYOUR_SAFE --min-collateral-assets-out 995e6 --max-reference-assets-in 1100e18
 
 # 3. Dry-run. Paste the artifact object from step 2.
@@ -576,10 +601,10 @@ ch track simulate --chain-id 8453 --subject '{"kind":"artifact","artifact":{…}
 The build's `summary` is the part to read before you sign. Four legs, in execution order:
 
 ```text
-1. fund via Permit2: pull 1000000000000000000000 of cST (0xFb72…5cf0) from you into the adapter (0xfa8A…72AD)
-2. fund via Permit2: pull 1100000000000000000000 of reference (0x9c68…c831) from you into the adapter (0xfa8A…72AD)
-3. run Cork 'safeExercise' on the adapter (0xfa8A…72AD) — proceeds to you (0xYOUR_SAFE)
-4. return the entire remaining balance of reference (0x9c68…c831) to you (0xYOUR_SAFE)
+1. fund via Permit2: pull 1000000000000000000000 of cST (0x9452…4647) from you into the adapter (0x71eB…84A7)
+2. fund via Permit2: pull 1100000000000000000000 of reference (0xE74c…ED56) from you into the adapter (0x71eB…84A7)
+3. run Cork 'safeExercise' on the adapter (0x71eB…84A7) — proceeds to you (0xYOUR_SAFE)
+4. return the entire remaining balance of reference (0xE74c…ED56) to you (0xYOUR_SAFE)
 ```
 
 Check three things. The two pulls match your cST count and your REF cap. Leg 3 names your Safe after
@@ -607,7 +632,7 @@ co-roll their principal and collects a premium. You are the filler: you roll you
 pay that premium. The settlers run on both chains in both generations. Find open orders:
 
 ```sh
-ch query rollover-orders --chain-id 8453 --kind orders      # 25 orders on Base on 2026-09-25
+ch query rollover-orders --chain-id 8453 --kind orders      # the open rollover orders, newest first
 ```
 
 One atomic `BaseFiller.execute` call takes the user's expiring cST, pays the premium in the order's

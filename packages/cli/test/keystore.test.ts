@@ -247,6 +247,18 @@ describe("ch sign", () => {
     expect(partial.code).toBe(2);
     expect(JSON.parse(partial.stderr).error.code).toBe("incomplete_transaction");
   });
+
+  it("an artifact file that cannot be read is the caller's input error, named, before any password", async () => {
+    const { env } = freshDir();
+    storeAlice(env);
+    const p = scripted({ confirm: [], secrets: [] });
+    const r = await runCli(["sign", "/nonexistent/tx.json", "--account", "alice", "--json"], {}, env, { prompter: p });
+    expect(r.code).toBe(2);
+    const error = JSON.parse(r.stderr).error as { code: string; message: string };
+    expect(error.code).toBe("artifact_unreadable");
+    expect(error.message).toMatch(/cannot read the artifact to sign from \/nonexistent\/tx\.json \(ENOENT\)/u);
+    expect(p.asked).toEqual([]); // no password was asked for
+  });
 });
 
 describe("ch submit rfq-* --account", () => {

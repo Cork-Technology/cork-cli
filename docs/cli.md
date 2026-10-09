@@ -113,9 +113,10 @@ ch query registry-feeds --chain-id <id>                      # directed conversi
 ch query registry-oracle --chain-id <id> \
   --collateral-asset <0x…> --reference-asset <0x…> --oracle-mode <price|nav>   # the pair's oracle: deployed, deployable, rate
 ch query derive-cork-pool --chain-id <id> \
-  --collateral-asset <0x…> --reference-asset <0x…> --expiry <unix> --recipe <0x…> \
+  --collateral-asset <0x…> --reference-asset <0x…> --expiry <unix> --recipe <0x…> [--args <0x…>] \
   [--swap-fee-percentage <1e18=1%>] [--unwind-swap-fee-percentage <…>] [--oracle-salt <bytes32>]
-  # derive one pool BEFORE it exists: pool id, cST and cPT addresses, constraint, existence
+  # derive one pool BEFORE it exists: pool id, cST and cPT addresses, constraint, existence.
+  # --args is abi.encode(anchorRate): a liquidity recipe needs it while the pair has no oracle.
 ```
 
 What the registry assumes, and what `ch` therefore does:
@@ -170,9 +171,10 @@ ch unwind-deposit --chain-id 8453 --pool-id <old> --collateral-assets-out 1000e6
   --owner <0x…> --receiver <0x…> --account <0x…> --client-request-id mig-exit-0001 --funding-mode erc20-approve   # before expiry
 ch withdraw --chain-id 8453 --pool-id <old> …                                                                    # after expiry
 
-# 3. Enter on the primary. Create the pool first if it does not exist yet.
+# 3. Enter on the primary. Create the pool first if it does not exist yet. A liquidity recipe on a
+#    pair whose oracle is not deployed needs the anchor rate: --extra-data is abi.encode(anchorRate).
 ch prepare market create-pool --chain-id 8453 --client-request-id mig-create-0001 \
-  --collateral-asset <0x…> --reference-asset <0x…> --expiry-timestamp <unix> --recipe <0x…>
+  --collateral-asset <0x…> --reference-asset <0x…> --expiry-timestamp <unix> --recipe <0x…> [--extra-data <0x…>]
 ch deposit --chain-id 8453 --pool-id <new> --collateral-assets-in 1000e6 --min-cpt-and-cst-shares-out 1 --receiver <0x…> …
 
 # 4. Verify.
@@ -242,7 +244,8 @@ ch prepare order maker-order --chain-id <id> --account <0x…> --client-request-
   [--expiry-seconds <n>] [--allowed-sender <0x…>] [--oco-group <key>] [--jit-market '{…}'] [--auction '{…}']
 ch prepare order maker-ladder … --rungs '[{"takingAmount":"…"},{"takingAmount":"…","allowedSender":"0x…"}]'   # 2 to 32 rungs in one call
 ch prepare order answer-rfq --chain-id <id> --account <0x…> --client-request-id <id> --rfq-id <rfq_…> \
-  [--answer-id <…> --option-id <…>] [--premium-annualized "0.041"] [--fill-sender <0x…>]            # the order AND the answer option that carries it
+  --premium-annualized "0.041" --expiry-timestamp <unix> [--fill-sender <0x…>]                      # a new answer: the order AND the option that carries it
+ch prepare order answer-rfq … --rfq-id <rfq_…> --answer-id <…> --option-id <…>                       # re-quote your own option at its premium and expiry
 ch prepare order rfq-write --chain-id <id> --account <0x…> --client-request-id <id> --request '{"type":"rfq-open",…}'
                                                                                                      # the CorkRfqWrite typed data every RFQ write is signed with
 ch prepare order finalize-maker-order --chain-id <id> --account <0x…> --client-request-id <id> \
@@ -383,8 +386,8 @@ it). No other tool's keystore folder is read.
 
 ```sh
 ch wallet new alice                          # new key; you type a password twice
-ch wallet import alice                       # existing key, typed at a hidden prompt
-printf %s "$KEY" | ch wallet import alice --from-stdin
+ch wallet import bob                         # existing key, typed at a hidden prompt
+printf %s "$KEY" | ch wallet import carol --from-stdin
 ch wallet list                               # names and addresses, no password needed
 ch prepare order rfq-write … --json | ch sign --account alice
 ch sign tx.json --account alice              # a COMPLETE transaction: nonce, gas and fees filled in

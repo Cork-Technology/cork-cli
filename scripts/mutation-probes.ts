@@ -144,6 +144,7 @@ const T = {
   rolloverFill: "packages/core/test/rollover-fill.test.ts",
   rolloverIntent: "packages/core/test/rollover.test.ts",
   rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
+  docExamples: "packages/cli/test/doc-examples.test.ts",
   cover: "packages/core/test/cover.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
@@ -10147,6 +10148,62 @@ const CATALOG: Mutant[] = [
     find: "wouldRevert: false, ...(targetHasCode !== undefined ? { targetHasCode } : {}), to,",
     replace: "wouldRevert: false, to,",
     tests: ["packages/core/test/track-simulate.test.ts"],
+  },
+  {
+    // A doc command with a misspelled flag must fail the doc-example run (exit 2), not pass.
+    id: "doc-example-flag-misspelled",
+    file: "docs/zyfai-quickstart.md",
+    find: 'ch compute cst-swap-rate --chain-id 8453 --json --pool-id "$POOL" --collateral-assets-out 1000e6',
+    replace: 'ch compute cst-swap-rate --chain-id 8453 --json --pool-id "$POOL" --collateral-asset-out 1000e6',
+    tests: [T.docExamples],
+  },
+  {
+    // A shell block runs top to bottom in one home: reusing a keystore name is a doc bug.
+    id: "doc-example-keystore-name-reused",
+    file: "docs/cli.md",
+    find: "ch wallet import bob                         # existing key, typed at a hidden prompt",
+    replace: "ch wallet import alice                       # existing key, typed at a hidden prompt",
+    tests: [T.docExamples],
+  },
+  {
+    // A JSON sample that does not parse misleads a reader who copies it.
+    id: "doc-example-json-unparseable",
+    file: "docs/zyfai-quickstart.md",
+    find: '{ "generation": "phoenix/v0.5", "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5", "contractsVersion": "0.6.0",',
+    replace: '{ "generation": "phoenix/v0.5", "registry": "0xe1f569f152bDB6eBB2d49cFd9d4aB98ECEe955c5" "contractsVersion": "0.6.0",',
+    tests: [T.docExamples],
+  },
+  {
+    // An unmarked TypeScript block is checked by nothing.
+    id: "doc-example-ts-marker-dropped",
+    file: "docs/sdk.md",
+    find: "<!-- example: run -->\n```ts\nimport { runTool } from \"@cork/core\";\n\nawait runTool(",
+    replace: "```ts\nimport { runTool } from \"@cork/core\";\n\nawait runTool(",
+    tests: [T.docExamples],
+  },
+  {
+    // A runnable TypeScript example that throws must fail.
+    id: "doc-example-ts-run-broken",
+    file: "docs/sdk.md",
+    find: "console.log(poolId8, poolId10);",
+    replace: "console.log(poolId8, poolId10); throw new Error(\"broken example\");",
+    tests: [T.docExamples],
+  },
+  {
+    // Variables carry across the blocks of one page, as in the reader's terminal.
+    id: "doc-example-vars-per-block",
+    file: "packages/cli/test/doc-examples.ts",
+    find: "      if (!SHELL.has(b.lang)) continue;\n",
+    replace: "      if (!SHELL.has(b.lang)) continue;\n      vars.clear();\n",
+    tests: [T.docExamples],
+  },
+  {
+    // `ch sign` on a missing file is the caller's input (exit 2, artifact_unreadable), never internal_error.
+    id: "sign-artifact-unreadable-dropped",
+    file: "packages/cli/src/wallet.ts",
+    find: '          throw new SignRefusal("artifact_unreadable",',
+    replace: '          throw e; void new SignRefusal("artifact_unreadable",',
+    tests: [T.keystore],
   },
 ];
 

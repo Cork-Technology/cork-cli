@@ -84,21 +84,21 @@ apk update && apk add cork-cli
 <summary><b>Run it from the container image (Docker or Podman)</b></summary>
 
 Every release also publishes a minimal Wolfi image with the same `ch` binary, for
-`linux/amd64` and `linux/arm64`. It runs as a non-root user and its entrypoint is `ch`, so
+`linux/amd64` and `linux/arm64`. It runs as a non-root user, and its entrypoint is `ch`, so
 the image takes the same arguments as the binary. Pick the tag from the
-[package page](https://github.com/Cork-Technology/cork-cli/pkgs/container/cork-cli); `latest`
-appears with the first production (non-rc) release.
+[package page](https://github.com/Cork-Technology/cork-cli/pkgs/container/cork-cli). There is
+no `latest` tag yet: only an audited v1.0.0 or later release moves it.
 
 ```sh
-docker pull ghcr.io/cork-technology/cork-cli:v0.5.0
-docker run --rm ghcr.io/cork-technology/cork-cli:v0.5.0 capabilities     # lists 9 tools
+docker pull ghcr.io/cork-technology/cork-cli:v0.7.0
+docker run --rm ghcr.io/cork-technology/cork-cli:v0.7.0 capabilities     # lists 9 tools
 ```
 
 The image caches RPC and config state under `/home/nonroot/.cache`. Mount a volume there to
 keep it between runs:
 
 ```sh
-docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.5.0 query protocol-config
+docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.7.0 query protocol-config
 ```
 
 The image has no shell, no package manager, and no setuid binary, and it runs as uid 65532.
@@ -112,17 +112,16 @@ reads (`full-decentralized` mode) extract the embedded native binding there on f
 docker run --rm --read-only \
   --tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/nonroot:rw,nosuid,nodev,size=64m \
   --cap-drop=ALL --security-opt=no-new-privileges --user 65532 \
-  -e ENVIO_API_TOKEN ghcr.io/cork-technology/cork-cli:v0.5.0 \
+  -e ENVIO_API_TOKEN ghcr.io/cork-technology/cork-cli:v0.7.0 \
   query whitelisted-addresses --chain-id 42161 --mode full-decentralized
 ```
 
-`ch` is PID 1 in the container and handles SIGTERM itself, so `docker stop` is immediate. The
-v0.4.0-rc.1 image predates that handler: give it `--init` for a prompt stop.
+`ch` is PID 1 in the container and handles SIGTERM itself, so `docker stop` is immediate.
 
 Verify the image the same way as a binary — by digest, against this repository's workflow:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/cork-technology/cork-cli:v0.5.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect ghcr.io/cork-technology/cork-cli:v0.7.0 --format '{{.Manifest.Digest}}'
 gh attestation verify oci://ghcr.io/cork-technology/cork-cli@sha256:<digest> --repo Cork-Technology/cork-cli
 ```
 
@@ -183,10 +182,10 @@ transport. Register the container as the server command:
 
 ```sh
 # A) built-in RPC defaults
-claude mcp add cork-defi -- "$(which docker)" run -i --rm ghcr.io/cork-technology/cork-cli:v0.5.0 mcp
+claude mcp add cork-defi -- "$(which docker)" run -i --rm ghcr.io/cork-technology/cork-cli:v0.7.0 mcp
 
 # B) your own RPC endpoint — pass it to the container, not to claude
-claude mcp add cork-defi -- "$(which docker)" run -i --rm -e CORK_RPC_URL=https://your-rpc-endpoint ghcr.io/cork-technology/cork-cli:v0.5.0 mcp
+claude mcp add cork-defi -- "$(which docker)" run -i --rm -e CORK_RPC_URL=https://your-rpc-endpoint ghcr.io/cork-technology/cork-cli:v0.7.0 mcp
 ```
 
 `"$(which docker)"` for the same reason as `"$(which ch)"` above: the subprocess may not see
@@ -260,7 +259,7 @@ ch mcp --http --port 9090    # custom port
 # in a container: bind all interfaces and publish the port — /healthz and /readyz answer 200
 # (/readyz is a summary without a bearer; see the env table), GET /mcp answers 405 by design
 # (Streamable HTTP is POST):
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cork-technology/cork-cli:v0.5.0 mcp --http --host 0.0.0.0
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cork-technology/cork-cli:v0.7.0 mcp --http --host 0.0.0.0
 
 # connect a client to a running HTTP deployment:
 claude mcp add --transport http cork-defi http://localhost:8080/mcp
@@ -294,32 +293,35 @@ attested image built from the tagged source.
 
 ## Use the CLI (`ch`)
 
-The same 9 tools run straight from a shell — handy for scripts and quick checks:
+The same 9 tools run from a shell. Use them in scripts and for quick checks:
 
 ```sh
-# reads: a positional for the resource, flags named after the schema's own fields
+# Reads: the resource is a positional, and the flags are the schema's own field names.
 ch query protocol-config
 ch query registry-assets --chain-id 42161
 
-# actions are subcommands, their fields are flags, amounts take exact sugar (1000e18, 1_000):
+# Each action is a subcommand, and its fields are flags. Amounts on flags take exact
+# sugar (1000e18, 1_000). A prepare needs your account and a client request id.
 ch compute rollover-premium-floor --dst-cst-produced 1000e18 --min-premium-per-share 12e15
-ch prepare pool exercise --chain-id 42161 --pool-id 0x… --cst-shares-in 1000e18 \
-  --receiver 0x… --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
-
-# the pool actions + fill are also top-level verbs — the same command, flatter:
-ch exercise --chain-id 42161 --pool-id 0x… --cst-shares-in 1000e18 --receiver 0x… \
+ch prepare pool exercise --chain-id 42161 --account 0x… --client-request-id exercise-0001 \
+  --pool-id 0x… --cst-shares-in 1000e18 --receiver 0x… \
   --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
-ch fill --chain-id 42161 --order-hash 0x… --account 0x…
 
-# on ch query, known filter keys are first-class flags (and `rfq` reads the rfqs feed):
+# The pool actions and fill are also top-level verbs: the same command, shorter.
+ch exercise --chain-id 42161 --account 0x… --client-request-id exercise-0001 \
+  --pool-id 0x… --cst-shares-in 1000e18 --receiver 0x… \
+  --min-collateral-assets-out 95e16 --max-reference-assets-in 1_000000
+ch fill --chain-id 42161 --account 0x… --client-request-id fill-0001 --order-hash 0x…
+
+# On ch query, the filter keys are flags too (`rfq` reads the rfqs feed).
 ch query orderbook --chain-id 42161 --pool-id 0x…
 ch query rfq --chain-id 42161 --rfq-id rfq_…
 
-# the same fields can ride in one JSON blob (flags override blob keys); bare --json = JSON output
+# The same fields can come as one JSON object; flags override its keys. Bare --json prints JSON.
 ch query protocol-config --input '{"chainId":42161}' --json
 
-ch compute --explain                # every parameter, unions unfolded
-ch compute cst-swap-rate --explain  # scoped to one variant
+ch compute --explain                # every parameter, with the variants unfolded
+ch compute cst-swap-rate --explain  # one variant
 ch compute --explain --json         # the same contract as JSON Schema
 ```
 
@@ -329,7 +331,7 @@ ch compute --explain --json         # the same contract as JSON Schema
 A shell alias makes the image behave like an installed `ch`:
 
 ```sh
-alias ch='docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.5.0'
+alias ch='docker run --rm -v cork-cache:/home/nonroot/.cache ghcr.io/cork-technology/cork-cli:v0.7.0'
 ch query registry-assets --chain-id 42161
 ```
 
@@ -418,6 +420,7 @@ the tarballs npm-install cleanly.
 The root export is the full SDK; domain subpaths let you load only the tier you need — a
 consumer of the pure math never loads the venue client or an RPC transport:
 
+<!-- example: fragment -->
 ```ts
 // The envelope: the exact same 9-tool contract the MCP server and CLI ship,
 // same result envelope ({ state, data, warnings, provenance }), same gates.
