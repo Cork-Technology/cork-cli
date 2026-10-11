@@ -80,6 +80,7 @@ ch query orderbook … --account <0x…> --watch [--interval <s>] [--iterations 
 ch query offers    --chain-id <id> --pool-id <0x…> --account <0x…>    # live orders joined with the RFQ quotes they cite
 ch query fills     --chain-id <id>                                     # executed trades
 ch query rollover-orders --chain-id <id> --kind orders                 # orders | fills | contracts
+ch query rollover-orders --chain-id <id> --kind orders --fillable true # only the orders a filler can fill now
 
 ch query rfqs --chain-id <id>                                          # open requests-for-quote
 ch query rfq  --chain-id <id> --rfq-id <rfq_…>                         # one RFQ with its answers

@@ -639,11 +639,16 @@ Near expiry, roll the user's cover into the successor market. Do not let it laps
 trade between two parties. A cPT holder, the supply side, signs the rollover order. The holder
 offers to roll their principal together with you, and collects a premium. You are the filler: you
 roll your user's cover and pay that premium. The rollover settlers of every active generation run on
-both chains. To find open orders:
+both chains. To find the orders you can fill now:
 
 ```sh
-ch query rollover-orders --chain-id 8453 --kind orders      # the open rollover orders, newest first
+ch query rollover-orders --chain-id 8453 --kind orders --fillable true
 ```
+
+The venue keeps a signed order `PENDING` after its deadlines pass. Without `--fillable true`, the
+read lists those orders too. Each row then carries `fillable`, and `whyNotFillable` names the
+settler error that refuses it, for example `Settler__FillAfterDeadline`. On 2026-10-09 none of the
+250 newest orders on Base could be filled.
 
 One atomic `BaseFiller.execute` call does three things. It takes the user's expiring cST. It pays
 the premium in the order's `premiumToken`. It delivers the fresh cST to the caller, the user's
@@ -779,8 +784,9 @@ Cork's reference adapter exists, and it is proven end to end. `CorkForSelfAdapte
 plus `fillOrderForSelf`), and it is custody-free. It delivers every output to the calling Safe,
 with no receiver parameter anywhere. It binds every fill on chain to a named Cork market, and
 every ERC-20 approval goes to the adapter itself. We exercised it end to end on live-chain forks,
-against the real 1inch LOP and both pool-manager generations. You still audit, vet and deploy it.
-Your users trust Zyfai.
+against the real 1inch LOP and two pool managers: `arbitrum-v1.1` and `phoenix/v0.3-rc.1`
+(cork-periphery `test/fork`). No fork test covers the primary's pool manager yet. You still audit,
+vet and deploy it. Your users trust Zyfai.
 
 **B. Markets in this flow have the pool-level whitelist OFF, by construction.** Cork's adapter
 performs the JIT mint inside a fill. A market with its whitelist on would refuse that mint, and

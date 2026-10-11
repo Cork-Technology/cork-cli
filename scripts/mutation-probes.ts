@@ -145,6 +145,7 @@ const T = {
   rolloverIntent: "packages/core/test/rollover.test.ts",
   rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
   docExamples: "packages/cli/test/doc-examples.test.ts",
+  rolloverFillability: "packages/core/test/rollover-order-fillability.test.ts",
   cover: "packages/core/test/cover.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
@@ -10204,6 +10205,94 @@ const CATALOG: Mutant[] = [
     find: '          throw new SignRefusal("artifact_unreadable",',
     replace: '          throw e; void new SignRefusal("artifact_unreadable",',
     tests: [T.keystore],
+  },
+  {
+    // rollover-fill refuses at fillDeadline <= now; the feed must agree at equality
+    id: "rollover-fillable-fill-deadline-strict",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (fillDeadline !== null && fillDeadline <= nowSeconds)",
+    replace: "if (fillDeadline !== null && fillDeadline < nowSeconds)",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // a lapsed order read as fillable is the incident this rule closes
+    id: "rollover-fillable-fill-deadline-dropped",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (fillDeadline !== null && fillDeadline <= nowSeconds) why.push(",
+    replace: "if (false) why.push(",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // an opened order is past openFor; its openDeadline no longer binds
+    id: "rollover-fillable-open-deadline-any-status",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (status === \"PENDING\" && openDeadline !== null && openDeadline <= nowSeconds)",
+    replace: "if (openDeadline !== null && openDeadline <= nowSeconds)",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // an unopened order past openDeadline reverts openFor
+    id: "rollover-fillable-open-deadline-dropped",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (status === \"PENDING\" && openDeadline !== null && openDeadline <= nowSeconds) why.push(",
+    replace: "if (false) why.push(",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // a settled order never fills again
+    id: "rollover-fillable-terminal-dropped",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (status !== null && TERMINAL_VENUE_STATUS.has(status)) why.push(",
+    replace: "if (false) why.push(",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // Closing is terminal on the settler too
+    id: "rollover-fillable-terminal-set-shrunk",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "const TERMINAL_VENUE_STATUS = new Set([\"SETTLED\", \"EXPIRED\", \"CANCELLED\", \"CLOSING\"]);",
+    replace: "const TERMINAL_VENUE_STATUS = new Set([\"SETTLED\", \"EXPIRED\", \"CANCELLED\"]);",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // a consumed order has nothing to fill
+    id: "rollover-fillable-remaining-dropped",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (remaining === 0n && (status === null || !TERMINAL_VENUE_STATUS.has(status))) why.push(",
+    replace: "if (false) why.push(",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // older venue rows carry remainingSize as a number
+    id: "rollover-fillable-number-size-ignored",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (typeof v === \"number\" && Number.isInteger(v)) return BigInt(v);",
+    replace: "",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // a row missing the fields the rule needs is unknown, never fillable
+    id: "rollover-fillable-unknown-guessed",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "return status === null || fillDeadline === null ? { fillable: null } : { fillable: true };",
+    replace: "return { fillable: true };",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // every refusal is named
+    id: "rollover-fillable-first-reason-only",
+    file: "packages/core/src/handlers/rollover-ranges.ts",
+    find: "if (why.length > 0) return { fillable: false, whyNotFillable: why };",
+    replace: "if (why.length > 0) return { fillable: false, whyNotFillable: why.slice(0, 1) };",
+    tests: [T.rolloverFillability],
+  },
+  {
+    // the query must mark the rows, not only export the rule
+    id: "rollover-fillable-not-applied",
+    file: "packages/core/src/handlers/query.ts",
+    find: "items = (items as Array<Record<string, unknown>>).map((row) => ({ ...row, ...rolloverOrderFillability(row, now) }));",
+    replace: "",
+    tests: [T.rolloverFillability],
   },
 ];
 

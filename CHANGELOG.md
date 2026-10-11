@@ -16,6 +16,7 @@ covered.
   - a `fillDeadline` that is not strictly before the expiry of both pools (`Settler__FillDeadlineExceedsPoolExpiry`).
 
   A just-in-time destination that does not exist yet is accepted. When a read fails, the result says so and the order still builds. `data.ranges` gives the pool manager, the quantum, the deadline bound and the fill sizes.
+- **A rollover-order read says whether each order can be filled now.** The venue keeps a signed order `PENDING` after its deadlines pass. The settler still answers `None` for it, so the row read as `confirmed`. On 2026-10-09, 187 of the 250 newest orders on Base were lapsed this way, and none could be filled. Each `cork_query rollover-orders` row (kind `orders`) now carries `fillable` and `whyNotFillable`, from the order's own signed deadlines and its status. These are the rules `rollover-fill` refuses on: a terminal status, a passed `fillDeadline`, a passed `openDeadline` on an unopened order, or nothing left. `data.fillability` counts the rows and points to `filters.fillable`, which makes the venue list only fillable orders. The check needs no RPC.
 - **`rollover-fill` reads from the settler how much of a partial order is consumed.** `PartialSettler.rolloverAccountingOf(digest).srcCstConsumed` sets the default fill size. It outranks the venue's `remainingSize`, and a difference warns `status_mismatch` (info). The tool refuses a fill larger than what remains, and a second fill from the same account (`Settler__AlreadyFilled`). `data.fillRange` gives the valid sizes: kind, remaining, min, max, step, and the smallest fill that clears the holder's floors.
 - **The holder's floors are taught per fill.** The clone checks `minCaReceived` and `minSharesOut` on each fill, not once per order. On a partial order, `rollover-intent` names the smallest fill that clears them. `rollover-fill` warns `would_revert` when the fill does not clear them.
 - **Every example in the docs runs.** A new suite (`packages/cli/test/doc-examples.test.ts`) reads `README.md` and `docs/*.md`:
@@ -48,7 +49,7 @@ covered.
   - `docs/sdk.md` said that `runTool` returns teaching errors on bad input. It throws a `ToolInputError` that carries them. It also said that every call fails over, but an explicit RPC endpoint never does.
   - `docs/sdk-roadmap.md` named two SDK tarballs (there are three), an install by URL (you install a downloaded file), and only `viem` and `zod` as dependencies (the optional HyperSync client packages come from npm too).
   - `README.md` said that the apk index is not live yet, that an explicit RPC is used with no probe (it must prove its chain), and that the pool actions run on mainnet and Arbitrum only (Base too). It gave the old venue pools URL.
-  - `docs/zyfai-quickstart.md` said that `jit_side_mismatch` refuses an order (it warns), listed three recipes for the previous set (it has four), and did not name the `arbitrum-v1.1` set.
+  - `docs/zyfai-quickstart.md` said that `jit_side_mismatch` refuses an order (it warns), listed three recipes for the previous set (it has four), and did not name the `arbitrum-v1.1` set. It said the ForSelf adapter was fork-tested against both pool managers; the tests cover `arbitrum-v1.1` and `phoenix/v0.3-rc.1`, not the primary's.
 
 ### Security
 

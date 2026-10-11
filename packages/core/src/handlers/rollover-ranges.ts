@@ -176,3 +176,40 @@ export function sameCollateralMinFill(f: RollPoolFacts, floors: { minCaReceived:
   if (f.src.quantum === null || f.src.collateral === null || f.dst?.collateral == null || !isAddressEqual(f.src.collateral, f.dst.collateral)) return null;
   return minFillClearingFloors({ ...floors, srcBurned: f.src.quantum, collateralOut: 1n, expectedDstCst: f.src.quantum, quantum: f.src.quantum });
 }
+
+/** Venue status words for an order the settler will never fill again (chain Settled, Expired,
+ *  Cancelled, Closing — `Settler__OrderInTerminalState`). */
+const TERMINAL_VENUE_STATUS = new Set(["SETTLED", "EXPIRED", "CANCELLED", "CLOSING"]);
+
+export interface RolloverFillability {
+  /** true: the settler's status and deadlines admit a fill now. false: they refuse one. null: the
+   *  row lacks a field the rule needs. rollover-fill still checks the clone, the sizes and the
+   *  floors; this is only what the order's own terms decide. */
+  fillable: boolean | null;
+  /** Each reason the settler refuses, with its error. Absent when fillable. */
+  whyNotFillable?: string[];
+}
+
+/** Whether the settler admits a fill of a venue rollover-order row now: the same rules
+ *  rollover-fill refuses on, read from the row's own signed deadlines and its (chain-verified)
+ *  status. The venue keeps a signed order PENDING after its deadlines pass, so an unfiltered read
+ *  needs this to tell a live order from a lapsed one. */
+export function rolloverOrderFillability(row: Record<string, unknown>, nowSeconds: bigint): RolloverFillability {
+  const num = (v: unknown): bigint | null => {
+    if (typeof v === "bigint") return v;
+    if (typeof v === "number" && Number.isInteger(v)) return BigInt(v);
+    if (typeof v === "string" && /^\d+$/.test(v)) return BigInt(v);
+    return null;
+  };
+  const status = typeof row.status === "string" ? row.status.toUpperCase() : null;
+  const fillDeadline = num(row.fillDeadline);
+  const openDeadline = num(row.openDeadline);
+  const remaining = num(row.remainingSize);
+  const why: string[] = [];
+  if (status !== null && TERMINAL_VENUE_STATUS.has(status)) why.push(`the order is ${status.toLowerCase()} (Settler__OrderInTerminalState)`);
+  if (fillDeadline !== null && fillDeadline <= nowSeconds) why.push(`its fillDeadline ${fillDeadline} has passed (Settler__FillAfterDeadline)`);
+  if (status === "PENDING" && openDeadline !== null && openDeadline <= nowSeconds) why.push(`it is not opened and its openDeadline ${openDeadline} has passed (Settler__OpenAfterOpenDeadline)`);
+  if (remaining === 0n && (status === null || !TERMINAL_VENUE_STATUS.has(status))) why.push("nothing of the order remains (Settler__RolloverAmountOutOfBounds)");
+  if (why.length > 0) return { fillable: false, whyNotFillable: why };
+  return status === null || fillDeadline === null ? { fillable: null } : { fillable: true };
+}

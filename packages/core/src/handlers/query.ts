@@ -16,6 +16,7 @@ import { getLopFills, getLopMarkets, getLopOrderbook, getPools, getRfq, getRfqs,
 import { chainReadFailed, envelope, firstLine, generationData, generationRefOf, getDep, getPoolDep, getRpc, type HandlerContext, nowSecondsOf, PERMIT2_ADDRESS, rpcProvenance, rpcWarn, ToolInputError, unavailable, venueDepsOf, venueFailed, generationRefusal } from "./shared.ts";
 import { assertFiltersApplicable, parseQueryFilters, type QueryFilters } from "./filters.ts";
 import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from "./hybrid-verify.ts";
+import { rolloverOrderFillability } from "./rollover-ranges.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
 import { citedOptionKeys, citedRolloverOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
@@ -608,6 +609,21 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
       const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
       let items = verification ? verification.items : traversal.items;
+      // rollover orders: the venue keeps a signed order PENDING after its deadlines pass, and its
+      // settler still answers None (consistent, so "confirmed"). Each row says whether the settler
+      // admits a fill now, from its own signed deadlines — the rule rollover-fill refuses on.
+      let fillability: { fillable: number; notFillable: number; unknown: number; note: string } | undefined;
+      if (input.resource === "rollover-orders" && (filters.kind ?? "orders") === "orders") {
+        const now = nowSecondsOf(ctx);
+        items = (items as Array<Record<string, unknown>>).map((row) => ({ ...row, ...rolloverOrderFillability(row, now) }));
+        const rows = items as Array<{ fillable: boolean | null }>;
+        fillability = {
+          fillable: rows.filter((r) => r.fillable === true).length,
+          notFillable: rows.filter((r) => r.fillable === false).length,
+          unknown: rows.filter((r) => r.fillable === null).length,
+          note: "each row's `fillable` is what its settler status and signed deadlines decide now (`whyNotFillable` names the settler error); rollover-fill still checks the clone, the sizes and the floors. Pass filters.fillable true to have the venue list only fillable orders",
+        };
+      }
       // rfqs with answers embedded: label every option FIRM (a LIVE resting order cites it via
       // quoteRef) or indicative, from the same ranked-book read `offers` makes — the venue serves
       // no firm label, and a quote nobody can buy must not read like one (2026-09-02). One
@@ -734,6 +750,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           ...ranking,
           ...(firmness ? { firmness } : {}),
           ...(rolloverFirmness ? { rolloverFirmness } : {}),
+          ...(fillability ? { fillability } : {}),
           ...(verification
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),
