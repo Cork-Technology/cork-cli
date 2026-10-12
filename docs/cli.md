@@ -611,6 +611,45 @@ you continue. See the failure table above.
 
 Publishing a release does not deploy the hosted MCP service.
 
+### Upgrade past 0.7.1-rc.1: a rollover fill needs a floor
+
+The release after 0.7.1-rc.1 changes one covered behavior. Before, `rollover-fill` signed
+`minDstPerSrc` = 0 when you omitted it and the tool could not derive a rate. At 0 the settler checks
+no mint rate, so the cPT holder's hooks could keep the whole roll. Now the tool builds no bytes in
+that case. It refuses with `dst_floor_underivable` (exit 3, an `unavailable` result on stdout).
+
+You are affected if you build rollover fills in one of these ways:
+
+- with no RPC (`data.gap` is `no-rpc`);
+- between pools with different collateral (`cross-collateral`);
+- against a pool that no preview can price (`source-pool-unknown`, `destination-pool-unknown`,
+  `source-closed`, `destination-closed`, `read-failed`).
+
+Do this:
+
+1. Handle `dst_floor_underivable` as a refusal, not a crash. Read `data.gap` for the cause.
+2. Pass `--min-dst-per-src` (`minDstPerSrc`, 1e18 = 1.0) yourself. For a roll between two pools
+   with the same collateral, the honest floor is `1e18`: Phoenix mints one destination cST per
+   source cST. For a roll across collaterals, price the conversion that the mid-roll hook makes.
+3. Never pass 0 unless you accept that the cPT holder's hooks can keep the whole roll. The tool
+   builds it and warns `no_dst_floor`.
+
+```sh
+ch prepare order rollover-fill --chain-id <id> --account <0x…> --client-request-id <id> \
+  --order-digest <0x…> --min-dst-per-src 1e18
+```
+
+Two more changes in the same release do not break a caller, but they can stop a fill earlier:
+
+- `rollover-fill` refuses a fill size that is not a multiple of the source share quantum
+  (`invalid_order_terms`), and a fill larger than what remains of a partial order.
+- `rollover-intent` refuses an order that the settler can never open (`invalid_order_terms`): a
+  pool on another pool manager, an `orderSize` off the quantum, or a `fillDeadline` that is not
+  before the expiry of both pools.
+
+`cork_query rollover-orders` rows now carry `fillable` and `whyNotFillable`. Pass
+`--fillable true` to list only the orders a filler can fill now.
+
 
 ### Reference: terminology
 

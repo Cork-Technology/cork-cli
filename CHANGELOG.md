@@ -63,7 +63,7 @@ The migration topic (step 6), `docs/cli.md` and the Zyfai quickstart now teach t
 
 ### Changed (breaking)
 
-- **`rollover-fill` refuses when it cannot derive a floor that you did not state.** Before, a fill built with no RPC, or against pools that no preview could price, signed `minDstPerSrc` = 0. Now it builds no bytes and refuses `dst_floor_underivable`. `data.gap` says why: `no-rpc`, `destination-pool-unknown`, `cross-collateral`, `source-closed`, `destination-closed`, `read-failed`, and others. To build in these cases, pass `minDstPerSrc`: 1e18 is the honest floor of a roll between two pools with the same collateral. The schema field has no default now.
+- **`rollover-fill` refuses when it cannot derive a floor that you did not state.** Before, a fill built with no RPC, or against pools that no preview could price, signed `minDstPerSrc` = 0. Now it builds no bytes and refuses `dst_floor_underivable`. `data.gap` says why: `no-rpc`, `destination-pool-unknown`, `cross-collateral`, `source-closed`, `destination-closed`, `read-failed`, and others. To build in these cases, pass `minDstPerSrc`: 1e18 is the honest floor of a roll between two pools with the same collateral. The schema field has no default now. `docs/cli.md` (section 12, "Upgrade past 0.7.1-rc.1") gives the upgrade steps.
 
 ## [0.7.1-rc.1] — 2026-10-09
 
