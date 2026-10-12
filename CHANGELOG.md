@@ -7,6 +7,8 @@ covered.
 
 ## [Unreleased]
 
+## [0.7.1-rc.2] — 2026-10-12
+
 ### Added
 
 - **The valid ranges of a rollover order and of each fill.** We read the rules from the deployed settlers: rollover v0.2.0 (tag `fa247696`) and v0.1.0-rc.2, which enforce the same ones. `cork_capabilities topic:"rollover"` teaches them in one place (aliases `rollover-ranges`, `settlers`, `fill-sizes`). It names the two parties and compares the ExactSettler with the PartialSettler. A table gives each order field and fill input, its valid range, and the settler error.
@@ -62,9 +64,13 @@ covered.
 
 The migration topic (step 6), `docs/cli.md` and the Zyfai quickstart now teach the split: BaseFiller decides where the value goes, and the clone decides how much. A session-key policy that pins only (BaseFiller, execute) cannot enforce the floor, so the wallet must set or keep it. The planning#83 fork script is now also the regression for this fix (23 checks): the tool's default fill of the attack reverts, and an explicit 0 still loses. Thanks to the planning#83 fork proof, which showed the attack and the fix.
 
-### Changed (breaking)
+### Changed
 
 - **`rollover-fill` refuses when it cannot derive a floor that you did not state.** Before, a fill built with no RPC, or against pools that no preview could price, signed `minDstPerSrc` = 0. Now it builds no bytes and refuses `dst_floor_underivable`. `data.gap` says why: `no-rpc`, `destination-pool-unknown`, `cross-collateral`, `source-closed`, `destination-closed`, `read-failed`, and others. To build in these cases, pass `minDstPerSrc`: 1e18 is the honest floor of a roll between two pools with the same collateral. The schema field has no default now. `docs/cli.md` (section 12, "Upgrade past 0.7.1-rc.1") gives the upgrade steps.
+
+### Compatibility
+
+Compared with `v0.7.1-rc.1`, no tool name, input-schema field, type or enum changes, and every SDK export keeps its name and shape. Tool descriptions are reworded, and one schema default is gone: `rollover-fill.minDstPerSrc` had `"0"`. JSON output changes by additions: `fillable` and `whyNotFillable` on rollover-order rows, `data.fillability`, `data.ranges`, `data.dstFloor` and `data.trust`. Behaviour changes on purpose in one way: the tool now refuses to build bytes that sign away value or that the settler always reverts. A `rollover-fill` that omits `minDstPerSrc` gets a derived floor, or the refusal `dst_floor_underivable` (exit 3) where it built a fill with no floor before. `rollover-intent` and `rollover-fill` refuse what the settler can never open or fill (pool not on its pool manager, size not a multiple of the share quantum, a deadline past a pool's expiry). We class these as safety checks, not as a change to covered surface. To keep the old result, pass `minDstPerSrc` (1e18 for a same-collateral roll); `docs/cli.md` section 12 gives the steps.
 
 ## [0.7.1-rc.1] — 2026-10-09
 
