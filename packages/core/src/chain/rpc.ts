@@ -139,9 +139,20 @@ function cacheFile(): string {
 // instead of serving the old snapshot (and never write a stale snapshot to the new location).
 // Concurrent writers (a long-lived MCP server + CLI runs) are last-writer-wins by design.
 let memState: { path: string; state: RpcState } | null = null;
+/** Under vitest the disk cache is OFF unless a test opts in with CORK_RPC_CACHE_FILE: the state lives
+ *  in memory only. The scan and constants caches follow the same rule. Found 2026-10-12: suites
+ *  that inject fake endpoints (strict.example, only.example) wrote their breaker failures into the
+ *  developer's real cache file, and a live run's failures there would open breakers for real CLI
+ *  use. Production and the CLI never set VITEST. */
+const diskDisabled = (): boolean => process.env.VITEST !== undefined && process.env.CORK_RPC_CACHE_FILE === undefined;
+const IN_MEMORY = "(memory)";
 function realLoadState(): RpcState {
-  const path = cacheFile();
+  const path = diskDisabled() ? IN_MEMORY : cacheFile();
   if (memState?.path === path) return memState.state;
+  if (path === IN_MEMORY) {
+    memState = { path, state: emptyState() };
+    return memState.state;
+  }
   let state: RpcState;
   try {
     // Version-gated cast, deliberately NOT schema-validated (unlike the remote-config cache,
@@ -156,8 +167,9 @@ function realLoadState(): RpcState {
   return state;
 }
 function realSaveState(s: RpcState): void {
-  const path = cacheFile();
+  const path = diskDisabled() ? IN_MEMORY : cacheFile();
   memState = { path, state: s };
+  if (path === IN_MEMORY) return;
   try {
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, JSON.stringify(s));
@@ -363,7 +375,7 @@ export async function resolveRpc(
   //    every read through it carried the requested chain's label whatever chain answered).
   //    Only the proven equality is memoized, so a blip does not become a sticky verdict.
   if (explicitUrl) {
-    const key = `${chainId} ${explicitUrl}`;
+    const key = `${chainId}\u0000${explicitUrl}`;
     const verified = explicitVerified.get(key);
     if (verified) return verified;
     const pending = explicitInflight.get(key);

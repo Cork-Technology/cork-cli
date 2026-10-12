@@ -146,6 +146,7 @@ const T = {
   rolloverHooks: "packages/core/test/rollover-hooks.test.ts",
   docExamples: "packages/cli/test/doc-examples.test.ts",
   rolloverFillability: "packages/core/test/rollover-order-fillability.test.ts",
+  rpcCacheHermetic: "packages/core/test/rpc-cache-hermetic.test.ts",
   cover: "packages/core/test/cover.test.ts",
   configFrozenKeys: "packages/core/test/config-frozen-keys.test.ts",
   configOverride: "packages/core/test/config-override.test.ts",
@@ -10293,6 +10294,22 @@ const CATALOG: Mutant[] = [
     find: "items = (items as Array<Record<string, unknown>>).map((row) => ({ ...row, ...rolloverOrderFillability(row, now) }));",
     replace: "",
     tests: [T.rolloverFillability],
+  },
+  {
+    // Under vitest the breaker state stays in memory unless a test names a cache file.
+    id: "rpc-cache-disk-guard-dropped",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "const diskDisabled = (): boolean => process.env.VITEST !== undefined && process.env.CORK_RPC_CACHE_FILE === undefined;",
+    replace: "const diskDisabled = (): boolean => false;",
+    tests: [T.rpcCacheHermetic],
+  },
+  {
+    // A test that opts in with CORK_RPC_CACHE_FILE still gets its file written.
+    id: "rpc-cache-optin-ignored",
+    file: "packages/core/src/chain/rpc.ts",
+    find: "const diskDisabled = (): boolean => process.env.VITEST !== undefined && process.env.CORK_RPC_CACHE_FILE === undefined;",
+    replace: "const diskDisabled = (): boolean => process.env.VITEST !== undefined;",
+    tests: [T.rpcCacheHermetic],
   },
 ];
 
