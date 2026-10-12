@@ -191,28 +191,30 @@ describe.skipIf(!LIVE)("doc examples — the read-only commands run live", () =>
   // primary), a resting order, a rollover order, an RFQ whose template names a recipe (answer-rfq
   // needs one), per chain.
   const live = new Map<string, Partial<Record<"pool" | "order" | "digest" | "rfq", string | undefined>>>();
+  // The pool comes from the CHAIN's creation events, not the venue's pool list: the venue lists
+  // pools oldest first, and on 2026-10-12 its /pools/v1 route took ~0.4 s per row (5 min for 600),
+  // while the chain read answers in seconds with every pool, its expiry and its generation.
   beforeAll(async () => {
-    for (const chainId of [8453, 42161]) {
-      const soon = new Date(Date.now() + 86_400_000).toISOString();
+    await Promise.all([8453, 42161].map(async (chainId) => {
+      const soon = BigInt(Math.floor(Date.now() / 1000) + 86_400);
       const [pools, book, rolls, rfqs] = await Promise.all([
-        runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 3 }, {}),
+        runTool("cork_query", { chainId, resource: "cork-pools", mode: "full-decentralized", pageSize: 200, maxPages: 10 }, {}),
         runTool("cork_query", { chainId, resource: "orderbook", sort: "venue", pageSize: 20, maxPages: 1 }, {}),
-        runTool("cork_query", { chainId, resource: "rollover-orders", filters: { kind: "orders" }, pageSize: 100, maxPages: 3 }, {}),
+        runTool("cork_query", { chainId, resource: "rollover-orders", filters: { kind: "orders", fillable: true }, pageSize: 25, maxPages: 1 }, {}),
         runTool("cork_query", { chainId, resource: "rfqs", filters: { withAnswers: false }, pageSize: 50, maxPages: 1 }, {}),
       ]);
       const items = <T>(env: { data: unknown }) => ((env.data as { items?: T[] } | null)?.items ?? []);
       const primaryPm = primaryOf(generationsOf(BUNDLED_DEFAULTS, chainId))!.phoenix!.poolManager.toLowerCase();
       live.set(String(chainId), {
-        pool: items<{ poolId: string; expiry: string; isDepositPaused: boolean; poolManagerAddress: string }>(pools)
-          .filter((p) => p.poolManagerAddress.toLowerCase() === primaryPm && p.expiry > soon && !p.isDepositPaused)
-          .sort((a, b) => b.expiry.localeCompare(a.expiry))[0]?.poolId,
+        pool: items<{ poolId: string; expiry: string; poolManager: string }>(pools)
+          .filter((p) => p.poolManager.toLowerCase() === primaryPm && BigInt(p.expiry) > soon)
+          .sort((a, b) => (BigInt(b.expiry) > BigInt(a.expiry) ? 1 : -1))[0]?.poolId,
         order: items<{ orderHash?: string }>(book)[0]?.orderHash,
-        // A rollover order the settler can still fill: the venue lists settled and lapsed ones too.
-        digest: items<{ orderDigest?: string; status?: string; fillDeadline?: string }>(rolls)
-          .find((o) => o.status === "PENDING" && Number(o.fillDeadline) > Date.now() / 1000 + 600)?.orderDigest,
+        // A rollover order the settler can still fill: the venue filter, then the row's own verdict.
+        digest: items<{ orderDigest?: string; fillable?: boolean | null }>(rolls).find((o) => o.fillable === true)?.orderDigest,
         rfq: items<{ rfq_id?: string; market_template?: { inline?: { oracle_recipe?: string } } }>(rfqs).find((r) => r.market_template?.inline?.oracle_recipe)?.rfq_id,
       });
-    }
+    }));
   }, 300_000);
 
   /** argv with the live values in place of the fixtures, or why a live value is missing. */
