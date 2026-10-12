@@ -192,8 +192,9 @@ describe.skipIf(!LIVE)("doc examples — the read-only commands run live", () =>
   // needs one), per chain.
   const live = new Map<string, Partial<Record<"pool" | "order" | "digest" | "rfq", string | undefined>>>();
   // The pool comes from the CHAIN's creation events, not the venue's pool list: the venue lists
-  // pools oldest first, and on 2026-10-12 its /pools/v1 route took ~0.4 s per row (5 min for 600),
-  // while the chain read answers in seconds with every pool, its expiry and its generation.
+  // pools oldest first with no expiry filter, so its first pages hold only expired pools, while the
+  // chain read answers in seconds with every pool, its expiry and its generation. (A slow network
+  // once made the venue list take minutes; the chain read does not depend on the venue at all.)
   beforeAll(async () => {
     await Promise.all([8453, 42161].map(async (chainId) => {
       const soon = BigInt(Math.floor(Date.now() / 1000) + 86_400);
