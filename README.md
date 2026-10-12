@@ -490,6 +490,25 @@ re-probing. When a read falls back to a community RPC, the result envelope carri
 > This is a deliberate exception to the "never commit an RPC URL" rule. The rule still applies
 > to `CORK_RPC_URL` / `CORK_TEST_RPC`: those stay environment-only.
 
+### When your network blocks the default endpoints
+
+Some networks block the hosts of the built-in default endpoints, for example by DNS censorship.
+The tool then falls back to chainlist endpoints without an error. Most reads still work, and each
+result carries an `rpc_fallback` warning that names the host. But many free endpoints limit
+`eth_getLogs`, so the reads that scan chain events can fail: `cork-pools`, `trading-pairs` and
+`fills` in `full-decentralized` mode, and `account-state` with no pool id. They fail with
+`hypersync_unavailable` or `chain_read_failed`, and the message says that `eth_getLogs` refused
+the range.
+
+To check for a DNS block, resolve the default host. A blocked name often resolves to `::` or
+`0.0.0.0`. A device can keep that answer after you change networks, so flush its DNS cache too.
+
+The fix is your own endpoint: set `CORK_RPC_URL`, or pass `--rpc-url`. For the event scans, the
+endpoint must serve `eth_getLogs` over at least 1,000 blocks. An explicit endpoint never falls
+back, so a refusal there fails loudly and names the host.
+With an Envio token (`ENVIO_HYPERSYNC_TOKEN`), the event scans use HyperSync and never call
+`eth_getLogs` on your endpoint.
+
 ## Design invariants
 
 - **One typed core.** MCP, CLI, and SDK are thin projections of the same `runTool` dispatch and
