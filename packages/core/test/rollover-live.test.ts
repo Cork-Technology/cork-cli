@@ -266,7 +266,9 @@ describe.skipIf(!LIVE)("rollover-fill safety reads — live (both chains)", () =
       const client = (await resolveRpc(chainId, undefined))!.client;
       const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});
       expect(env.state).toBe("ok");
-      const soon = new Date(Date.now() + 86_400_000).toISOString();
+      // Arbitrum's primary pools are short-lived and staggered: at times none outlives a day.
+      // The reads take seconds, so the pool only has to stay live for ten minutes.
+      const soon = new Date(Date.now() + 600_000).toISOString();
       type Row = { poolId: `0x${string}`; poolManagerAddress: string; expiry: string; swapToken: { address: string }; isDepositPaused: boolean; isUnwindDepositPaused: boolean; collateralToken: { decimals: number } };
       const rows = ((env.data as { items: Row[] }).items ?? []).filter((r) => r.expiry > soon && !r.isDepositPaused && !r.isUnwindDepositPaused);
       const byManager = new Map<string, Row>();
@@ -319,7 +321,9 @@ describe.skipIf(!LIVE)("rollover range reads — live (both chains)", () => {
       const pm = (await client.readContract({ address: settler, abi: settlerPoolManagerAbi, functionName: "CORK_POOL_MANAGER" })).toLowerCase();
       const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});
       type Row = { poolId: `0x${string}`; poolManagerAddress: string; expiry: string; swapToken: { address: string }; collateralToken: { address: string; decimals: number } };
-      const soon = new Date(Date.now() + 86_400_000).toISOString();
+      // Arbitrum's primary pools are short-lived and staggered: at times none outlives a day.
+      // The reads take seconds, so the pool only has to stay live for ten minutes.
+      const soon = new Date(Date.now() + 600_000).toISOString();
       const row = ((env.data as { items: Row[] }).items ?? []).find((r) => r.poolManagerAddress.toLowerCase() === pm && r.expiry > soon);
       expect(row, `no unexpired pool on the primary settler's pool manager ${pm}`).toBeDefined();
       const f = await readRollPools(client, { chainId, settler, srcPoolId: row!.poolId, dstPoolId: `0x${"5a".repeat(32)}` });

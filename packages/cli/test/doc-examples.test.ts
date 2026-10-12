@@ -197,7 +197,8 @@ describe.skipIf(!LIVE)("doc examples — the read-only commands run live", () =>
   // once made the venue list take minutes; the chain read does not depend on the venue at all.)
   beforeAll(async () => {
     await Promise.all([8453, 42161].map(async (chainId) => {
-      const soon = BigInt(Math.floor(Date.now() / 1000) + 86_400);
+      // The pool only has to outlive the suite (minutes); at times no Arbitrum pool outlives a day.
+      const soon = BigInt(Math.floor(Date.now() / 1000) + 3_600);
       const [pools, book, rolls, rfqs] = await Promise.all([
         runTool("cork_query", { chainId, resource: "cork-pools", mode: "full-decentralized", pageSize: 200, maxPages: 10 }, {}),
         runTool("cork_query", { chainId, resource: "orderbook", sort: "venue", pageSize: 20, maxPages: 1 }, {}),
