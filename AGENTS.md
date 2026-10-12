@@ -1,7 +1,8 @@
 # AGENTS.md — rules for coding agents in cork-cli
 
-This file is for any coding agent working in this repository. `CLAUDE.md` holds the full working
-reference; the rules below are the ones whose violation cost a release.
+This file is for any coding agent working in this repository. `CLAUDE.md` holds the working
+reference: a short root file, with the detail in `.claude/rules/*.md` (one file per area, named in
+the root file's index). The rules below are the ones whose violation cost a release.
 
 > **STOP — a new contract deployment is a NEW deployment set, never an edit of an existing one.**
 > Each set under `generations.<chain>.sets` in `cork-defaults.v2.json` records ONE Distribution
