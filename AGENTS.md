@@ -10,21 +10,19 @@ the root file's index). The rules below are the ones whose violation cost a rele
 > When a component is redeployed (a new adapter, registry, settler…), add a new set with the new
 > Distribution name, copy the unchanged blocks, change only what the new Distribution changed,
 > and declare any new wire; then move `primary` if asked. Never overwrite an address in an
-> existing set: released binaries and resting orders still point at it. 2026-10-07 commit
-> 1573f600 wrote market-registry 0.6.0's adapter `0x960C…0616` (Distribution
-> `phoenix/v0.5-rc.1`) into the `phoenix/v0.4-rc.1` set; it was reverted on 2026-10-09 and
-> became set `phoenix/v0.5`. `packages/core/test/market-registry-v05.test.ts` pins each set
-> to its own adapter — if you need to change that test, you are probably making this mistake.
+> existing set: released binaries and resting orders still point at it. The mistake looks like a
+> one-line address update: a redeployed adapter written into the set of the Distribution it
+> replaced. `packages/core/test/market-registry-v05.test.ts` pins each set to its own adapter —
+> if you need to change that test, you are probably making this mistake.
 
 > **STOP — a revert is a change, and a regenerated fixture is not a review.** Before you commit
 > a revert (or any change that regenerates `packages/core/test/fixtures/api-surface.json` or
 > `packages/mcp/test/fixtures/surface.json`), diff the public surface against the LAST RELEASE
 > tag: the SDK exports, the tool schemas, the JSON output. A regeneration that deletes lines
 > removes something a release shipped: restore it, or list it under `### Removed` and treat
-> the bump as breaking. Never regenerate a fixture just to make its gate pass. On 2026-10-09
-> the revert of 1573f600 regenerated `api-surface.json` with 32 deleted lines; four exports
-> of the released v0.7.0 disappeared and were found only in the release diff.
-> `api-surface.test.ts` now compares the SDK surface with `api-surface.released.json` (the last
+> the bump as breaking. Never regenerate a fixture just to make its gate pass — a drift gate
+> compares the code with its own fixture, so a regenerated fixture passes whatever it deleted.
+> `api-surface.test.ts` also compares the SDK surface with `api-surface.released.json` (the last
 > release) and refuses an unrecorded removal; move that baseline forward at each release.
 
 ## Other standing rules
@@ -37,3 +35,5 @@ the root file's index). The rules below are the ones whose violation cost a rele
 - Never commit an RPC URL or an API key.
 - Gates: `bun run typecheck`, `bun run test:ci`, `bun run test:mutation`; a surface change
   regenerates its fixture only after the tier's checks (see `evals/README.md`).
+- Keep this file and `CLAUDE.md` free of dated history: a rule states what to do and the test
+  that holds it. The story of an incident goes in the CHANGELOG and the commit message.
