@@ -27,7 +27,7 @@ export interface QueryFilters {
   rfqKind?: "new_position" | "rollover";
   state?: "open" | "expired";
   withAnswers?: boolean;
-  view?: "full" | "current";
+  view?: "full" | "current" | "discovery" | "management";
   excludeRequestPrefix?: string;
   underwriter?: `0x${string}`;
   recipe?: `0x${string}`;
@@ -105,7 +105,7 @@ export const RESOURCE_FILTER_KEYS: Readonly<Record<string, readonly FilterKey[]>
   "whitelisted-addresses": ["poolId"],
   "rollover-orders": ["kind", "account", "settler", "poolId", "status", "fillable", "source", "orderDigest", "filler", "address", "factory", "rfqId"],
   "trading-pairs": ["poolId"],
-  "orderbook": ["poolId", "side", "status", "orderHash", "account"],
+  "orderbook": ["poolId", "side", "status", "orderHash", "account", "view"],
   "fills": ["orderHash", "poolId"],
   "account-state": ["poolId", "account"],
   "protocol-config": [],
@@ -155,6 +155,11 @@ export function assertFiltersApplicable(resource: string, raw: Record<string, un
         message: `filters.${key} does not apply to ${variant ? `this read shape — ${scope}` : `resource '${resource}'`} — it would be silently unapplied, and an unfiltered answer must never pass for a filtered one. ${applicable.length ? `${variant ? scope : `'${resource}'`} consumes: ${applicable.join(", ")}` : `'${resource}' takes no filters`}${near ? ` — did you mean '${near}'?` : ""}`,
       }]);
     }
+  }
+  if (raw?.view !== undefined) {
+    const view = String(raw.view);
+    const valid = resource === "orderbook" ? view === "discovery" || view === "management" : view === "full" || view === "current";
+    if (!valid) throw new ToolInputError("cork_query", [{ path: ["filters", "view"], message: resource === "orderbook" ? "orderbook view must be discovery (default) or management (include unavailable active rows)" : "RFQ view must be full (default) or current" }]);
   }
 }
 
@@ -247,7 +252,7 @@ export function parseQueryFilters(raw: Record<string, unknown> | undefined): Que
   }
   if (raw?.view !== undefined) {
     const v = String(raw.view);
-    if (v !== "full" && v !== "current") fail("view", "expected 'full' (every stored answer row, the default) | 'current' (the negotiation frontier: one current answer per underwriter + the current counter)");
+    if (v !== "full" && v !== "current" && v !== "discovery" && v !== "management") fail("view", "expected RFQ full | current or orderbook discovery | management");
     else out.view = v;
   }
   // rfqs list: a LITERAL request_id prefix to drop server-side (venue 0.4.1; it escapes LIKE

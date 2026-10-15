@@ -9,7 +9,7 @@ import { quotedOrderWire } from "../src/rfq-quotes.ts";
 import { DEMO_ACCOUNT, RFQ_MODES } from "@cork/schemas";
 import { answerOptionsCoverWarnings, deliveredCoverOfExtension, requesterCoverVerdict, rfqModesOf } from "../src/handlers/cover-mode.ts";
 import { FIXED_RECIPE, IMPAIRMENT_RECIPE, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RFQ_FIXED_ID, RFQ_IMPAIRMENT_EXPIRY, RFQ_OPEN_ID, stubContext } from "../../../evals/stub.ts";
-import { proveRfqWrite, signQuotes, stubRpc } from "./helpers.ts";
+import { proveRfqWrite, signQuotes, stubRpc, withNativeApiMetadata } from "./helpers.ts";
 
 const CHAIN = 42161;
 const NOW = 1_790_000_000n;
@@ -197,11 +197,11 @@ describe("taker-fill through the venue book: the cover the fill BUYS vs the cite
     const signature = await maker.sign({ hash: built.orderHash });
     const row = { orderHash: built.orderHash, order: quotedOrderWire(built.order), signature, extension: built.extension, makerAccountType: "EOA", side: "SELL", status: "OPEN", quote_ref: { rfq_id: "rfq_cv1", answer_id: "ans_cv1", option_id: "opt_cv1" } };
     const rfq = { rfq_id: "rfq_cv1", kind: "new_position", state: "open", truncated: false, request: { chain_id: CHAIN, requester: REQUESTER, modes: opts.modes }, answers: [{ answer_id: "ans_cv1", underwriter: maker.address.toLowerCase(), answer: { status: "quoted", options: [{ option_id: "opt_cv1", mode: opts.citedMode, chain_id: CHAIN }] } }] };
-    const venueFetch = async (url: string) => {
+    const venueFetch = withNativeApiMetadata(async (url: string) => {
       if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: [row], hasMore: false }), { status: 200 });
       if (url.includes("/rfqs/v2/rfq_cv1")) return opts.rfqServed === false ? new Response("down", { status: 503 }) : new Response(JSON.stringify(rfq), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
-    };
+    });
     const resolveRpc = stubRpc((c) => {
       switch (c.functionName) {
         case "bitInvalidatorForOrder":

@@ -543,10 +543,11 @@ describe("taker-fill — the maker-readiness surface end-to-end (venue-free path
     expect(d.approvals.some((a) => a.role === "maker" && a.holder.toLowerCase() === maker.address.toLowerCase())).toBe(true);
   });
 
-  it("offline: the verdict is 'unknown' with no reasons — never invented — and no readiness warning fires", async () => {
+  it("offline cannot produce fill or readiness claims without authoritative remainder", async () => {
     const env = await fill(async () => null);
-    expect(env.state).toBe("ok");
-    expect((env.data as FillData).makerReadiness).toEqual({ status: "unknown", reasons: [] });
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
+    expect(env.warnings.map((w) => w.code)).toContain("funding_needs_rpc");
     expect(env.warnings.some((w) => w.code === "maker_not_ready" || w.code === "would_revert")).toBe(false);
   });
 });

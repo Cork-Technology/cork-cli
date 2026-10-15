@@ -322,6 +322,8 @@ export interface MakerOrderArgs {
   clientRequestId: string;
   expiry?: bigint;
   allowPartialFills?: boolean;
+  /** Explicit repeated-fill opt-in; requires partial fills and manual per-order cancellation. */
+  allowMultipleFills?: boolean;
   usePermit2?: boolean;
   /** Reserve the fill for one msg.sender (its low 80 bits are what the order stores and the LOP
    *  compares) — see MakerTraitsParts.allowedSender. */
@@ -386,6 +388,9 @@ export function ladderRungClientRequestId(ladderId: string, index: number): stri
 
 /** Build a signable LOP v4 maker order + its EIP-712 hash (equals on-chain hashOrder). */
 export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
+  if (a.allowMultipleFills && (a.allowPartialFills === false || a.ocoGroup !== undefined)) {
+    throw new Error("repeated fills require allowPartialFills and cannot use ocoGroup; cancel each order hash manually");
+  }
   // The SDK-side twin of the schema's refusal: an id inside the group namespace would seed the
   // bit of the group it spells, silently making a stand-alone order one-cancels-the-other with it.
   if (a.clientRequestId.startsWith(OCO_GROUP_NONCE_NAMESPACE)) {
@@ -399,28 +404,13 @@ export function buildMakerOrder(a: MakerOrderArgs): MakerOrderResult {
   const salt = hasExtension
     ? ((BigInt(keccak256(stringToHex(a.clientRequestId))) & U96) << 160n) | (BigInt(keccak256(a.extension!)) & U160)
     : BigInt(keccak256(stringToHex(a.clientRequestId))) & U160;
-  // The nonce must be DISTINCT per order, not 0. allowMultipleFills is off, so every order we
-  // build lives in the bit invalidator, and BitInvalidatorLib.checkAndInvalidate keys on
-  // (maker, nonce) — NOT on orderHash. A fixed nonce would therefore put every order a maker ever
-  // signs on the same bit: the first fill or cancel of any one of them would invalidate all the
-  // rest with BitInvalidatedOrder. That would also defeat the documented remedy for the
-  // one-fill-consumes-everything behaviour ("post several smaller orders"), since those orders
-  // would collide with each other.
-  //
-  // Derived from the idempotency key so retries stay byte-identical while genuinely
-  // different requests land on different bits (a 40-bit slot: collisions are birthday-rare, not
-  // impossible — two live orders on one bit invalidate together). 40 bits of space, from a range
-  // of the hash the plain-order salt does not use.
-  //
-  // Sharing a bit is also a CHOICE: `ocoGroup` seeds the nonce instead, so every order that names
-  // the same group is one-cancels-the-other (a ladder; one capacity answering several requests).
-  // The group seed is NAMESPACED — its prefix is refused on clientRequestId above — so a group
-  // seed and an id seed are never the same string; the 40-bit truncation is the only way two
-  // seeds can still meet, and that is the disclosed birthday risk, not a namespace failure.
+  // Default single-fill orders use a distinct per-request bit; ocoGroup deliberately shares it.
+  // Repeated-fill orders use the order-hash remaining invalidator, never a shared OCO bit.
+  // Id-derived 40-bit nonces keep default retries deterministic; collisions remain birthday-rare.
   const nonce = a.nonce !== undefined ? a.nonce : a.ocoGroup !== undefined ? ocoGroupNonce(a.ocoGroup) : nonceFromSeed(a.clientRequestId);
   let makerTraits = buildMakerTraits({
     allowPartialFills: a.allowPartialFills ?? true,
-    allowMultipleFills: false,
+    allowMultipleFills: a.allowMultipleFills ?? false,
     usePermit2: a.usePermit2 ?? false,
     hasExtension,
     expiry: a.expiry ?? 0n,
@@ -639,8 +629,8 @@ export interface TakerFillArgs {
   taker: `0x${string}`;
   /** Recipient of the maker asset; defaults to the taker. */
   receiver?: `0x${string}`;
-  /** Making amount to receive; defaults to the full remaining order. */
-  fillMakingAmount?: bigint;
+  /** Making amount resolved against live state by the caller; never inferred from signed size. */
+  fillMakingAmount: bigint;
   /** Hard cap on taking amount paid; defaults to the exact rounded-up signed ratio. */
   maximumTakingAmount?: bigint;
   /** Extension bytes the maker order was signed with (verbatim; required for JIT/hook orders). */
@@ -665,17 +655,16 @@ export interface TakerFillResult {
 }
 
 /** Build unsigned 1inch v6 taker-fill calldata for a resting maker order. Executes nothing.
- *  Amounts are DERIVED-AND-CLAMPED against the signed order itself: an over-ask does not
- *  inflate the reported amounts (10x-wrong slippage caps), and a partial fill of a signed
- *  all-or-nothing order is refused here instead of reverting on-chain. */
+ *  The caller supplies a live-state-resolved amount. Signed terms are unchanged; an
+ *  over-request and an all-or-nothing partial fill are refused, not silently clamped. */
 export function buildTakerFill(a: TakerFillArgs): TakerFillResult {
   if (a.order.makingAmount === 0n) {
     throw new Error("buildTakerFill: the resting order's makingAmount is 0 — a malformed order row; nothing can be filled");
   }
-  const making = a.fillMakingAmount ?? a.order.makingAmount;
-  if (making === 0n) throw new Error("buildTakerFill: fillMakingAmount must be positive");
+  const making = a.fillMakingAmount;
+  if (making === undefined || making <= 0n) throw new Error("buildTakerFill: an explicit positive live-state-resolved fillMakingAmount is required");
   if (making > a.order.makingAmount) {
-    throw new Error(`buildTakerFill: fillMakingAmount ${making} exceeds the order's signed makingAmount ${a.order.makingAmount} — 1inch would clamp the fill on-chain, so the reported amounts and the taking-amount slippage cap would both be wrong; pass at most the order's makingAmount (or omit for a full fill)`);
+    throw new Error(`buildTakerFill: fillMakingAmount ${making} exceeds the order's signed makingAmount ${a.order.makingAmount}; resolve the live remainder before building`);
   }
   if (making < a.order.makingAmount && (a.order.makerTraits & NO_PARTIAL_FILLS_FLAG) !== 0n) {
     throw new Error(`buildTakerFill: this order's makerTraits set NO_PARTIAL_FILLS — a partial fill of ${making}/${a.order.makingAmount} would revert on-chain; fill the full makingAmount or skip the order`);
@@ -860,8 +849,8 @@ export function decodeLopCall(data: `0x${string}`): DecodedLopCall {
 // ── On-chain liveness of a resting order (cancel-flow UX) ────────────────────
 // LOP v4 tracks fills/cancels in one of two invalidators, selected by makerTraits
 // (MakerTraitsLib.useBitInvalidator = NO_PARTIAL_FILLS(bit 255) set OR ALLOW_MULTIPLE_FILLS
-// (bit 254) unset). Note our own buildMakerOrder sets allowMultipleFills:false, so Cork-built
-// orders always live in the BIT invalidator. Foreign multiple-fill orders use the remaining
+// (bit 254) unset). Cork-built orders default to the BIT invalidator; explicit repeated-fill
+// orders require partial fills and use the remaining
 // invalidator, where raw == 0 means never-touched (remainingInvalidatorForOrder REVERTS there —
 // read the RAW view) and otherwise remaining = ~raw (RemainingInvalidatorLib).
 //
@@ -917,11 +906,12 @@ export async function readLopInvalidator(
   lop: `0x${string}`,
   maker: `0x${string}`,
   orderHash: `0x${string}`,
+  atBlock?: bigint,
 ): Promise<bigint> {
   if (plan.mode === "bit") {
-    return (await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.nonceOrEpoch] })) as bigint;
+    return (await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "bitInvalidatorForOrder", args: [maker, plan.nonceOrEpoch], ...(atBlock !== undefined ? { blockNumber: atBlock } : {}) })) as bigint;
   }
-  return (await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, orderHash] })) as bigint;
+  return (await client.readContract({ address: lop, abi: lopInvalidatorAbi, functionName: "rawRemainingInvalidatorForOrder", args: [maker, orderHash], ...(atBlock !== undefined ? { blockNumber: atBlock } : {}) })) as bigint;
 }
 
 /** Classify the word readLopInvalidator() returned, per the plan's invalidator. */

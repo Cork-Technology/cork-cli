@@ -84,9 +84,10 @@ describe("cork_prepare_phoenix data.approvals", () => {
       ["reference", "Permit2", "erc20-approve", "3", "cap"],
       ["reference", "Cork adapter", "permit2-approve", "3", "cap"],
     ]);
-    // Layer 2's unsigned tx goes to the Permit2 CONTRACT and names the adapter as spender.
-    expect(a[1]!.unsignedTx!.to).toBe(PERMIT2_ADDRESS);
-    expect(decodeFunctionData({ abi: permit2, data: a[1]!.unsignedTx!.calldata }).args.slice(0, 3)).toEqual([POOL_TOKENS.cst, ADAPTER_42161, 7n]);
+    // Preserve the live sufficient Permit2 grant instead of preparing a replacement.
+    expect(a[1]!.unsignedTx).toBeNull();
+    expect(a[3]!.unsignedTx!.to).toBe(PERMIT2_ADDRESS);
+    expect(decodeFunctionData({ abi: permit2, data: a[3]!.unsignedTx!.calldata }).args.slice(0, 3)).toEqual([POOL_TOKENS.reference, ADAPTER_42161, 3n]);
     expect(a[1]).toMatchObject({ satisfied: true, currentAllowance: "7", currentExpiration: 2_000_000_000 });
     expect(a[3]).toMatchObject({ satisfied: false, currentAllowance: "0" });
   });

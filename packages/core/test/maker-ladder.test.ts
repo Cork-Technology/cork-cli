@@ -71,6 +71,27 @@ describe("maker-ladder: rung identity", () => {
   });
 });
 
+describe("maker-ladder: repeated-fill capacity and cancellation", () => {
+  it("requires distinct policy, consumes the sum, and cancels each remaining-invalidator order separately", async () => {
+    const rungs = [{ takingAmount: "1000000" }, { takingAmount: "900000", makingAmount: "2000000000000000000" }];
+    for (const action of [{ noncePolicy: "shared" }, { noncePolicy: "shared-reserved" }, { noncePolicy: "distinct", ocoGroup: "unused" }]) {
+      expect((await ladder("repeated-invalid", { rungs, allowsMultipleFills: true, ...action })).state).toBe("unavailable");
+    }
+    const env = await ladder("repeated-valid", { rungs, allowsMultipleFills: true, noncePolicy: "distinct" });
+    expect(env.state).toBe("ok");
+    const d = env.data as LadderData;
+    expect(d.capacity.makerAssetRequired).toBe("3000000000000000000");
+    for (const rung of d.rungs) {
+      const message = rung.typedData.message as typeof rung.typedData.message & { makerTraits: string };
+      expect(BigInt(message.makerTraits) & (1n << 254n)).toBe(1n << 254n);
+      expect(rung).toMatchObject({ invalidator: "remaining", allowsMultipleFills: true });
+      expect(env.warnings.map((w) => w.code)).toContain("repeated_fill_notice");
+      const cancelled = await runTool("cork_prepare_orders", { chainId: 1, account: A, clientRequestId: "cancel-rung", action: { type: "cancel", makerTraits: message.makerTraits, orderHash: rung.orderHash } }, { nowSeconds: NOW });
+      expect((cancelled.data as { retires: { invalidator: string } }).retires.invalidator).toBe("remaining");
+    }
+  });
+});
+
 describe("maker-ladder: nonce policy", () => {
   it("shared-reserved (default): reserved rungs share the group's bit; the open rung has its own id-derived bit", async () => {
     const d = (await ladder("ladder-policy-0001", { rungs: threeRungs })).data as LadderData;

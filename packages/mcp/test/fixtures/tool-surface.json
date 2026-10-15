@@ -1973,7 +1973,12 @@
                   "allowsPartialFills": {
                     "type": "boolean",
                     "default": true,
-                    "description": "true allows a fill smaller than makingAmount — but Cork-built orders live in the 1inch BIT invalidator (allowMultipleFills is off), so the FIRST fill of ANY size consumes the whole order: post 100, get 1 filled, and the remaining 99 are dead. To serve multiple takers, post several smaller orders EACH WITH ITS OWN clientRequestId and no shared ocoGroup — the invalidator bit is derived from the id (or from ocoGroup when given), and orders sharing a bit invalidate together"
+                    "description": "allows a fill smaller than makingAmount; alone this does NOT permit repeated fills: the first fill spends the bit and retires the remainder. Set allowsMultipleFills true for a standing order"
+                  },
+                  "allowsMultipleFills": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "explicit repeated-fill opt-in: requires allowsPartialFills true, tracks remaining amount by order hash and caps aggregate execution at makingAmount. Manual cancel retires only this order hash; ocoGroup is incompatible. Default false preserves single-fill behavior"
                   },
                   "usePermit2": {
                     "type": "boolean",
@@ -2475,7 +2480,7 @@
                     "description": "fill from a signed order you ALREADY HOLD (finalize-maker-order's submitInput carries this exact shape, or the maker hands it over directly) instead of fetching the venue row — the venue is NOT contacted, so a flaky book or a dropped row cannot block a fill of bytes in hand. The order must hash to `orderHash` (order_hash_mismatch conflict otherwise), the maker signature is verified the same way the fill will verify it, and the on-chain invalidator liveness pre-flight still runs. Omit to discover the order on the venue book by `orderHash`"
                   },
                   "fillMakingAmount": {
-                    "description": "making amount to receive; omit for the full remaining order",
+                    "description": "making amount requested; omit to request the signed makingAmount. The LOP can clamp a partial fill to the live remainder; indexed remainders are not execution permission",
                     "$ref": "#/$defs/TokenAmount"
                   },
                   "maximumTakingAmount": {
@@ -2697,7 +2702,7 @@
                     "$ref": "#/$defs/Bytes32"
                   },
                   "makerTraits": {
-                    "description": "the order's makerTraits value, verbatim from the resting order — the traits decide what the cancel retires: on the bit invalidator (every Cork-built order) the (maker, nonce) bit, so a shared-nonce ocoGroup ladder is retired by cancelling ANY one rung",
+                    "description": "the order's makerTraits value, verbatim from the resting order — the traits decide what the cancel retires: on the default bit invalidator the (maker, nonce) bit, so a shared-nonce ocoGroup ladder is retired by cancelling ANY one rung; on the explicit repeated-fill remaining invalidator, only THIS order hash — cancel each rung separately",
                     "$ref": "#/$defs/UintStr"
                   },
                   "scope": {
@@ -3119,6 +3124,27 @@
                     "type": "string",
                     "const": "rollover-fill"
                   },
+                  "bounded": {
+                    "type": "object",
+                    "properties": {
+                      "fundingModule": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "unwindModule": {
+                        "$ref": "#/$defs/Address"
+                      },
+                      "outputModule": {
+                        "$ref": "#/$defs/Address"
+                      }
+                    },
+                    "required": [
+                      "fundingModule",
+                      "unwindModule",
+                      "outputModule"
+                    ],
+                    "additionalProperties": false,
+                    "description": "caller-supplied bounded-module identities for the canonical three-hook profile. Requires explicit fillerSrcCst and positive native-unit protection in both signed guards plus positive minDstPerSrc. Returns ONE unsigned ERC-7579 execute batch to account: direct stage(clone,digest,amount), then BaseFiller.execute; no try mode or delegatecalls. Module deployment/code/attestation and wallet permissions are NOT established by these inputs"
+                  },
                   "orderDigest": {
                     "description": "the resting rollover order to fill — the venue's record (order, intent, the cPT holder's signature) is fetched by this digest and the digest is RECOMPUTED locally from it; a disagreement is a conflict, never filled",
                     "$ref": "#/$defs/Bytes32"
@@ -3317,6 +3343,11 @@
                   "type": {
                     "type": "string",
                     "const": "maker-ladder"
+                  },
+                  "allowsMultipleFills": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "repeated fills on every rung; requires allowsPartialFills true, noncePolicy distinct and no ocoGroup. Every rung can consume its full amount and must be cancelled individually"
                   },
                   "poolId": {
                     "$ref": "#/$defs/MarketId"

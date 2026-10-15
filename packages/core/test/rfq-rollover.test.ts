@@ -215,6 +215,60 @@ describe("rollover RFQ rules (pure, the venue's mirrored)", () => {
 describe("rollover RFQ writes (cork_prepare_orders rfq-write → cork_submit)", () => {
   const openInput = { chainId: 42161, clientRequestId: "test-roll-open-0001", action: { ...OPEN, auth: { method: "signature", signature: "0x00" } } };
 
+  it.each(["cst", "cpt"] as const)("binds signed %s role through prepare/submit and rejects changing or omitting it", async (requesterRole) => {
+    const input = { ...openInput, action: { ...openInput.action, requesterRole } };
+    const { auth: _auth, ...request } = input.action;
+    const prepared = await runTool("cork_prepare_orders", {
+      chainId: 42161, account: REQUESTER.address, clientRequestId: input.clientRequestId,
+      action: { type: "rfq-write", request },
+    }, ctxWith([], [], { resolveRpc: poolChain({ [SRC_POOL]: LIVE }) }));
+    expect(prepared.state).toBe("ok");
+    const data = prepared.data as { body: Record<string, unknown>; typedData: Record<string, unknown> };
+    const signature = await REQUESTER.signTypedData(data.typedData as never);
+    const seen: Seen[] = [];
+    const signedInput = { ...input, action: { ...input.action, auth: { method: "signature", signature } } };
+    expect((await runTool("cork_submit", signedInput, ctxWith([
+      { match: "/rfqs/v2", status: 201, body: { rfq_id: "rfq_role" } },
+    ], seen, { resolveRpc: poolChain({ [SRC_POOL]: LIVE }) }))).state).toBe("ok");
+    expect((seen.find(s => s.method === "POST")?.body as Record<string, unknown>).requester_role).toBe(requesterRole);
+    for (const changedRole of [undefined, requesterRole === "cst" ? "cpt" : "cst"]) {
+      const refusedRequests: Seen[] = [];
+      const refused = await runTool("cork_submit", {
+        ...signedInput, action: { ...signedInput.action, requesterRole: changedRole },
+      }, ctxWith([], refusedRequests, { resolveRpc: poolChain({ [SRC_POOL]: LIVE }) }));
+      expect(refused.state).toBe("conflict");
+      expect(refusedRequests.some(s => s.method === "POST")).toBe(false);
+    }
+  });
+
+  it("surfaces an older API's explicit-role rejection without stripping or retrying the signed role", async () => {
+    const request = { ...OPEN, premiumToken: { one_of: [...OPEN.premiumToken.one_of] }, requesterRole: "cst" as const };
+    const plan = planRfqWrite({ chainId: 42161, clientRequestId: openInput.clientRequestId, request });
+    const signature = await REQUESTER.signTypedData(plan.typedData);
+    const seen: Seen[] = [];
+    const result = await runTool("cork_submit", {
+      ...openInput, action: { ...request, auth: { method: "signature", signature } },
+    }, ctxWith([{ match: "/rfqs/v2", status: 400, body: { message: "unsupported requester_role" } }],
+      seen, { resolveRpc: poolChain({ [SRC_POOL]: LIVE }) }));
+    expect(result.state).toBe("unavailable");
+    const posts = seen.filter(s => s.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toMatchObject({ requester_role: "cst" });
+  });
+
+  it("rejects requesterRole on new-position writes rather than dropping it in the SDK builder", async () => {
+    const request = { ...OPEN, kind: "new_position" as const, source: undefined, premiumToken: undefined,
+      requesterRole: "cst" as const, modes: ["liquidity_only" as const], packageIds: ["package"], notionalAssets: "100" };
+    expect(() => planRfqWrite({ chainId: 42161, clientRequestId: "role-wrong-kind-0001", request })).toThrow();
+    const seen: Seen[] = [];
+    const prepared = await runTool("cork_prepare_orders", {
+      chainId: 42161, account: REQUESTER.address, clientRequestId: "role-wrong-kind-0001",
+      action: { type: "rfq-write", request },
+    }, ctxWith([], seen));
+    expect(prepared.state).toBe("unavailable");
+    expect(seen.some(s => s.method === "POST")).toBe(false);
+  });
+
   it("a rollover open: the body names the position and the premium tokens, never cover fields; prepare and submit build the same body; a live source pool relays", async () => {
     const { auth: _a, ...request } = openInput.action;
     const prep = await runTool("cork_prepare_orders", { chainId: 42161, account: REQUESTER.address, clientRequestId: openInput.clientRequestId, action: { type: "rfq-write", request } }, ctxWith([], [], { resolveRpc: poolChain({ [SRC_POOL]: LIVE }) }));
@@ -324,6 +378,84 @@ describe("accepting a rollover quote (rollover-intent quoteRef → cork_submit r
     action: { type: "rollover-intent", settler: EXACT_02, rolloverContract: CLONE, srcCstToken: SRC_CST, dstCstToken: DST_CST, openDeadline: String(NOW + 3_600n), fillDeadline: String(NOW + 86_400n), quoteRef: { rfqId: "rfq_r", answerId: "ans_1", optionId: "o1" }, ...over },
   });
 
+  it("cST uses the authenticated full-view answer through preparation and signed submission", async () => {
+    const quoted = quotedAnswer([POOL_OPTION]);
+    const cstRecord = {
+      ...record,
+      request: { ...(record.request as Record<string, unknown>), requester_role: "cst" },
+      answers: [quoted],
+    };
+    const cstRoutes = [
+      { match: "/rfqs/v2/rfq_r", body: cstRecord },
+    ];
+    const prepared = await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address }, ctxWith(cstRoutes));
+    expect(prepared.state).toBe("ok");
+    const data = prepared.data as { orderDigest: string; typedData: Record<string, unknown>; venuePost: { order: Record<string, unknown>; intent: Record<string, unknown> } };
+    const signature = await UNDERWRITER.signTypedData(data.typedData as never);
+    const submitted = { chainId: 42161, clientRequestId: "role-cst-order-0001", action: {
+      type: "rollover-order", order: data.venuePost.order, intent: data.venuePost.intent,
+      signature, quoteRef: intent().action.quoteRef,
+    } };
+    expect((await runTool("cork_submit", submitted, ctxWith([...cstRoutes, {
+      match: "/rollover/v1/orders", status: 201, body: { orderDigest: data.orderDigest },
+    }]))).state).toBe("ok");
+    expect((await runTool("cork_prepare_orders", intent(), ctxWith(cstRoutes))).state).toBe("unavailable");
+    const requesterOrder = await runTool("cork_prepare_orders", intent(), ctxWith(routes));
+    expect(requesterOrder.state).toBe("ok");
+    const requesterData = requesterOrder.data as typeof data;
+    const requesterSignature = await REQUESTER.signTypedData(requesterData.typedData as never);
+    const wrongSeen: Seen[] = [];
+    const wrong = await runTool("cork_submit", { ...submitted, action: { ...submitted.action,
+      order: requesterData.venuePost.order, intent: requesterData.venuePost.intent, signature: requesterSignature,
+    } }, ctxWith(cstRoutes, wrongSeen));
+    expect(wrong.state).toBe("unavailable");
+    expect(wrongSeen.some(s => s.method === "POST")).toBe(false);
+    // A full-view answer missing its canonical identity is unknown, not requester-signed.
+    const { underwriter: _stored, ...withoutStored } = quoted.answer as Record<string, unknown>;
+    const missingRoutes = [{ match: "/rfqs/v2/rfq_r", body: { ...cstRecord, answers: [{ ...quoted, answer: withoutStored }] } }];
+    expect((await runTool("cork_prepare_orders", { ...intent(), account: REQUESTER.address }, ctxWith(missingRoutes))).state).toBe("unavailable");
+    const missingSeen: Seen[] = [];
+    expect((await runTool("cork_submit", submitted, ctxWith(missingRoutes, missingSeen))).state).toBe("unavailable");
+    expect(missingSeen.some(s => s.method === "POST")).toBe(false);
+    // Current-view metadata is the actual stored column, never replaced by body data.
+    const metadataRecord = { ...cstRecord, answers: [{ ...quoted, underwriter: UNDERWRITER.address.toLowerCase(),
+      answer: { ...(quoted.answer as Record<string, unknown>), underwriter: REQUESTER.address.toLowerCase() } }] };
+    expect((await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address },
+      ctxWith([{ match: "/rfqs/v2/rfq_r", body: metadataRecord }]))).state).toBe("ok");
+    const unknownMetadata = { ...cstRecord, answers: [{ ...quoted, underwriter: null }] };
+    expect((await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address },
+      ctxWith([{ match: "/rfqs/v2/rfq_r", body: unknownMetadata }]))).state).toBe("unavailable");
+  });
+
+  it("keeps a cited older authenticated answer revision usable instead of substituting the latest quote", async () => {
+    const older = quotedAnswer([POOL_OPTION]);
+    const newest = { ...quotedAnswer([{ ...POOL_OPTION, premium_per_share: "9000000" }]), answer_id: "ans_2" };
+    const cstRecord = { ...record,
+      request: { ...(record.request as Record<string, unknown>), requester_role: "cst" },
+      answers: [newest, older] };
+    const prepared = await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address }, ctxWith([
+      { match: "/rfqs/v2/rfq_r?view=current", body: { ...cstRecord, answers: [newest] } },
+      { match: "/rfqs/v2/rfq_r", body: cstRecord },
+    ]));
+    expect(prepared.state).toBe("ok");
+    expect(prepared.data).toMatchObject({ venuePost: { order: {
+      user: UNDERWRITER.address.toLowerCase(), minPremiumPerShare: "5000000",
+    } } });
+  });
+
+  it.each([undefined, "cpt"] as const)("retains requester signing for role %s", async (requesterRole) => {
+    const legacyRecord = { ...record, request: { ...(record.request as Record<string, unknown>),
+      ...(requesterRole === undefined ? {} : { requester_role: requesterRole }) } };
+    const roleRoutes = [{ match: "/rfqs/v2/rfq_r", body: legacyRecord }];
+    expect((await runTool("cork_prepare_orders", intent(), ctxWith(roleRoutes))).state).toBe("ok");
+    expect((await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address }, ctxWith(roleRoutes))).state).toBe("unavailable");
+  });
+
+  it.each(["cover", null])("refuses unknown stored role %s without a requester fallback", async (requesterRole) => {
+    const unknown = { ...record, request: { ...(record.request as Record<string, unknown>), requester_role: requesterRole } };
+    expect((await runTool("cork_prepare_orders", intent(), ctxWith([{ match: "/rfqs/v2/rfq_r", body: unknown }]))).state).toBe("unavailable");
+  });
+
   it("every term left out comes from the quote, and the result names the accepted quote", async () => {
     const env = await runTool("cork_prepare_orders", intent(), ctxWith(routes));
     expect(env.state).toBe("ok");
@@ -345,7 +477,6 @@ describe("accepting a rollover quote (rollover-intent quoteRef → cork_submit r
     expect(higher.state).toBe("ok");
     const stranger = await runTool("cork_prepare_orders", { ...intent(), account: UNDERWRITER.address }, ctxWith(routes));
     expect(stranger.state).toBe("unavailable");
-    expect(stranger.warnings[0]?.message).toMatch(/only the RFQ's requester/u);
   });
 
   it("a just-in-time quote: the order commits to the quoted market's hash; a dstPoolId must be given when it cannot be derived here", async () => {

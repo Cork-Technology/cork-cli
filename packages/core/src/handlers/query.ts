@@ -26,6 +26,7 @@ const ROLLOVER_FIRMNESS_READS = 10;
 import { handleQueryWait } from "./query-watch.ts";
 import { handleAccountPositions, type PositionsEmitter, venuePoolRowsToMarketRows } from "./query-positions.ts";
 import { probeAccountTypeOf, simulateTopFill } from "./fill-simulate.ts";
+import { readNativeApiCapability, type NativeApiCapability } from "./native-history-capability.ts";
 
 /** Venue-backed resources (hybrid mode: venue-discovered, chain-verified) vs live-chain resources (lite-decentralized). */
 const VENUE_RESOURCES = new Set(["cork-pools", "orderbook", "fills", "trading-pairs", "rollover-orders", "rfqs"]);
@@ -496,12 +497,15 @@ export function venueNoticeWarnings(t: { venueWarnings: Array<Record<string, unk
   return out;
 }
 
-export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promise<Envelope> {
+export async function handleQuery(input: QueryInput, ctx: HandlerContext, operation?: { capability?: Promise<NativeApiCapability> }): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const filters = parseQueryFilters(input.filters);
   // Applicability after shape: a globally unknown key gets parse's own did-you-mean; a known
   // key on the wrong resource is refused here with that resource's key list.
   assertFiltersApplicable(input.resource, input.filters);
+  if (input.resource === "orderbook" && filters.orderHash !== undefined && filters.account !== undefined) {
+    throw new ToolInputError("cork_query", [{ path: ["filters", "account"], message: "exact orderHash reads retain native history, not fill-sender ranking — omit account; use cork_track for the separate chain invalidator leg" }]);
+  }
 
   // `sort` is the orderbook's ranking switch; on any other resource it would be silently
   // unapplied — the parameter-ignored green no-op — so it is refused with teaching.
@@ -518,6 +522,9 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     if (input[key] !== undefined && input.resource !== "orderbook") {
       throw new ToolInputError("cork_query", [{ path: [key], message: `${key} applies to resource 'orderbook' only (it diffs the ranked view against a prior read's watermark); '${input.resource}' has no watermark — omit ${key}` }]);
     }
+    if (input[key] !== undefined && filters.orderHash !== undefined) {
+      throw new ToolInputError("cork_query", [{ path: [key], message: `${key} needs candidate-book ranking; an exact orderHash read retains inactive native history and has no watermark — omit ${key}` }]);
+    }
     if (input[key] !== undefined && input.sort === "venue") {
       throw new ToolInputError("cork_query", [{ path: [key], message: `${key} needs the ranked view (sort 'best', the default): the venue order carries no price or reach to compare — omit sort` }]);
     }
@@ -526,9 +533,15 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
     throw new ToolInputError("cork_query", [{ path: ["wait"], message: "wait long-polls for a CHANGE since a watermark — pass `since` (the data.watermark a prior orderbook read returned); a first read needs no wait" }]);
   }
   if (input.wait !== undefined) return handleQueryWait(input, ctx, handleQuery);
-  if (input.resource === "offers") return handleQueryOffers(input, filters, chainId, ctx, handleQuery);
+  if (input.resource === "offers") {
+    const scope = operation ?? {};
+    return handleQueryOffers(input, filters, chainId, ctx, (next, nextCtx) => handleQuery(next, nextCtx, scope));
+  }
 
   if (VENUE_RESOURCES.has(input.resource)) {
+    if (input.resource === "orderbook" && filters.view !== undefined && input.mode === "full-decentralized") {
+      throw new ToolInputError("cork_query", [{ path: ["filters", "view"], message: "orderbook view selects a venue response; omit it in full-decentralized mode" }]);
+    }
     // Explicit full-decentralized mode: serve the EVENT-DERIVED subset over HyperSync.
     if (input.mode === "full-decentralized") {
       return handleQueryHyperSync(input, filters, chainId, ctx);
@@ -539,6 +552,10 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       return unavailable(chainId, "mode_unavailable", `cork_query('${input.resource}') is venue-backed; omit mode, use 'hybrid' (venue rows, chain-verified), or use 'full-decentralized' for the event-derived subset (cork-pools, trading-pairs, fills, flows kind=fills|contracts)`, ctx);
     }
     const deps = venueDepsOf(ctx);
+    const nativeCapability = input.resource === "orderbook" || input.resource === "fills"
+      ? await (operation ? operation.capability ??= readNativeApiCapability(ctx) : readNativeApiCapability(ctx))
+      : undefined;
+    if (input.resource === "orderbook" && nativeCapability && !nativeCapability.supported) return unavailable(chainId, nativeCapability.code, nativeCapability.reason, ctx);
     // Page size is NOT the traversal's concern — each fetchPage closure carries its own `limit`;
     // the traversal only bounds pages and walks cursors.
     const paging = { ...(input.cursor ? { cursor: input.cursor } : {}), maxPages: input.maxPages };
@@ -550,22 +567,25 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           return filters.poolId ? { ...list, items: list.items.filter((r) => String(r.poolId).toLowerCase() === filters.poolId!.toLowerCase()) } : list;
         });
       } else if (input.resource === "orderbook") {
-        traversal = await collectVenuePages(paging, async (cursor) => {
-          const list = await getLopOrderbook(deps, { chainId, ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize });
-          // The venue's orderbook path has no orderHash query param — filter client-side (the
-          // markets/poolId pattern above) so a known filter key is never silently unapplied:
-          // an "unfiltered because unsupported" read would let a caller mistake the whole book
-          // for a per-order answer.
-          return filters.orderHash ? { ...list, items: list.items.filter((r) => String((r as { orderHash?: unknown }).orderHash ?? "").toLowerCase() === filters.orderHash!.toLowerCase()) } : list;
-        });
+        traversal = await collectVenuePages(paging, (cursor) => getLopOrderbook(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}), ...(filters.poolId ? { poolId: filters.poolId } : {}), ...(filters.side ? { side: filters.side } : {}), ...(filters.status ? { status: filters.status } : {}), ...(filters.view === "discovery" || filters.view === "management" ? { view: filters.view } : filters.orderHash ? {} : { view: "discovery" }), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+        if (filters.orderHash && traversal.items.some((row) => {
+          const native = row as Record<string, unknown> | null;
+          return native?.chainId !== chainId || typeof native?.orderHash !== "string" || native.orderHash.toLowerCase() !== filters.orderHash!.toLowerCase();
+        })) return envelope({ state: "unavailable", data: null, chainId, source: "service", warnings: [{ code: "invalid_service_response", message: "the exact native history response contains a row outside the requested chainId/orderHash; do not interpret it as history or absence" }], ctx });
       } else if (input.resource === "fills") {
         traversal = await collectVenuePages(paging, (cursor) => getLopFills(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}), ...(cursor ? { cursor } : {}), limit: input.pageSize }));
+        if (traversal.items.some(row => {
+          if (typeof row !== "object" || row === null || Array.isArray(row) || !("chainId" in row) || row.chainId !== chainId) return true;
+          return filters.orderHash !== undefined && (!("orderHash" in row) || typeof row.orderHash !== "string" || row.orderHash.toLowerCase() !== filters.orderHash.toLowerCase());
+        })) return unavailable(chainId, "invalid_service_response", "the native fills response contains a row outside the requested chainId/orderHash; it cannot be attributed as this request's history", ctx);
+        if (nativeCapability && !nativeCapability.supported && traversal.items.length === 0) return unavailable(chainId, nativeCapability.code, nativeCapability.reason, ctx);
       } else if (input.resource === "trading-pairs") {
         traversal = await collectVenuePages(paging, (cursor) => getLopMarkets(deps, chainId, { ...(cursor ? { cursor } : {}), limit: input.pageSize }));
       } else if (input.resource === "rfqs") {
+        const view = filters.view === "full" || filters.view === "current" ? filters.view : undefined;
         // Single get by id, or the discovery feed (server default: state=open, newest first).
         if (filters.rfqId) {
-          const row = await getRfq(deps, filters.rfqId, filters.view);
+          const row = await getRfq(deps, filters.rfqId, view);
           if (!row) return unavailable(chainId, "rfq_not_found", `RFQ '${filters.rfqId}' is unknown to the venue (a normal outcome for a never-posted or mistyped id)`, ctx);
           traversal = { complete: true, items: [row], pagesFetched: 1, venueWarnings: [] };
         } else {
@@ -577,7 +597,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ...(filters.account ? { requester: filters.account.toLowerCase() } : {}),
             ...(filters.underwriter ? { underwriter: filters.underwriter.toLowerCase() } : {}),
             ...(filters.withAnswers !== undefined ? { withAnswers: filters.withAnswers } : {}),
-            ...(filters.view ? { view: filters.view } : {}),
+            ...(view ? { view } : {}),
             ...(filters.excludeRequestPrefix !== undefined ? { excludeRequestPrefix: filters.excludeRequestPrefix } : {}),
             ...(cursor ? { cursor } : {}),
             limit: input.pageSize,
@@ -607,7 +627,8 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // them through the same readers lite-decentralized serves (one implementation, two
       // consumers). null = a resource with no on-chain footprint (rfqs; rollover fills/contracts
       // rows reconcile via cork_track) — those rows serve venue-claimed, said in the note.
-      const verification = await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
+      // Exact native reconciliation must not erase inactive rows through discovery's live gates.
+      const verification = input.resource === "orderbook" && filters.orderHash !== undefined ? null : await verifyVenueRows({ ctx, chainId, resource: input.resource, kind: filters.kind, rows: traversal.items, ...(filters.account !== undefined ? { account: filters.account } : {}) });
       let items = verification ? verification.items : traversal.items;
       // rollover orders: the venue keeps a signed order PENDING after its deadlines pass, and its
       // settler still answers None (consistent, so "confirmed"). Each row says whether the settler
@@ -631,7 +652,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       let firmness: { source: string; orderbookPagination: unknown } | undefined;
       const firmWarnings: Array<{ code: string; message: string }> = [];
       if (input.resource === "rfqs" && (filters.withAnswers === true || filters.rfqId !== undefined)) {
-        const book = await handleQuery({ resource: "orderbook", chainId, format: input.format, pageSize: input.pageSize, maxPages: input.maxPages, sort: "best", filters: {}, ...(input.mode ? { mode: input.mode } : {}) }, ctx);
+        const book = await handleQuery({ resource: "orderbook", chainId, format: input.format, pageSize: input.pageSize, maxPages: input.maxPages, sort: "best", filters: {}, ...(input.mode ? { mode: input.mode } : {}) }, ctx, operation);
         if (book.state === "ok") {
           const bookData = book.data as { items: Array<Record<string, unknown>>; excluded?: Array<Record<string, unknown>>; pagination?: unknown };
           items = markFirmOptions(items as Array<Record<string, unknown>>, citedOptionKeys(bookData));
@@ -650,7 +671,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         const cited = new Set<string>();
         const unread: string[] = [];
         for (const r of capped) {
-          const orders = await handleQuery({ resource: "rollover-orders", chainId, format: input.format, pageSize: 50, maxPages: 2, filters: { kind: "orders", rfqId: r.rfq_id as string, fillable: true } }, ctx);
+          const orders = await handleQuery({ resource: "rollover-orders", chainId, format: input.format, pageSize: 50, maxPages: 2, filters: { kind: "orders", rfqId: r.rfq_id as string, fillable: true } }, ctx, operation);
           if (orders.state !== "ok") {
             unread.push(r.rfq_id as string);
             continue;
@@ -670,7 +691,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
       // does not answer it. Ranking runs AFTER verification so dead rows are already gone and
       // exclusivity is already decoded; `sort:"venue"` restores the verbatim rows.
       let ranking: Record<string, unknown> = {};
-      if (input.resource === "orderbook" && (input.sort ?? "best") === "best") {
+      if (input.resource === "orderbook" && filters.orderHash === undefined && (input.sort ?? "best") === "best") {
         const lop = LOP_ADDRESSES[chainId];
         if (lop) {
           const ranked = rankBookRows(items as Record<string, unknown>[], { chainId, lop, generations: (await resolveGenerations(chainId)).generations, ...(filters.account !== undefined ? { account: filters.account } : {}), nowSeconds: nowSecondsOf(ctx), ...(verification?.parsed ? { parsed: verification.parsed } : {}) });
@@ -715,7 +736,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
               const resolvedSim = await getRpc(ctx, chainId).catch(() => null);
               if (resolvedSim) {
                 await Promise.all(probes.map(async (p) => {
-                  const sim = await simulateTopFill(resolvedSim.client, { signed: p.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
+                  const sim = await simulateTopFill(resolvedSim.client, { chainId, signed: p.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });
                   if (sim) p.target.fillSimulation = sim;
                 }));
               }
@@ -748,6 +769,21 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
           count: verification ? verification.items.length : traversal.items.length,
           items,
           ...ranking,
+          ...(input.resource === "orderbook" || input.resource === "fills" ? {
+            confidence: "unknown",
+            scales: {
+              ...(ranking.scales as Record<string, string> | undefined),
+              makingAmount: "raw maker-asset units (signed original on orders; actual per execution on fills)",
+              takingAmount: "raw taker-asset units (signed original on orders; actual per execution on fills; no fee/gross-net guarantee)",
+              ...(input.resource === "orderbook" ? {
+                filledMakingAmount: "actual cumulative execution, raw maker-asset units",
+                filledTakingAmount: "actual cumulative execution, raw taker-asset units; may exceed signed takingAmount",
+                remainingMakingAmount: "indexed remainder, raw maker-asset units; not execution permission",
+                remainingTakingAmount: "indexed remainder, raw taker-asset units; not a fill-price guarantee",
+              } : {}),
+              unitsTopic: UNITS_TOPIC_REFERENCE,
+            },
+          } : {}),
           ...(firmness ? { firmness } : {}),
           ...(rolloverFirmness ? { rolloverFirmness } : {}),
           ...(fillability ? { fillability } : {}),
@@ -755,7 +791,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
             ? { verification: { confirmed: verification.confirmed, unverified: verification.unverified, dropped: verification.dropped, budget: HYBRID_VERIFY_BUDGET } }
             : { note: input.resource === "rfqs" ? "rfq negotiation is off-chain venue JSON with no on-chain footprint — hybrid's one unverifiable resource family; rows are venue-claimed" : "these rows have no per-row on-chain check here; reconcile a specific one with cork_track" }),
           pagination: {
-            complete: traversal.complete,
+            complete: traversal.complete && nativeCapability?.supported !== false,
             pagesFetched: traversal.pagesFetched,
             pageSize: input.pageSize,
             maxPages: input.maxPages,
@@ -767,6 +803,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext): Promi
         chainId,
         source: "indexer",
         warnings: [
+          ...(nativeCapability && !nativeCapability.supported ? [{ code: nativeCapability.code, message: nativeCapability.reason }] : []),
           ...(traversal.complete
             ? []
             : [{ code: "pagination_incomplete", message: `venue traversal did not exhaust the set (${traversal.reason}); items are evidence, not a complete list${traversal.nextCursor ? ` — resume from cursor ${traversal.nextCursor}` : ""}` }]),

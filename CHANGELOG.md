@@ -2,15 +2,51 @@
 
 All notable changes to this component. We use plain SemVer per repo. Below `1.0.0`, a breaking
 change on covered surface bumps the **minor**. The covered surface for this component is: JSON
-output, tool names, input schemas, and exit codes. Human-readable text and log formats are not
-covered.
+output, tool names, input schemas, exit codes, and the released public SDK contract.
+Human-readable text and log formats are not covered.
 
 ## [Unreleased]
+
+## [0.8.0-rc.1] — Prepared (unreleased)
+
+### Breaking
+
+- The public SDK `buildTakerFill` / `TakerFillArgs` contract requires an explicit positive, live-state-resolved `fillMakingAmount: bigint`. The old omitted-amount call is no longer supported. Signed size is not a live remainder; over-requests and all-or-nothing partial fills are rejected rather than clamped.
+- Exact native orderbook reads with `filters.orderHash` are history, not ranked discovery. Combining them with `filters.account`, `since` or `wait` now returns `invalid_input` (CLI exit 2). Consumers must separate history reads from ranked sender/watch requests and must not require ranked-book metadata on exact history responses.
+- Native taker-fill preparation requires successful live RPC preflight rather than returning offline fill bytes after a failed read. Native history capability failures remain unavailable; incomplete history is not proof of absence, and reconciliation may report nullable resting state. Known unavailable orders can be refused as `invalid_order_terms` rather than `order_not_found`.
+- Migration instructions: [SDK](docs/sdk.md#migrating-from-07x-to-080-rc1) and [CLI/MCP native history](docs/cli.md#native-limit-order-history). This prepared minor release records the covered-contract break; it is not another 0.7.1 patch candidate or evidence of publication/deployment.
+
+### Changed
+
+- Rollover RFQ inputs accept optional `requesterRole: "cst" | "cpt"` across CLI, MCP and SDK, binding `requester_role` into canonical signed writes. Explicit cST selects the cited authenticated answer underwriter for quote-linked order preparation and submission; omitted/cPT retains requester signing and unchanged legacy bodies. Explicit roles require a compatible API and are never silently stripped or downgraded.
+- Role-aware citation preserves supported answer revisions and all existing source/destination/JIT/token/size/signature checks. The premium `>=` rule is unchanged; linkage is not a payer-cap execution guarantee. Local verification is separate from served API availability, independent review and release acceptance.
+- Rollover query and track output preserve an API's optional `effectiveStatus` separately from raw `status` / `lifecycle`. An elapsed pending order may report effective `EXPIRED` while its settler still reports `None`; that is not an onchain expiry event. APIs that omit the annotation keep working. Verification, default filters, fillability and signing protections are unchanged; raw `EXPIRED` versus chain `None` remains a conflict.
+- Native order history and availability, repeated-fill handling and bounded Safe rollover are included in this candidate. API source association is not evidence of served default-endpoint compatibility or rollout.
+- Native CLI/MCP discovery explicitly requests strict discovery while omitted-view SDK transport preserves legacy membership. Slot retirement requests maker/chain-bounded management with all five statuses, retaining expired same-slot siblings and requiring complete pagination.
+- Native history uses one invocation-local metadata HTTP read and exact reviewed API #110 identity admission. Unknown capability cannot become absence, complete zero history, `resting=false` or history-dependent cancellation bytes; independently observed valid fills retain nullable resting and unverified completeness. No persistent cache, retries or extra onchain remote procedure calls were added.
+
+### Fixed
+
+#### `DEFAULT_VENUE_URL` SDK literal
+
+- The released literal type is preserved at SDK root and `/venue` through one authoritative `venue-defaults.mjs` module and bounded `allowJs` inference. Existing readers use plain ECMAScript modules (ESM); default URL and explicit/environment overrides are unchanged. Emitted/packed and strict installed-consumer proof is separate from API readiness.
+#### Other fixes
+
+- Re-aimed the native orderbook cursor-restart mutation probe at the management-aware query: it retains `view` while dropping only the opaque cursor. Existing CLI/MCP cursor-continuation assertions catch the defect; runtime behavior is unchanged.
+- Re-aimed three stale mutation probes at the management-aware maker sweep, exact-order-hash query and account filter scope without changing their defects or consumer assertions. Existing hermetic APK/release checks run unskipped with the supported local yq; release scripts and workflows are unchanged.
+- The RPC-cache hermetic tests now start isolated children with `HOME` already set and check the actual cache path reported by the child. The runtime cache guard and explicit cache-file opt-in remain unchanged.
+- Added opt-in exact mutation-report receipts at the existing read-before-unlink boundary (`CORK_MUTATION_RECEIPTS_DIR`), including baseline/probe labels, selected files, child exit, byte length and SHA-256. Retention errors are separate evidence failures, not changes to test verdicts; the default runner behavior is unchanged.
+- Updated five mutation anchors for exact reviewed API admission, repeated-status cursor transport, capability-aware history completeness, maker-scoped retirement and canonical orderbook routing. Focused probes detect each defect; runtime code, test assertions and catalogue selection are unchanged.
+
+**Release remains gated on deployed RFQ v2 and availability-aware native readers.** Local integration does not establish served API identity or index readiness. The release gate requires compatible-API deployment evidence.
+
+These are draft integration checks, not rollover-return safety or release readiness. The reviewed conservative floor/fail-closed attester and hook preflight fix and separately authorized governance-delay action remain required; preflight is TOCTOU-prone.
 
 ## [0.7.1-rc.2] — 2026-10-12
 
 ### Added
 
+- **Explicit native orderbook management.** `filters.view` / `ch query orderbook --view` accepts `discovery` (default) or `management` for intentional unavailable-row inspection. Maker/status never force management; valid discovery and requested terminal history remain. RFQ views stay `full` / `current`.
 - **The valid ranges of a rollover order and of each fill.** We read the rules from the deployed settlers: rollover v0.2.0 (tag `fa247696`) and v0.1.0-rc.2, which enforce the same ones. `cork_capabilities topic:"rollover"` teaches them in one place (aliases `rollover-ranges`, `settlers`, `fill-sizes`). It names the two parties and compares the ExactSettler with the PartialSettler. A table gives each order field and fill input, its valid range, and the settler error.
 - **`rollover-intent` checks the settler's open-time rules before anyone signs.** It reads the settler's own pool manager (`CORK_POOL_MANAGER`). It refuses an order that the settler can never open:
   - a pool that is not on that pool manager (`Settler__SrcCstNotCanonical`, `Settler__DstCstNotCanonical`);
@@ -30,6 +66,8 @@ covered.
 
 ### Fixed
 
+- **Slot retirement retains unavailable active siblings.** The maker slot-cancellation walk explicitly requests management, so a filtered discovery book cannot silently under-sweep its mask or omit known same-slot orders from the retirement report. The traversal bounds and failure refusals are unchanged.
+- **Exact-hash dependency is not released-API compatibility.** Released API `c10ae6b` strips and ignores `orderHash`; exact lifecycle lookup is new versus that release and requires the selected served API110 capability. An old HTTP 200 is not genuine absence or a complete point book. API tree `6af7586c` is local candidate evidence, not deployed availability; old/new consumer acceptance and joined frozen proof remain release prerequisites.
 - **`premiumPaymentMode` had the wrong description.** The schema said `0=upfront, 1=on-settle`. In both live settler generations, 0 means atomic only: the premium is paid inside the fill. 1 means atomic or separate: a filler can also pay the premium in a later call, and anyone can reclaim an unpaid slot after `fillDeadline`. `rollover-intent` and `cork_submit rollover-order` now say so.
 - **`rollover-fill` said that the settler has no view of the consumed size.** The PartialSettler has one (`rolloverAccountingOf`). The tool now reads it.
 - **The rollover floors notice pointed to the wrong computation.** It told the holder to price `minCaReceived` with `cork_compute unwind-rate`, which prices `unwindSwap`. The clone runs `unwindMint`, which converts 1:1. The notice now gives the 1:1 values and says that the floors apply to each fill.
@@ -71,6 +109,8 @@ The migration topic (step 6), `docs/cli.md` and the Zyfai quickstart now teach t
 ### Compatibility
 
 Compared with `v0.7.1-rc.1`, no tool name, input-schema field, type or enum changes, and every SDK export keeps its name and shape. Tool descriptions are reworded, and one schema default is gone: `rollover-fill.minDstPerSrc` had `"0"`. JSON output changes by additions: `fillable` and `whyNotFillable` on rollover-order rows, `data.fillability`, `data.ranges`, `data.dstFloor` and `data.trust`. Behaviour changes on purpose in one way: the tool now refuses to build bytes that sign away value or that the settler always reverts. A `rollover-fill` that omits `minDstPerSrc` gets a derived floor, or the refusal `dst_floor_underivable` (exit 3) where it built a fill with no floor before. `rollover-intent` and `rollover-fill` refuse what the settler can never open or fill (pool not on its pool manager, size not a multiple of the share quantum, a deadline past a pool's expiry). We class these as safety checks, not as a change to covered surface. To keep the old result, pass `minDstPerSrc` (1e18 for a same-collateral roll); `docs/cli.md` section 12 gives the steps.
+
+That comparison describes the integrated upstream release preparation. This unpublished PR27 candidate additionally retains explicit repeated-fill maker preparation, bounded Safe rollover preparation and optional native orderbook management, as documented below. These additions require their own released-consumer contract and selected API verification; they are not established as shipped by the upstream RC2 version or this changelog heading.
 
 ## [0.7.1-rc.1] — 2026-10-09
 
@@ -172,6 +212,7 @@ These exceptions were accepted for this opt-in candidate on 2026-10-07. They do 
 2. **Pending removal notice and usage evidence:** the removal notice to integrators and the usage read were deferred for this opt-in RC. Record the posted notice, recipient coverage and usage read before retiring any existing integration path. Existing releases and API-v1 routes are not retired by this cut.
 3. **Existing main-branch layout:** candidate commits were already merged into main under the former workflow, and the branch-workflow correction was pushed to main without a pull request; that history is retained. RC tags now require release/vX.Y.Z. Restore the stable-main convention when promoting the first stable release.
 
+
 ### Breaking
 
 - **RFQ v1 is removed from the CLI, MCP and SDK.** Every RFQ read and write from this client goes to `/rfqs/v2`. A version 2 read does not show RFQs that were opened on version 1; the venue still serves its v1 API separately. Bodies carry `schema_version: "2"`, and every address is lowercased, because the venue hashes the lowercased body.
@@ -185,6 +226,12 @@ These exceptions were accepted for this opt-in candidate on 2026-10-07. They do 
 No new deprecation is introduced in this candidate. The existing `additionalData` input alias for `extraData` still emits `deprecation_notice`; the rollover typed-data struct's canonical `additionalData` member is not deprecated. RFQ v1 inputs and the free RFQ `signature` field are removed, not retained as deprecated compatibility paths. Removal-notice and usage approval remains a human release gate.
 
 ### Added
+
+- Explicit repeated-fill maker orders (`allowsMultipleFills`, default false; SDK `allowMultipleFills`) and distinct-nonce repeated-fill ladders. Partial fills must remain enabled; shared/OCO combinations are refused. Remaining amount is per order hash, and cancellation is manual per hash. Existing single-fill, answer-rfq and OCO defaults are unchanged.
+- Opt-in bounded rollover-fill preparation validates signed guards and emits a genuine Safe 1.4.1 single-EOA-owner transaction around atomic stage → BaseFiller calls. Unknown/no-code/delegated/guarded account profiles fail closed. Module identities and pool bindings remain caller-supplied, not deployed defaults or attestations; independent review, rollout and release remain gated.
+- Repository-contained API #110 confidence fixtures and real CLI/MCP boundary regressions cover `unknown`/`provisional`/`confirmed` checkpoint labels without promoting signature verification, finality or execution permission. Unavailable active residuals remain excluded and refuse fill/refresh before remote procedure calls (RPC) or bytes. Metadata 500 preserves unknown resting state and available fills; bounded walks retain same-transaction logs and resume saved/current opaque cursors. Six semantic mutation probes gate these decisions in existing CI.
+- The compatible-API release gate accepts all three native checkpoint-confidence labels without treating them as finality or execution permission. The refreshed private draft pins API `a34f09a19a772e28f7cf29fbaae567d8866ee2e3` from its signed replacement candidate/publication receipts and Infra `499f6411a10b9733dcac4c6a465f888663c302e8`. Exact deployed revision, migration digest and every shipped endpoint remain independently required. Five retained semantic probes exercise these fail-closed gates.
+- Consumer regressions retain maker-code transport warnings alongside valid inline EOA fill bytes and recognize a healthy auction maker above its signed floor without an artificial probe cap. These tests catch the two previously surviving warning/probe mutations; production fill safety is not weakened. The retained ISO-zone mutation probe explicitly defaults an omitted zone to UTC inside its disposable mutant, so host time-zone behavior cannot mask zone-less timestamp acceptance; the production parser is unchanged.
 
 - **RFQ API keys, kept the AWS CLI way.** `auth { method: "apiKey" }` reads the key from `CORK_RFQ_API_KEY`, else the profile's `credential_process`, else the key stored for the venue host in `~/.config/cork-helper-cli/credentials` (override `CORK_CREDENTIALS_FILE`). A stored key belongs to one venue host, so a staging key never reaches production. The file is written with mode 600 and refused when other users can read it. New CLI commands: `ch auth set-key` (hidden prompt or pipe, never argv), `ch auth list` (keys masked to the last four characters), `ch auth remove`, `ch auth status`; `--profile` on every tool command, `CORK_PROFILE` in the environment. No key resolves → `api_key_missing`, nothing sent. The HTTP MCP endpoint refuses `apiKey`: a shared server's keys belong to its operator.
 - **Sign from the CLI with a password-protected keystore.** `ch wallet new|import|list|address|remove` keeps keys in the standard v3 encrypted format, in `~/.config/cork-helper-cli/keystores/` only (`CORK_KEYSTORE_DIR` moves it; no other tool's folder is read), owner-only and refused when others can read it. `ch sign --account <name>` signs a prepare result's typed data or a complete transaction and prints the signature; it never broadcasts. `ch submit rfq-open|rfq-answer|rfq-counter --account <name>` prepares, signs and submits an RFQ write in one command. Before every signature the CLI shows what will be signed and asks yes or no, then asks for the password — from the terminal only, never from an environment variable, a file or a pipe. The MCP server still never signs: a test fails if any MCP or core code reaches the signing modules.
@@ -204,12 +251,26 @@ No new deprecation is introduced in this candidate. The existing `additionalData
 
 ### Fixed
 
+
+- Integrated main `6b41e9f9bf9753e339d503f1b916c0a6ea0d091d` with history preserved. Native accounting, availability guards and conservative confidence coexist with RFQ-v2 kind/auth, signed quote and superseding-refresh semantics; both mutation catalogues are retained. Actual CLI/MCP fixture smoke exercises both paths, without production signing or deployment.
+- Taker fills default to the live LOP remainder across CLI/MCP, readiness, pricing, approvals, auctions and ForSelf; over-requests and unknown live status emit no fill bytes. Signed terms/hash and ceiling arithmetic are preserved.
+- Sufficient allowances no longer carry a smaller replacement approval; bounded owner-to-clone grants cover only the remaining authorized position.
+- Native reconciliation reports incomplete scans at the 1000-fill cap without discarding observed fills.
+- Every `v*` release, including candidates, APK publication and hosted activation require bounded compatible-API behavior checks for every shipped default endpoint plus exact deployment identity. This gate is not release or deployment authorization.
+
+- Mutation probe children await Vitest's public run API and shutdown before exiting. This prevents Bun from exiting successfully between isolated fork workers without a JSON report. The CI job remains bounded at 90 minutes after 734 of 877 probes completed without survivors before the former one-hour cutoff. The baseline, catalogue, worker isolation and fail-closed verdict rules are unchanged.
+
+- Taker-fill and refresh-order exact-hash lookups no longer apply the candidate-only OPEN filter. Native retired records are refused as known unavailable (`invalid_order_terms`), not misreported as missing (`order_not_found`). Discovery, signature verification and fill/replacement-byte protections are unchanged.
+
+- Native limit-order point reads send chainId + orderHash to the venue. Exact history includes inactive records without ranking/liveness drops; reconciliation preserves signed originals and native-unit cumulative amounts while refusing foreign chain/hash responses and known unavailability. Ranked discovery excludes unavailable rows; checkpoint confidence never becomes execution permission. The refreshed local consumer contract binds the published private draft API candidate `a34f09a19a772e28f7cf29fbaae567d8866ee2e3`; default-endpoint deployment is still unproved.
+
 - **The uint256-max fixed-rate refusal names the helper, not the chain** (cork-cli#5). `rfq-open`, `derive-cork-pool` and `answer-rfq` said no pool could be created at uint256's maximum. The fixed recipe's `resolve` overflows there (rate + 1, Panic 0x11), so the HELPER resolves 1 .. MAX − 1 and every resolving path still refuses `recipe_refused`, deterministically. The pool itself is creatable: `create-pool` with the explicit constraint [MAX − 1, MAX] and rateOverride MAX passes the creator (simulated on a Base fork at the primary; [MAX, MAX] reverts InvalidParams). The messages now say so (`fixedRateBoundaryNote`), and the `cover` topic documents the boundary.
 - **Cover and mode are compared from identities on every side** (cork-cli#6). `answer-rfq` reports `answer.cover` (the cover the recipe decides, the option's mode, the request's modes, `agrees`) and warns `cover_mode_mismatch` (was `invalid_order_terms`) for a mode the request did not ask for. `cork_submit rfq-answer` warns `cover_mode_mismatch` for an option whose `mode` label disagrees with the cover its template's recipe gives (a `fixed_rate` label on a NAV template) and for a mode the request did not name; both relay as asked. `taker-fill` through the venue book reads the order's JIT block — the recipe it names, else the limits it carries — against the cited RFQ's modes and the cited option's label, reports `data.cover`, and warns `cover_mode_mismatch` when the fill buys a cover the request did not ask for: build-and-warn, so the requester accepts or refuses the counter-proposal with the facts in hand. A quote_ref is resolved by one shared reader (`handlers/rfq-citation.ts`).
 - Repository test, typecheck and package-validation entrypoints explicitly run under Bun, including ordinary CI script invocations. Private updater subprocess tests resolve Bun before restricting PATH, preserving the no-verifier refusal checks on Node-equipped runners.
 - Private asset redirects use explicit host membership, refuse inherited-property host names before a download request, and strip credentials on approved CDN redirects.
 - Release publication now reads back the actual Release and requires its immutable flag and intended tag/status. A failed readback reports that publication has already occurred and needs reconciliation before a retry.
 - SDK installation guidance covers private authenticated downloads and both channels' transitive dependencies with explicit overrides. The guide builds before local packing and does not equate local archives with attested release assets.
+
 
 - **Document the RFQ failure contract.** `rfq-open` accepts one to three unique modes. Four or more modes fail locally at the schema boundary with exit **2**, empty stdout and `invalid_input` on stderr; duplicates within the length bound fail domain preflight with exit **3** and an `invalid_order_terms` result on stdout. Neither is a `venue_rejected` response. The CLI guide explains successful `rfq-open` results carrying `recipe_generation_notice` or `cover_mode_mismatch`, and that warnings alone do not mean preparation failed. Runtime behavior is unchanged; compatibility/versioning-policy disposition remains a human review decision.
 - **`answer-rfq`: a cited fixed-rate option brings its own rate.** A cited option whose template carried no admissible `rate_override` was built at the REQUEST's rate, without a word: the order cited a quote and created a pool that quote never named. It is now refused; `jitMarket.rateOverride` still builds at a rate of your own. An explicit rate that differs from the cited option's rate is now named too (the venue checks the cited premium, not the rate); the order still builds.

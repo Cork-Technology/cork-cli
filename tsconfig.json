@@ -18,6 +18,7 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
+    "allowJs": true,
     "noEmit": true,
     "baseUrl": ".",
     "paths": {

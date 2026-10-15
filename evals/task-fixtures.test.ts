@@ -61,6 +61,12 @@ const rolloverBase = {
 };
 
 describe("eval task fixtures reproduce their expected envelopes (offline, canonical calls)", () => {
+  it.each(["prepare-repeated-fill", "refuse-repeated-oco", "prepare-bounded-rollover"])("%s reaches its real policy outcome against the shared chain fixture", async (id) => {
+    const task = TASKS.find((t) => t.id === id)!;
+    const result = await runTool(task.expect.tool, task.expect.params, stubContext());
+    expect(result.state).toBe(task.expect.state);
+    expect(result.warnings.map((w) => w.code)).toContain(task.expect.code);
+  });
   it("rollover-jit-market: jitMarket build is ok, carries jit_market_notice, and the derived dst pool passes the cross-check", async () => {
     const env = await runTool(
       "cork_prepare_orders",

@@ -26,6 +26,7 @@
     "@anthropic-ai/aws-sdk": "0.6.2",
     "@anthropic-ai/sdk": "0.116.0",
     "@arethetypeswrong/cli": "0.18.5",
+    "@safe-global/safe-contracts": "1.4.1",
     "@socketsecurity/bun-security-scanner": "1.1.2",
     "@types/node": "22.20.1",
     "ajv": "8.20.0",

@@ -7,9 +7,10 @@ import { describe, expect, it } from "vitest";
 import { QueryInput } from "@cork/schemas";
 import { runTool, ToolInputError } from "@cork/core";
 import { KNOWN_FILTER_KEYS, RESOURCE_FILTER_KEYS } from "../src/handlers/filters.ts";
+import { withNativeApiMetadata } from "./helpers.ts";
 
 const q = (resource: string, filters: Record<string, unknown>) =>
-  runTool("cork_query", { resource, chainId: 1, pageSize: 25, format: "concise", filters }, { nowSeconds: 1_790_000_000n, venueFetch: async () => new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 }) });
+  runTool("cork_query", { resource, chainId: 1, pageSize: 25, format: "concise", filters }, { nowSeconds: 1_790_000_000n, venueFetch: withNativeApiMetadata(async () => new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 })) });
 
 describe("per-resource filter applicability", () => {
   it("a known key on the wrong resource is refused, naming the resource's own keys", async () => {
@@ -45,6 +46,14 @@ describe("per-resource filter applicability", () => {
   it("a globally unknown key still gets the global did-you-mean, not the applicability teaching", async () => {
     const err = await q("orderbook", { poolid: `0x${"ab".repeat(32)}` }).catch((e: ToolInputError) => e);
     expect((err as ToolInputError & { issues: Array<{ message: string }> }).issues[0]!.message).toContain("unknown filter key");
+  });
+  it("refuses the other resource's view rather than silently dropping it", async () => {
+    for (const view of ["full", "current"]) await expect(q("orderbook", { view })).rejects.toThrow(ToolInputError);
+    for (const view of ["discovery", "management"]) await expect(q("rfqs", { view })).rejects.toThrow(ToolInputError);
+  });
+
+  it("refuses a venue view in full-decentralized orderbook mode", async () => {
+    await expect(runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { view: "management" }, mode: "full-decentralized" })).rejects.toThrow(ToolInputError);
   });
 });
 

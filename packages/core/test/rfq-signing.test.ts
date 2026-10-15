@@ -6,6 +6,7 @@ import { concat, encodeAbiParameters, hashTypedData, keccak256, recoverTypedData
 import { privateKeyToAccount } from "viem/accounts";
 import { canonicalJson, RFQ_WRITE_TYPES, rfqWriteBodyHash, rfqWriteTypedData } from "../src/rfq-signing.ts";
 import { hashJitMarketParams, JIT_MARKET_PARAMS_TYPEHASHES } from "../src/rollover.ts";
+import { planRfqWrite } from "../src/rfq-bodies.ts";
 
 // Anvil / Hardhat default account #0 — a PUBLIC test key that guards nothing.
 const ANVIL_0_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -91,6 +92,24 @@ describe("fixed rollover open vector (the venue's published worked example)", ()
   const DIGEST = "0x0517174e3a880c0bfb0f8ac21f0dca4d1627563ede8f8b1f962ca1e66e0df2ce";
   const SIGNATURE =
     "0xaf1fd8a102120a1cf5d49c1c04e8c0d92a5c27a923f402320b6844ad85d33441358ba1c8899094fa1db395ed38288e4f8108dc4ed2e0e3a1559619ee6ed679821b";
+
+  it("the client planner preserves the published omitted-role body, digest and signature", async () => {
+    const plan = planRfqWrite({
+      chainId: body.chain_id,
+      clientRequestId: body.request_id,
+      request: {
+        type: "rfq-open", kind: "rollover", requester: ANVIL_0_ADDRESS,
+        source: { poolId: body.source.pool_id as `0x${string}`, shares: body.source.shares },
+        referenceAsset: USDC_BASE, collateralAsset: { exact: USDC_BASE },
+        expiryWindow: { notBefore: body.expiry_window.not_before, notAfter: body.expiry_window.not_after },
+        premiumToken: { exact: USDC_BASE }, validUntil: body.valid_until,
+      },
+    });
+    expect(canonicalJson(plan.body)).toBe(CANONICAL);
+    expect(plan.bodyHash).toBe(BODY_HASH);
+    expect(plan.digest).toBe(DIGEST);
+    expect(await privateKeyToAccount(ANVIL_0_KEY).signTypedData(plan.typedData)).toBe(SIGNATURE);
+  });
 
   it("canonical JSON, bodyHash, digest and signature", async () => {
     expect(canonicalJson(body)).toBe(CANONICAL);

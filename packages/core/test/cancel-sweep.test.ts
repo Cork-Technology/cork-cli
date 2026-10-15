@@ -27,6 +27,7 @@ import {
   type LopOrder,
 } from "@cork/core";
 import abiFixture from "./fixtures/lop-v4-cancel-abi.json" with { type: "json" };
+import { withNativeApiMetadata } from "./helpers.ts";
 
 const CHAIN = 8453 as const;
 const LOP = LOP_ADDRESSES[CHAIN]!;
@@ -65,7 +66,7 @@ function venue(rows: unknown[], opts: { hasMore?: boolean; status?: number } = {
     if (opts.status !== undefined && opts.status >= 400) return new Response(JSON.stringify({ error: "boom" }), { status: opts.status });
     return new Response(JSON.stringify({ items, hasMore: opts.hasMore ?? false }), { status: 200 });
   };
-  return { urls, fetch };
+  return { urls, fetch: withNativeApiMetadata(fetch) };
 }
 
 const cancel = (ctx: HandlerContext, action: Record<string, unknown>) =>
@@ -231,6 +232,23 @@ describe("cork_prepare_orders cancel scope 'slot' — the handler over a venue b
     expect(v.urls).toHaveLength(1);
     expect(v.urls[0]!.toLowerCase()).toContain(`maker=${maker.address.toLowerCase()}`);
     expect(v.urls[0]).toContain("/limit-orders/v1/orderbook");
+  });
+
+  it("retires an expired terminal same-slot sibling through management history", async () => {
+    const anchor = await row(maker, "management-anchor", nonceIn(SLOT, 5));
+    const sibling = { ...(await row(maker, "management-expired-sibling", nonceIn(SLOT, 9), { makerTraits: buildMakerTraits({ allowPartialFills: false, allowMultipleFills: false, usePermit2: false, expiry: NOW - 1n, nonce: nonceIn(SLOT, 9) }) })), status: "EXPIRED", availability: { state: "unavailable", reason: "expired" } };
+    const active = venue([anchor]);
+    const history = venue([anchor, sibling]);
+    const venueFetch: NonNullable<HandlerContext["venueFetch"]> = (url) => {
+      const params = new URL(url).searchParams;
+      return params.get("view") === "management" && params.getAll("status").includes("EXPIRED") ? history.fetch(url) : active.fetch(url);
+    };
+    const env = await cancel({ venueFetch }, { orderHash: anchor.orderHash, makerTraits: anchor.traits.toString(), scope: "slot" });
+    expect(env.state).toBe("ok");
+    const d = env.data as SweepData;
+    expect(decodeLopCall(d.calldata)).toEqual({ fn: "bitsInvalidateForOrder", makerTraits: anchor.traits, additionalMask: 512n });
+    expect(d.retires.orders).toContainEqual({ orderHash: anchor.orderHash, nonce: nonceIn(SLOT, 5).toString(), bit: 5, relation: "anchor", listed: true });
+    expect(d.retires.orders).toContainEqual({ orderHash: sibling.orderHash, nonce: nonceIn(SLOT, 9).toString(), bit: 9, relation: "same-slot", listed: true });
   });
 
   it("with no sibling in the slot the sweep is still built (an empty additional mask) and the notice says it equals cancelOrder", async () => {

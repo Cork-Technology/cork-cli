@@ -1,0 +1,361 @@
+{
+  "source": {
+    "repository": "Cork-Technology/cork-indexing-api",
+    "revision": "02421fee3f9bd8c8b3c9a078858eae9e3800f374",
+    "pullRequest": 110,
+    "openapiSha256": "38451282f11078378e0e1567b1daf545786b771a6f912987ddec66f65c919e92",
+    "capture": "COMMIT-SMOKE.json",
+    "limits": "Seeded local PostgreSQL and actual API HTTP serializers; fixture signatures/hashes are not chain authority."
+  },
+  "responses": [
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "28948022309329048855892746252171976963317496166410141009864396001978282409984",
+            "orderHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1791039229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 8453,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "PARTIALLY_FILLED",
+            "remainingMakingAmount": "4",
+            "remainingTakingAmount": "0",
+            "filledMakingAmount": "6",
+            "filledTakingAmount": "10",
+            "availability": {
+              "state": "candidate",
+              "reason": "no-known-blocker"
+            },
+            "lastStatusSyncBlock": "100",
+            "lastStatusSyncTxHash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453&orderHash=0x1212121212121212121212121212121212121212121212121212121212121212",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "0",
+            "orderHash": "0x1212121212121212121212121212121212121212121212121212121212121212",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1791039229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 8453,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "PARTIALLY_FILLED",
+            "remainingMakingAmount": "9",
+            "remainingTakingAmount": "6",
+            "filledMakingAmount": "1",
+            "filledTakingAmount": "1",
+            "availability": {
+              "state": "unavailable",
+              "reason": "bit-consumed"
+            },
+            "lastStatusSyncBlock": null,
+            "lastStatusSyncTxHash": null,
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453&orderHash=0x1515151515151515151515151515151515151515151515151515151515151515",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "0",
+            "orderHash": "0x1515151515151515151515151515151515151515151515151515151515151515",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1791039229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 8453,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "OPEN",
+            "remainingMakingAmount": "10",
+            "remainingTakingAmount": "7",
+            "filledMakingAmount": "0",
+            "filledTakingAmount": "0",
+            "availability": {
+              "state": "unavailable",
+              "reason": "bit-consumed"
+            },
+            "lastStatusSyncBlock": null,
+            "lastStatusSyncTxHash": null,
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453&orderHash=0x1313131313131313131313131313131313131313131313131313131313131313",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "0",
+            "orderHash": "0x1313131313131313131313131313131313131313131313131313131313131313",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1790949229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 8453,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "FILLED",
+            "remainingMakingAmount": "0",
+            "remainingTakingAmount": "0",
+            "filledMakingAmount": "10",
+            "filledTakingAmount": "7",
+            "availability": {
+              "state": "unavailable",
+              "reason": "exhausted"
+            },
+            "lastStatusSyncBlock": null,
+            "lastStatusSyncTxHash": null,
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453&orderHash=0x1414141414141414141414141414141414141414141414141414141414141414",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "0",
+            "orderHash": "0x1414141414141414141414141414141414141414141414141414141414141414",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1790949229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 8453,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "OPEN",
+            "remainingMakingAmount": "10",
+            "remainingTakingAmount": "7",
+            "filledMakingAmount": "0",
+            "filledTakingAmount": "0",
+            "availability": {
+              "state": "unavailable",
+              "reason": "expired"
+            },
+            "lastStatusSyncBlock": null,
+            "lastStatusSyncTxHash": null,
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=1&orderHash=0x1515151515151515151515151515151515151515151515151515151515151515",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "salt": "1",
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "receiver": "0x0000000000000000000000000000000000000000",
+            "makerAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takerAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "10",
+            "takingAmount": "7",
+            "makerTraits": "0",
+            "orderHash": "0x1515151515151515151515151515151515151515151515151515151515151515",
+            "signature": "0x0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+            "makerAccountType": "EOA",
+            "makerPermit2": "0x",
+            "extension": "0x",
+            "quoteRef": null,
+            "side": "BUY",
+            "premium_annualized": "0.028",
+            "expiry": 1791039229,
+            "nonce": "0",
+            "allowsPartialFills": true,
+            "allowedSender": null,
+            "chainId": 1,
+            "createdAt": "2026-10-02T14:53:50.131Z",
+            "updatedAt": "2026-10-02T14:53:50.131Z",
+            "status": "OPEN",
+            "remainingMakingAmount": "10",
+            "remainingTakingAmount": "7",
+            "filledMakingAmount": "0",
+            "filledTakingAmount": "0",
+            "availability": {
+              "state": "candidate",
+              "reason": "no-known-blocker"
+            },
+            "lastStatusSyncBlock": null,
+            "lastStatusSyncTxHash": null,
+            "confidence": "unknown"
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/orderbook?chainId=8453&orderHash=0x9999999999999999999999999999999999999999999999999999999999999999",
+      "status": 200,
+      "body": {
+        "items": [],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    },
+    {
+      "path": "/limit-orders/v1/fills?chainId=8453&orderHash=0x1111111111111111111111111111111111111111111111111111111111111111&limit=1",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "chainId": 8453,
+            "orderHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "blockNumber": "100",
+            "blockTimestamp": "2026-01-01T00:00:00.000Z",
+            "txHash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "logIndex": 2,
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taker": "0xdddddddddddddddddddddddddddddddddddddddd",
+            "makingAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takingAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "3",
+            "takingAmount": "8",
+            "isPartialFill": true,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-10-02T14:53:50.132Z",
+            "confidence": "unknown",
+            "observedBlockTimestamp": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "nextCursor": "djJ8MjAyNi0wMS0wMSAwMDowMDowMCswMHw4NDUzfDB4ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZXwy",
+        "hasMore": true
+      }
+    },
+    {
+      "path": "/limit-orders/v1/fills?chainId=8453&orderHash=0x1111111111111111111111111111111111111111111111111111111111111111&limit=1&cursor=djJ8MjAyNi0wMS0wMSAwMDowMDowMCswMHw4NDUzfDB4ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZXwy",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "chainId": 8453,
+            "orderHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "blockNumber": "100",
+            "blockTimestamp": "2026-10-02T14:53:50.237Z",
+            "txHash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "logIndex": 1,
+            "maker": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "taker": "0xdddddddddddddddddddddddddddddddddddddddd",
+            "makingAsset": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "takingAsset": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "makingAmount": "3",
+            "takingAmount": "2",
+            "isPartialFill": true,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-10-02T14:53:50.132Z",
+            "confidence": "unknown",
+            "observedBlockTimestamp": null
+          }
+        ],
+        "nextCursor": null,
+        "hasMore": false
+      }
+    }
+  ]
+}

@@ -1,8 +1,7 @@
-// Rollover RFQs (venue RFQ v2, kind "rollover"): a cPT holder asks for a price to move a held
-// position into another pool; an underwriter answers with a destination and a premium per
-// share; the holder's own rollover order executes the quote it accepts. These are the venue's
-// rules for those writes and for the order that cites a quote, mirrored so a write is refused
-// here with teaching instead of burning a request_id on a venue 400.
+// Rollover RFQs (venue RFQ v2): either holder can request a rollover price.
+// Explicit cst selects the cited answer's authenticated stored underwriter as
+// the cPT order signer; omitted/cpt retains requester signing. Mirror the
+// venue's existing term and citation rules before consuming a request_id.
 
 import { zeroHash, type Hex } from "viem";
 import type { JitMarketParamsStruct } from "./rollover.ts";
@@ -38,6 +37,7 @@ export function rfqOpenKindFieldsViolation(a: {
   notionalAssets?: unknown;
   source?: unknown;
   premiumToken?: unknown;
+  requesterRole?: unknown;
 }): string | null {
   if (a.kind === "rollover") {
     const stray = (["modes", "packageIds", "notionalAssets"] as const).filter((k) => a[k] !== undefined);
@@ -50,7 +50,7 @@ export function rfqOpenKindFieldsViolation(a: {
     if (Array.isArray(one) && new Set(one.map((t) => String(t).toLowerCase())).size !== one.length) return "premiumToken.one_of must name each token once (the venue refuses a repeated token with a 400)";
     return null;
   }
-  const stray = (["source", "premiumToken"] as const).filter((k) => a[k] !== undefined);
+  const stray = (["source", "premiumToken", "requesterRole"] as const).filter((k) => a[k] !== undefined);
   if (stray.length > 0) return `${stray.join(", ")} ${stray.length === 1 ? "belongs" : "belong"} to a rollover RFQ only: a new_position RFQ asks for cover, so it names modes, packageIds and notionalAssets instead (the venue refuses the other kind's fields with a 400)`;
   const missing = (["modes", "packageIds", "notionalAssets"] as const).filter((k) => a[k] === undefined);
   if (missing.length > 0) return `a new_position RFQ needs ${missing.join(", ")} (the venue requires ${missing.length === 1 ? "it" : "them"})`;
@@ -221,7 +221,8 @@ export interface RolloverQuoteOrder {
 interface EmbeddedAnswer {
   answer_id?: unknown;
   status?: unknown;
-  answer?: { status?: unknown; options?: Array<Record<string, unknown>> };
+  underwriter?: unknown;
+  answer?: { schema_version?: unknown; kind?: unknown; underwriter?: unknown; status?: unknown; options?: Array<Record<string, unknown>> };
 }
 
 export type RolloverQuoteLookup =
@@ -240,26 +241,45 @@ export function findRolloverQuote(chainId: number, rfq: Record<string, unknown>,
   if (!answer) {
     return { found: false, reason: `answer '${quoteRef.answerId}' is not on the referenced RFQ`, unresolved: rfq.truncated === true || rfq.answers_truncated === true };
   }
+  if (answer.answer?.schema_version !== "2" || answer.answer.kind !== "rollover") return { found: false, reason: "the referenced answer is not a v2 rollover answer", unresolved: false };
   const status = answer.answer?.status ?? answer.status;
   if (status !== "quoted") return { found: false, reason: `the referenced answer is not a quote (status ${String(status)})`, unresolved: false };
   const option = (answer.answer?.options ?? []).find((o) => String(o.option_id) === quoteRef.optionId);
   if (!option) return { found: false, reason: `option '${quoteRef.optionId}' is not in the referenced answer`, unresolved: false };
-  const underwriter = (answer as { underwriter?: unknown }).underwriter ?? (answer.answer as { underwriter?: unknown } | undefined)?.underwriter;
+  // Current-view metadata is the stored column; full view carries its authenticated body.
+  // An explicitly unreadable stored identity must not fall back to payload data.
+  const underwriter = Object.hasOwn(answer, "underwriter") ? answer.underwriter : answer.answer.underwriter;
   return { found: true, option, underwriter: typeof underwriter === "string" ? underwriter : null };
+}
+
+/** Shared signer selection for quote preparation and signed-order submission. */
+export function rolloverQuoteSigner(rfq: Record<string, unknown>, underwriter: string | null):
+  | { ok: true; user: string; role: "cst" | "cpt" | undefined }
+  | { ok: false; reason: string } {
+  const request = rfq.request;
+  const role = request !== null && typeof request === "object" && Object.hasOwn(request, "requester_role") && "requester_role" in request
+    ? request.requester_role : rfq.requester_role;
+  if (role !== undefined && role !== "cpt" && role !== "cst") return { ok: false, reason: "the referenced RFQ has an unsupported requester_role" };
+  const user = role === "cst" ? underwriter : rfq.requester;
+  if (typeof user !== "string") return { ok: false, reason: `the referenced RFQ has no readable ${role === "cst" ? "stored answer underwriter" : "requester"}` };
+  return { ok: true, user, role };
 }
 
 /**
  * Whether a rollover order matches the quote it cites — the venue's quoteRefMismatch rule
- * (rollover v1 quote-ref), mirrored: the order's user is the RFQ's requester,
+ * (rollover v1 quote-ref), mirrored: cst selects the stored answer underwriter;
+ * omitted/cpt selects the RFQ requester,
  * its source pool the RFQ's source, its destination the quoted one (an existing pool with a ZERO
  * jitMarketHash, or a just-in-time market whose hash equals the stored jit_market_hash), the
  * quoted premium token, a premium per share at least the quoted one, and no more shares than
  * the quote covers. RFQ expiry and fresh_until are not checked, as the venue does not: the
  * order carries its own deadlines. Returns why the quote does not back the order, or null.
  */
-export function rolloverQuoteRefMismatch(rfq: Record<string, unknown>, option: Record<string, unknown>, order: RolloverQuoteOrder): string | null {
-  const requester = rfq.requester;
-  if (!same(requester, order.user)) return `the order's user ${order.user} is not the requester of the referenced RFQ (${String(requester)})`;
+export function rolloverQuoteRefMismatch(rfq: Record<string, unknown>, option: Record<string, unknown>, order: RolloverQuoteOrder, underwriter: string | null = null): string | null {
+  const signer = rolloverQuoteSigner(rfq, underwriter);
+  if (!signer.ok) return signer.reason;
+  const requester = signer.user;
+  if (!same(requester, order.user)) return `the order's user ${order.user} is not the ${signer.role === "cst" ? "stored answer underwriter" : "requester"} of the referenced RFQ (${requester})`;
   const req = requestViewOf(rfq);
   if (!same(req.sourcePoolId, order.srcPoolId)) return `srcPoolId ${order.srcPoolId} is not the RFQ's source pool (${String(req.sourcePoolId)})`;
   const destination = (option.destination ?? {}) as Record<string, unknown>;

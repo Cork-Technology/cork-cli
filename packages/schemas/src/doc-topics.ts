@@ -87,8 +87,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "availability",
     envelope: "mixed",
     contract:
-      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop; api_key_missing: an RFQ write chose auth {method:'apiKey'} and no key resolved — env var, then the profile's credential_process, then the key stored for that venue host; nothing sent) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
-    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "config_override_active", "config_override_invalid", "no_lop", "request_aborted", "api_key_missing"],
+      "the read's backing (RPC, config, deployment) is absent or degraded — unavailable when nothing could serve (requires_rpc, unknown_deployment, no_lop; api_key_missing: an RFQ write chose auth {method:'apiKey'} and no key resolved — env var, then the profile's credential_process, then the key stored for that venue host; nothing sent) or native history capability is unverified (native_api_unavailable: unknown capability cannot establish absence, complete history or retirement advice; independently observed valid fills may remain with nullable resting and unverified completeness) or the caller's own deadline/cancellation ended the call before the venue answered (request_aborted: nothing relayed, no venue failure recorded), info when a fallback served (rpc_fallback, config_fetch_failed) or the chain answered with a revert (chain_read_failed: usually a pool absent on that chain)",
+    codes: ["requires_rpc", "unknown_deployment", "chain_read_failed", "rpc_fallback", "config_fetch_failed", "config_override_active", "config_override_invalid", "no_lop", "request_aborted", "api_key_missing", "native_api_unavailable"],
   },
   {
     family: "gates",
@@ -146,7 +146,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
       "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
       "oracle_not_deployable", "oracle_not_deployed", "oracle_rate_unreadable", "stale_share_prediction", "share_prediction_unavailable",
       "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "contract_maker_pre_rest", "expiry_far_future", "roles_not_granted", "implementation_not_approved", "implementation_gate_bypassed", "maker_not_ready",
-      "recipe_generation_notice", "rollover_contract_exists", "premium_cap_estimated", "cover_mode_mismatch", "reference_loss_unreported", "fixed_rate_in_the_money",
+      "recipe_generation_notice", "rollover_contract_exists", "premium_cap_estimated", "cover_mode_mismatch", "reference_loss_unreported", "fixed_rate_in_the_money", "module_identity_unverified",
     ],
   },
   {
@@ -167,8 +167,8 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     family: "artifact life",
     envelope: "ok",
     contract:
-      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), a slot sweep's reach (cancel_sweep_notice: which resting orders one bitsInvalidateForOrder retires, and that the venue keeps listing them until a chain read drops them), or a defaulted/ignored input the caller should know about",
-    codes: ["cancel_sweep_notice", "unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
+      "what the served artifact IS and what must happen next: unsigned bytes to simulate+sign, a caller-signed artifact verified not created, a ForSelf allowance matrix, a decaying price, a confirmed-missing approval with its unsigned grant, a simulate verdict (would_revert), repeated-fill cancellation duties, a slot sweep's reach (cancel_sweep_notice: which resting orders one bitsInvalidateForOrder retires, and that the venue keeps listing them until a chain read drops them), or a defaulted/ignored input the caller should know about",
+    codes: ["cancel_sweep_notice", "unsigned_artifact", "caller_signed_artifact", "for_self_artifact", "would_revert", "decaying_price_notice", "repeated_fill_notice", "approval_missing", "makingamount_exceeds_order", "chainid_defaulted", "reserved_field_ignored", "premium_scale_suspect", "target_unverified", "fill_sender_unknown", "envelope_unwrapped", "delegatecall_in_envelope"],
   },
 ] as const;
 
@@ -321,9 +321,13 @@ side knows) is KEPT, labeled verification:'unverified'.
   exists annotation instead.
 - fills — the OrderFilled log is confirmed at the row's claimed block (clustered getLogs, a few
   bounded range reads per page): a missing log drops the row.
-- rollover-orders kind=orders — the settler's own orderStatus view arbitrates the claimed
+- rollover-orders kind=orders — the settler's own orderStatus view arbitrates the raw
   lifecycle; a contradiction drops the row; unknown status vocabulary (either side) is
-  indeterminate, kept as 'unverified'.
+  indeterminate, kept as 'unverified'. Optional effectiveStatus remains a separate venue
+  annotation in query items and cork_track's data.order; old APIs can omit it. Raw PENDING
+  with effective EXPIRED and chain None is not an onchain expiry or event; expiredAt stays
+  null without a real event. Raw EXPIRED with chain None still conflicts. The annotation
+  never changes default filters, fillability or chain-status confirmation.
 - rfqs (and rollover fills/contracts rows) — no per-row on-chain footprint here: rows serve
   venue-claimed with a note; reconcile a specific rollover digest with cork_track.
 
@@ -453,7 +457,7 @@ identity is a different market, not a parameter of the same one.
     name: "orders",
     aliases: ["order-lifecycle", "reservation", "oco", "one-cancels-the-other", "ladder", "liveness", "exclusivity"],
     summary:
-      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and trading agents, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: every Cork order is single-fill on the 1inch BIT invalidator keyed on (maker, nonce), so the first fill of any size spends the whole order, and partial-fill orders still spend the bit. Group: orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so a rung is re-read from the invalidator before it is filled, and any view that ranks orders must do the same. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
+      "One vocabulary for a 1inch LOP v4 order across this surface, the venue, and the kernel, read from the SIGNED order rather than venue metadata. Reach: open, or reserved for one FILL SENDER via allowedSender (the low 80 bits of the address that CALLS the LOP — the ForSelf adapter, not the account, on a wrapper fill; any other caller reverts PrivateOrder()). Fill regime: default single-fill on the BIT invalidator (maker, nonce), even for a partial fill; explicit allowsMultipleFills with allowsPartialFills tracks remaining amount per hash and requires manual cancellation. Group: single-fill orders sharing one nonce are one-cancels-the-other (a ladder is a group whose rungs differ in price, reach, or expiry); a rung whose sibling filled is dead-by-sibling, which the chain knows and the venue does not, so a rung is re-read from the invalidator before it is filled, and any view that ranks orders must do the same. Price shape is fixed or decaying (auction), provenance is cited (quoteRef) or uncited, and a quote is firm only when a live cited order backs it. Call cork_capabilities topic:\"orders\" for the entity, liveness, and synonym tables.",
     body: `# Orders — reach, fill regime, groups, price shape, provenance, liveness
 
 One vocabulary for a 1inch LOP v4 order as this surface, the venue, and trading agents use it. One term
@@ -493,15 +497,19 @@ are not built.
 - **single-fill (bit invalidator)** — the order carries a 40-bit \`nonce\`; filling or cancelling it
   flips one bit keyed on \`(maker, nonce)\`. The contract never records WHICH order spent the bit.
   The first fill of ANY size spends it: post 100, get 1 filled, and the remaining 99 are dead.
-  Every Cork-built order is single-fill (\`allowMultipleFills\` is off).
-- **multi-fill (remaining invalidator)** — keyed on the order hash, tracks the remaining amount,
-  allows many partial fills. Not used by this surface today.
+  This is the default (\`allowsMultipleFills\` is false).
+- **multi-fill (remaining invalidator)** — keyed on the order hash, tracks the remaining amount.
+  Opt in with \`allowsMultipleFills: true\` and \`allowsPartialFills: true\`. Each fill consumes its
+  making amount; cancel each hash manually. Repeated-fill ladders require \`noncePolicy: distinct\`
+  and no \`ocoGroup\`; aggregate exposure is the sum of the rung sizes. Shared/OCO policies
+  are refused. Cancel old hashes before signing replacements; \`refresh-order\` is bit-only.
 
-\`allowsPartialFills\` does NOT change the regime: the LOP condition is an OR, so a partial-fill, single-fill order still lives on the BIT invalidator, and one partial fill retires the remainder.
+\`allowsPartialFills\` ALONE does not change the regime: a partial-fill, single-fill order still
+lives on the BIT invalidator, and one partial fill retires the remainder.
 
 ## Groups: one nonce, one-cancels-the-other
 
-Orders by one maker that share a \`nonce\` share one bit. The first fill or cancel of any of them
+Single-fill orders by one maker that share a \`nonce\` share one bit. The first fill or cancel of any of them
 retires all of them: a **group** (one-cancels-the-other). A **ladder** is a group whose rungs differ
 in price, reach, or expiry: a *revision ladder* re-quotes one request at better prices on one nonce
 (the taker takes the best, the rest die); an *exclusive-then-open* ladder pairs a reserved best rung
@@ -965,9 +973,9 @@ premium. So there are two paths, and they differ in who opens the RFQ:
 
 - **(a) The cPT holder opens it** and accepts a quote by citing it (\`quoteRef\`) in the order it
   signs. Steps 1 to 6 below.
-- **(b) The source cST holder opens it** — for example a Safe that cannot sign off-chain. A cPT
-  holder answers, then signs and rests an order that does NOT cite the RFQ, and the cST holder
-  fills it by its terms. See "Path (b)" after the steps.
+- **(b) The source cST holder opens it** with \`requesterRole: "cst"\`. The cited authenticated
+  cPT answerer signs the linked order; the cST requester fills it. See "Path (b)" below.
+  Both explicit roles require an API122-compatible venue; omission retains legacy signing.
 
 Every write is proven, by a signature or by an API key. A signature: build the body with
 \`cork_prepare_orders\` \`rfq-write\`, sign the typed data, and pass \`auth {method:'signature',
@@ -1009,25 +1017,27 @@ with \`cork_submit\` (topic:"signing").
    \`rollover-fill\` derives (\`minDstPerSrc\`), read \`data.fillRange\` and \`data.trust\`, and simulate
    before you sign. \`cork_capabilities topic:"rollover"\` has the rules, the valid ranges and why.
 
-**Path (b): the cST holder opens the RFQ.** Agreed on 2026-10-09 for cST holders that cannot
-sign off-chain.
+**Path (b): the cST holder requests a linked rollover quote.**
 
-1. **Ask.** The cST holder opens the rollover RFQ with \`auth {method:'apiKey'}\` (same fields
-   as step 1), and counters with \`rfq-counter\` the same way. Its \`premiumToken\` names the
-   tokens it is ready to pay the premium in.
-2. **Quote and order.** A cPT holder answers with \`rfq-answer\`, then signs a \`rollover-intent\`
-   WITHOUT \`quoteRef\` and relays it with \`cork_submit\` \`rollover-order\`. The order cannot cite
-   this RFQ: \`quoteRef\` requires the order's user to be the requester, and here the requester is
-   the cST holder (cork-indexing-api#121).
-3. **Match.** The cST holder finds the order by its terms — source pool, destination, premium
-   token, \`minPremiumPerShare\` — with \`cork_query\` \`rollover-orders\`. \`filters.rfqId\` does not
-   find it: that filter lists only orders that cite the RFQ.
-4. **Fill.** \`rollover-fill\` as in step 6, on OPEN orders only: an order that names an
-   \`exclusiveFiller\` needs a \`FillerAuth\` signature, which a wallet that cannot sign off-chain
-   cannot produce.
+1. **Ask.** Use \`rfq-open\`, \`kind: "rollover"\`, \`requesterRole: "cst"\`, with the same source
+   and premium-token fields. Prepare/sign the exact \`rfq-write\` typed data, then relay it;
+   an authorized API key is also supported on local CLI/stdio MCP. The role is part of the
+   canonical signed body. Do not append or strip it after signing.
+2. **Quote and order.** The cPT holder answers with \`rfq-answer\`, then prepares a
+   \`rollover-intent\` with \`quoteRef {rfqId, answerId, optionId}\`, signs and submits it with the
+   same citation. Only that cited authenticated answerer can sign; the cST requester cannot
+   sign on its behalf. The API's full answer view retains any cited revision; a missing or
+   unsupported role/answer identity is a refusal, not requester eligibility.
+3. **Find.** \`rollover-orders\` with \`filters.rfqId\` finds the linked order. A role tag alone
+   does not make a quote firm: the order must still be fillable and chain-confirmed.
+4. **Fill.** Use the existing caller-bound \`rollover-fill\` path from step6. An exclusive
+   order still needs \`FillerAuth\`; RFQ write authentication does not replace it.
 
-Nothing on chain or on the venue records that this fill answered the RFQ; the venue gap is
-cork-indexing-api#121.
+Explicit \`requesterRole: "cpt"\` retains requester signing; omitted role inserts no default
+and preserves legacy body hashes, signatures and saved requests. An older API rejects explicit
+roles: do not retry by removing the role. Roll out the API capability before role-aware writers.
+The existing premium comparison is unchanged and does not guarantee execution at the quoted
+payer cap; quote-price meaning, economic safety and deployment acceptance are separate holds.
 
 ## Two standing facts (2026-09-22)
 

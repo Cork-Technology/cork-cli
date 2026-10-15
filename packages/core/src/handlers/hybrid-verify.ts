@@ -344,12 +344,13 @@ export async function verifyVenueRows(a: {
         continue;
       }
       const word = words.get(ref.readKey);
-      if (word !== undefined && word !== "error" && classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") {
+      const live = word === undefined || word === "error" ? undefined : classifyInvalidatorWord(ref.plan!, word);
+      if (live?.status === "filled-or-cancelled") {
         drop("on-chain invalidator says filled-or-cancelled");
         continue;
       }
       const makerSignature: BookMakerSignature = sig === undefined ? ref.parsed!.makerSignature : sig.outcome === "verified" ? "erc1271-verified" : "unverified";
-      const liveness = word === undefined || word === "error" ? "indeterminate" : "live";
+      const liveness = live === undefined ? "indeterminate" : "live";
       // Maker-side readiness (an annotation, never a liveness verdict): classified from the
       // facts the one-batch fetched, mutated onto the parse record so the ranker (which holds
       // the same object via parsedByHash) can exclude with evidence.
@@ -357,7 +358,7 @@ export async function verifyVenueRows(a: {
       const facts = rIn ? factsByKey.get(rIn.key) : undefined;
       let makerReadiness: MakerReadiness | undefined;
       if (rIn && facts && ref.parsed) {
-        makerReadiness = assessMakerReadiness({ ...rIn.input, facts });
+        makerReadiness = live === undefined ? { status: "unknown", reasons: [] } : assessMakerReadiness({ ...rIn.input, makingAmount: live.remaining ?? rIn.input.makingAmount, facts });
         ref.parsed.makerReadiness = makerReadiness;
         if (makerReadiness.status === "not-ready") notReady += 1;
       }

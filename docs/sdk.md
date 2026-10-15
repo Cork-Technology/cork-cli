@@ -47,22 +47,23 @@ for asset in cork-*.tgz; do
 done
 ```
 
-Merge the dependencies **and the overrides** into your consumer's package.json. The example shows
-0.7.0 after publication. Use the archive version of the tag that you downloaded. The overrides keep
-transitive Cork dependencies on the same verified archives, so your package manager does not try
-unpublished npm versions. MCP is optional: if you need only core, omit both of its entries.
+Merge the dependencies **and the overrides** into your consumer's package.json. The example uses
+0.8.0-rc.1 archive names; download them only after that tag is published. Use the archive version
+of the tag that you verified. The overrides keep transitive Cork dependencies on the same
+verified archives, so your package manager does not try unpublished npm versions. MCP is
+optional: if you need only core, omit both of its entries.
 
 ```json
 {
   "dependencies": {
-    "@cork/schemas": "file:./cork-schemas-0.7.0.tgz",
-    "@cork/core": "file:./cork-core-0.7.0.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.7.0.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.1.tgz",
+    "@cork/core": "file:./cork-core-0.8.0-rc.1.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.1.tgz"
   },
   "overrides": {
-    "@cork/schemas": "file:./cork-schemas-0.7.0.tgz",
-    "@cork/core": "file:./cork-core-0.7.0.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.7.0.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.1.tgz",
+    "@cork/core": "file:./cork-core-0.8.0-rc.1.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.1.tgz"
   }
 }
 ```
@@ -94,6 +95,59 @@ separately, with its own gates: a checksum comparison of independent builds, and
 
 Why tarballs and not npm? [sdk-roadmap.md](sdk-roadmap.md) explains the distribution posture, the
 verification chain, and when the npm stage arrives.
+
+## Migrating from 0.7.x to 0.8.0-rc.1
+
+This candidate contains breaking SDK and native-order query changes. Upgrade all Cork SDK
+archives together; do not mix 0.7.x and 0.8.x packages. A prepared version is not a published or
+attested release.
+
+### Supply a live-state-resolved taker fill amount
+
+The public `buildTakerFill` builder now requires `fillMakingAmount: bigint`. A call that omitted
+it in 0.7.x no longer type-checks and throws at runtime. After resolving the intended making
+amount against live order state, pass it explicitly:
+
+<!-- example: fragment -->
+```ts
+const fill = buildTakerFill({
+  order,
+  signature,
+  taker,
+  fillMakingAmount: liveResolvedMakingAmount,
+});
+```
+
+The amount must be positive, no greater than the signed making amount, and compatible with the
+order's partial-fill flags and live remainder. Do not substitute the original signed size or an
+indexed remainder for live execution checks. The builder encodes the amount; it does not fetch
+live state. Over-requests and all-or-nothing partial fills are rejected rather than clamped.
+The higher-level `cork_prepare_orders` `taker-fill` path performs chain preflight and requires
+working RPC access; a failed read must not be replaced with offline fill bytes.
+
+### Separate exact history from ranked discovery
+
+For `runTool("cork_query", ...)`, an orderbook `filters.orderHash` read is exact native history.
+Remove `filters.account`, `since` and `wait` from that request: the combinations are rejected
+with `invalid_input` (CLI exit 2). Use a separate discovery request for fill-sender ranking and
+watermark watches. Do not require ranked-book metadata on exact history responses.
+
+Treat missing or incomplete native history as unknown, not an absent order, zero fills or
+`resting=false`. Reconciliation can return nullable resting state. A known unavailable order
+can return `invalid_order_terms` instead of `order_not_found`; neither authorizes fill bytes.
+See [the native history contract](cli.md#native-limit-order-history) for field semantics.
+
+### Require a compatible deployed API
+
+Native history requires the configured endpoint to pass the reviewed metadata/capability gate.
+A successful response alone is not proof of support. The release workflow additionally requires
+deployed native API compatibility evidence; local package checks do not satisfy that gate.
+Configure the evidence with:
+
+```text
+CORK_NATIVE_API_RELEASE_EVIDENCE
+```
+Older published releases and installed clients are not automatically migrated or retired.
 
 ## Your first call
 
@@ -301,6 +355,14 @@ transaction, and the venue gets the result.
 3. `cork_prepare_orders` with `action.type: "finalize-maker-order"` verifies your signature against
    a local reconstruction. It never signs. The result carries a `submitInput`.
 4. `cork_submit` with that `submitInput`, verbatim. The venue lists your order.
+
+Rollover RFQ writes use the same input on SDK, CLI and MCP: optional rollover-only
+`requesterRole: "cst" | "cpt"` is included as `requester_role` in the canonical signed RFQ body.
+Explicit cST binds the quote-linked rollover order to the cited authenticated answerer;
+omitted/cPT binds it to the requester. Omission has no default and preserves old signed bodies.
+The typed `planRfqWrite`/`rfqOpenBody` venue helpers carry the role too and refuse it on
+new-position requests instead of silently discarding it. Use an API122-compatible venue before
+enabling role-aware writers; never strip a signed role on a rejected write.
 
 One rule saves you a bad day: **give every concurrently live order its own `clientRequestId`.**
 The order nonce derives from it. Orders that share an id share one invalidator bit, so filling one

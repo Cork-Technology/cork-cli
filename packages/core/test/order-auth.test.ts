@@ -12,7 +12,7 @@ import { buildMakerOrder, decodeMakerTraits, LOP_ADDRESSES, type LopOrder } from
 import { runTool } from "../src/handlers.ts";
 import { ERC1271_MAGIC } from "../src/orders.ts";
 import { extensionVerdict } from "../src/handlers/order-auth.ts";
-import { stubResolved, stubRpc } from "./helpers.ts";
+import { stubResolved, stubRpc, withNativeApiMetadata } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -41,8 +41,8 @@ async function rowBy(id: string, signer: typeof maker, makerAddr: `0x${string}` 
   };
 }
 
-const venueWith = (rows: unknown[]) => async (url: string) =>
-  url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: rows, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 });
+const venueWith = (rows: unknown[]) => withNativeApiMetadata(async (url: string) =>
+  url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: rows, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 }));
 
 /** Chain: every bit slot untouched (live); `code` decides who is a contract; `isValidSignature`
  *  answers (or throws) for contract makers; bitInvalidator reads can be made to throw too. */

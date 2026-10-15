@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { REGISTRY, TOOL_EXAMPLES, inputJsonSchema } from "@cork/schemas";
 import { EXIT, expandAmount, runCli } from "@cork/cli";
-import { poolTokensRpc, stubRpc, TOKEN_CODE } from "../../core/test/helpers.ts";
+import { poolTokensRpc, stubRpc, TOKEN_CODE, withNativeApiMetadata } from "../../core/test/helpers.ts";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, resolveGenerations, unapprovedCodeAllowed } from "@cork/core";
 import { DEMO_ACCOUNT } from "@cork/schemas";
@@ -833,10 +833,10 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
   };
   const venueSeq = (books: unknown[][]) => {
     let call = 0;
-    return async (url: string) => {
+    return withNativeApiMetadata(async (url: string) => {
       if (!url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
       return new Response(JSON.stringify({ items: books[Math.min(call++, books.length - 1)], hasMore: false }), { status: 200 });
-    };
+    });
   };
   // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
   const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { "0x16aa2ebe1e2d6c856c634dafc256257d2fec0c69": TOKEN_CODE } });
@@ -885,12 +885,12 @@ describe("ch query orderbook --watch (2026-09-02)", () => {
     const books = [[rowA], [rowA], [rowA], [rowA, rowB]];
     let feedCall = 0, bookCall = 0;
     const urls: string[] = [];
-    const venueFetch = async (url: string) => {
+    const venueFetch = withNativeApiMetadata(async (url: string) => {
       urls.push(url);
       if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: books[Math.min(bookCall++, books.length - 1)], hasMore: false }), { status: 200 });
       if (url.includes("/rfqs/v2")) return new Response(JSON.stringify({ items: feeds[Math.min(feedCall++, feeds.length - 1)], next_cursor: null }), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
-    };
+    });
     const sleeps: number[] = [];
     const r = await runCli(["query", "rfqs", "--chain-id", "1", "--watch", "--interval", "2", "--iterations", "4", "--json"], { nowSeconds: NOW, venueFetch, resolveRpc: live, sleep: async (ms) => { sleeps.push(ms); } });
     expect(r.code, r.stderr).toBe(EXIT.ok);

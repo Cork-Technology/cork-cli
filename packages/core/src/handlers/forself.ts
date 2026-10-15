@@ -180,7 +180,7 @@ export async function prepareForSelfTakerFill(args: {
   forSelf: { adapter: `0x${string}`; poolId: `0x${string}`; deadlineSeconds: number; deadlineAt?: string | undefined };
   signed: SignedLopOrder;
   localOrderHash: `0x${string}`;
-  fillMakingAmount?: bigint | undefined;
+  fillMakingAmount: bigint;
   maximumTakingAmount?: bigint | undefined;
   auctionCap?: bigint | undefined;
   auctionData?: AuctionPriceReport | undefined;
@@ -192,8 +192,7 @@ export async function prepareForSelfTakerFill(args: {
   const warnings: Warning[] = [...priorWarnings];
   if (deadlineWarning) warnings.push(deadlineWarning);
 
-  // Amount validation + derivation via the SAME rules as the raw fill path (zero-making,
-  // over-ask clamp, all-or-nothing partial refusal) — one semantics, two encoders.
+  // Preserve signed terms and use the amount already resolved against the live invalidator.
   let derived: ReturnType<typeof buildTakerFill>;
   try {
     derived = buildTakerFill({
@@ -202,7 +201,7 @@ export async function prepareForSelfTakerFill(args: {
       makerAccountType: signed.makerAccountType,
       taker: account,
       extension: signed.extension,
-      ...(args.fillMakingAmount !== undefined ? { fillMakingAmount: args.fillMakingAmount } : {}),
+      fillMakingAmount: args.fillMakingAmount,
       ...(args.maximumTakingAmount !== undefined ? { maximumTakingAmount: args.maximumTakingAmount } : args.auctionCap !== undefined ? { maximumTakingAmount: args.auctionCap } : {}),
     });
   } catch (err) {

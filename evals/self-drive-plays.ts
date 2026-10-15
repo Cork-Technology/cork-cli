@@ -8,6 +8,7 @@
 import { runTool, ToolInputError } from "@cork/core";
 import { DEMO_ACCOUNT, DEMO_POOL_ID, DEMO_SIGNED_TX, TOOL_EXAMPLES } from "@cork/schemas";
 import type { TraceCall } from "./run.ts";
+import boundedRolloverInput from "../packages/core/test/fixtures/bounded-rollover-input.json";
 import { SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, MIGRATION_OLD_POOL, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, ARCHIVED_DIGEST, CST, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE,
   GROUPED_RUNG, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY,
   RESERVED_FILLER, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, ROLL_FILL_DIGEST, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, stubContext, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING , MIGRATION_OLD_PM, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER } from "./stub.ts";
@@ -73,6 +74,9 @@ const px = (id: string, action: Record<string, unknown>, extra: Record<string, u
 const po = (id: string, action: Record<string, unknown>, chainId = 1) => ({ tool: "cork_prepare_orders", input: { chainId, account: A, clientRequestId: id, action } });
 
 export const PLAYS: Play[] = [
+  { id: "prepare-repeated-fill", calls: [po("eval-repeated-fill", { type: "maker-order", poolId: P, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000", takingAmount: "500", expirySeconds: 600, allowsPartialFills: true, allowsMultipleFills: true })], finalText: "Unsigned standing order prepared; each partial fill spends hash-specific remaining capacity. Cancel this order hash manually before replacing it." },
+  { id: "refuse-repeated-oco", calls: [po("eval-repeated-oco", { type: "maker-order", poolId: P, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000", takingAmount: "500", expirySeconds: 600, allowsPartialFills: true, allowsMultipleFills: true, ocoGroup: "group" })], finalText: "Repeated fills and a shared OCO invalidator are incompatible; no artifact was prepared." },
+  { id: "prepare-bounded-rollover", calls: [{ tool: "cork_prepare_orders", input: boundedRolloverInput }], finalText: "Unsigned atomic stage-and-fill batch only. Module code/source identities, canonical token bindings and live deployment attestation remain unverified; the byte-verified single-owner Safe wrapper must be signed by data.from. Never send its calls separately." },
   // ── reads ──
   { id: "read-market", calls: [q({ resource: "cork-pool", chainId: 1, filters: { poolId: P } })], finalText: "The pool's swap rate is 0.8 (800000000000000000 at 1e18 = 1.0)." },
   { id: "read-balances", calls: [q({ resource: "account-state", chainId: 1, filters: { poolId: P, account: A } })], finalText: "Balances and funding allowances for the account in this pool are listed above per token." },

@@ -254,14 +254,16 @@ export async function annotateApprovalStatus(
       try {
         if (e.mechanism === "erc20-approve") {
           const current = (await read({ address: e.token, abi: erc20Abi, functionName: "allowance", args: [e.holder, e.spender] })) as bigint;
-          return { ...e, currentAllowance: current.toString(), ...(e.amount !== null ? { satisfied: current >= BigInt(e.amount) } : {}) };
+          const satisfied = e.amount !== null ? current >= BigInt(e.amount) : undefined;
+          return { ...e, currentAllowance: current.toString(), ...(satisfied !== undefined ? { satisfied, ...(satisfied ? { unsignedTx: null } : {}) } : {}) };
         }
         if (e.mechanism === "permit2-approve") {
           const [amt, expiration] = (await read({ address: PERMIT2_ADDRESS, abi: permit2AllowanceAbi, functionName: "allowance", args: [e.holder, e.token, e.spender] })) as readonly [bigint, number, number];
           // Same rule as account-state: spending is allowed AT the boundary second; expiration 0
           // is always expired.
           const live = args.nowSeconds <= BigInt(expiration);
-          return { ...e, currentAllowance: amt.toString(), currentExpiration: expiration, ...(e.amount !== null ? { satisfied: live && amt >= BigInt(e.amount) } : {}) };
+          const satisfied = e.amount !== null ? expiration !== 0 && live && amt >= BigInt(e.amount) : undefined;
+          return { ...e, currentAllowance: amt.toString(), currentExpiration: expiration, ...(satisfied !== undefined ? { satisfied, ...(satisfied ? { unsignedTx: null } : {}) } : {}) };
         }
         return e;
       } catch {

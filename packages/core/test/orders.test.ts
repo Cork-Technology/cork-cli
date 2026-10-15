@@ -106,11 +106,30 @@ describe("buildMakerOrder", () => {
   });
 });
 
+describe("standing maker-order invalidation", () => {
+  const base = { chainId: 1, lop: LOP_ADDRESSES[1]!, maker: MAKER, makerAsset: MAKER_ASSET, takerAsset: TAKER_ASSET, makingAmount: 100n, takingAmount: 200n, clientRequestId: "standing-manual" };
+  it("partial permission alone spends a bit; repeated permission changes the signed hash and manual cancel uses that hash", () => {
+    const once = buildMakerOrder(base);
+    const repeated = buildMakerOrder({ ...base, allowMultipleFills: true });
+    expect(lopInvalidatorPlan(once.order.makerTraits).mode).toBe("bit");
+    expect(lopInvalidatorPlan(repeated.order.makerTraits).mode).toBe("remaining");
+    expect(repeated.orderHash).not.toBe(once.orderHash);
+    expect(repeated.order.makerTraits & (1n << 254n)).toBe(1n << 254n);
+    const cancellation = buildCancelOrder(repeated.order.makerTraits, repeated.orderHash);
+    const decoded = decodeFunctionData({ abi: parseAbi(["function cancelOrder(uint256 makerTraits, bytes32 orderHash)"]), data: cancellation.data });
+    expect(decoded.args).toEqual([repeated.order.makerTraits, repeated.orderHash]);
+  });
+  it("refuses repeated-fill settings that would silently retain single-fill/OCO behavior", () => {
+    expect(() => buildMakerOrder({ ...base, allowMultipleFills: true, allowPartialFills: false })).toThrow(/require/);
+    expect(() => buildMakerOrder({ ...base, allowMultipleFills: true, ocoGroup: "shared" })).toThrow(/cannot use ocoGroup/);
+  });
+});
+
 describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
   const UINT8 = "(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)";
 
   it("plain order (no extension) → fillOrder with selector 0x9fda64bd", () => {
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER });
     expect(fill.functionName).toBe("fillOrder");
     // The selector is the uint256-tuple form, NOT the address-tuple form (which the router rejects).
     expect(fill.calldata.slice(0, 10)).toBe("0x9fda64bd");
@@ -119,7 +138,7 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
 
   it("extension order → fillOrderArgs with selector 0xf497df75, extension carried in args", () => {
     const extension = `0x${"ab".repeat(20)}` as const; // 20-byte payload
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, extension });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, extension });
     expect(fill.functionName).toBe("fillOrderArgs");
     expect(fill.calldata.slice(0, 10)).toBe("0xf497df75");
     expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillOrderArgs(${UINT8},bytes32,bytes32,uint256,uint256,bytes)`));
@@ -135,7 +154,7 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
     // asset is pulled. args = extension ++ interaction; two independent length fields.
     const extension = `0x${"ab".repeat(20)}` as const;
     const interaction = `0x${"cd".repeat(52)}` as const; // adapter (20B) ++ 32B payload stand-in
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, extension, interaction });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, extension, interaction });
     expect(fill.functionName).toBe("fillOrderArgs");
     const { args } = decodeFunctionData({ abi: parseAbi([`function fillOrderArgs(${UINT8} o, bytes32 r, bytes32 vs, uint256 a, uint256 t, bytes args)`]), data: fill.calldata });
     expect(args[5]).toBe(`0x${"ab".repeat(20)}${"cd".repeat(52)}`);
@@ -146,7 +165,7 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
 
   it("interaction alone (no extension) still routes through fillOrderArgs with only the interaction length set", () => {
     const interaction = `0x${"cd".repeat(52)}` as const;
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, interaction });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, interaction });
     expect(fill.functionName).toBe("fillOrderArgs");
     const traits = BigInt(fill.takerTraits);
     expect((traits >> 224n) & 0xffffffn).toBe(0n);
@@ -154,7 +173,7 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
   });
 
   it("packs MAKER_AMOUNT flag (bit 255) and the exact taking-amount cap by default", () => {
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER });
     const traits = BigInt(fill.takerTraits);
     expect(traits & (1n << 255n)).toBe(1n << 255n);
     expect(traits & ((1n << 184n) - 1n)).toBe(200n); // full-fill taking amount (TakerTraitsLib._AMOUNT_MASK)
@@ -169,14 +188,14 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
 
   it("ERC1271 maker → fillContractOrderArgs (signature bytes, not r/vs)", () => {
     const extension = `0x${"cd".repeat(4)}` as const;
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, makerAccountType: "ERC1271", taker: TAKER, extension });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, makerAccountType: "ERC1271", taker: TAKER, extension });
     expect(fill.functionName).toBe("fillContractOrderArgs");
     expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillContractOrderArgs(${UINT8},bytes,uint256,uint256,bytes)`));
   });
 
   it("an explicit receiver sets ARGS_HAS_RECEIVER (bit 251) and prefixes args with the 20-byte receiver", () => {
     const receiver = "0x00000000000000000000000000000000000000ee" as const;
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, receiver });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, receiver });
     expect(fill.functionName).toBe("fillOrderArgs"); // args present (receiver) even without an extension
     expect(BigInt(fill.takerTraits) & (1n << 251n)).toBe(1n << 251n);
     const { args } = decodeFunctionData({ abi: parseAbi([`function fillOrderArgs(${UINT8} o, bytes32 r, bytes32 vs, uint256 a, uint256 t, bytes args)`]), data: fill.calldata });
@@ -184,13 +203,13 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
   });
 
   it("ERC1271 maker without an extension → fillContractOrder (signature bytes, no args)", () => {
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, makerAccountType: "ERC1271", taker: TAKER });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, makerAccountType: "ERC1271", taker: TAKER });
     expect(fill.functionName).toBe("fillContractOrder");
     expect(fill.calldata.slice(0, 10)).toBe(toFunctionSelector(`fillContractOrder(${UINT8},bytes,uint256,uint256)`));
   });
 
   it("a receiver equal to the taker is NOT treated as explicit (no receiver prefix)", () => {
-    const fill = buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, receiver: TAKER });
+    const fill = buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, receiver: TAKER });
     expect(fill.functionName).toBe("fillOrder");
     expect(BigInt(fill.takerTraits) & (1n << 251n)).toBe(0n);
   });
@@ -199,8 +218,8 @@ describe("buildTakerFill (canonical 1inch v6 uint256-tuple selector)", () => {
     // _AMOUNT_MASK = 0x000000000000000000ffff…ff (46 f-nibbles = 184 bits). A cap with bit 184
     // set must be refused here: on-chain `threshold()` would mask it away silently.
     const maxCap = (1n << 184n) - 1n;
-    expect(BigInt(buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: maxCap }).takerTraits) & maxCap).toBe(maxCap);
-    expect(() => buildTakerFill({ order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 184n })).toThrow(/184-bit/);
+    expect(BigInt(buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: maxCap }).takerTraits) & maxCap).toBe(maxCap);
+    expect(() => buildTakerFill({ fillMakingAmount: baseOrder.makingAmount, order: baseOrder, signature: SIG, taker: TAKER, maximumTakingAmount: 1n << 184n })).toThrow(/184-bit/);
   });
 });
 

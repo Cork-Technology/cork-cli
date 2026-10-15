@@ -119,7 +119,7 @@ describe("decodeLopCall — every builder output round-trips", () => {
   });
 
   it("fillOrder (EOA, no args): amount, traits, and an empty args split", () => {
-    const f = buildTakerFill({ order, signature, taker: TAKER });
+    const f = buildTakerFill({ order, signature, taker: TAKER, fillMakingAmount: order.makingAmount });
     expect(f.functionName).toBe("fillOrder");
     const d = decodeLopCall(f.calldata);
     if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
@@ -133,7 +133,7 @@ describe("decodeLopCall — every builder output round-trips", () => {
   it("fillOrderArgs with an explicit receiver: the 20-byte prefix is split off before the extension", () => {
     const receiver = "0x00000000000000000000000000000000000000ee" as const;
     const extension = `0x${"cd".repeat(40)}` as const;
-    const f = buildTakerFill({ order, signature, taker: TAKER, receiver, extension });
+    const f = buildTakerFill({ fillMakingAmount: order.makingAmount, order, signature, taker: TAKER, receiver, extension });
     const d = decodeLopCall(f.calldata);
     if (d.fn === "cancelOrder" || d.fn === "cancelOrders" || d.fn === "bitsInvalidateForOrder") throw new Error("unreachable");
     expect(d.fn).toBe("fillOrderArgs");

@@ -73,6 +73,7 @@ function lowerOption(option: Record<string, unknown>): Record<string, unknown> {
 /** The body of an RFQ open, without its proof. The two kinds carry different fields
  *  (rfqOpenKindFieldsViolation has already refused a mix). */
 export function rfqOpenBody(chainId: number, requestId: string, a: RfqOpenRequest): Record<string, unknown> {
+  if (a.requesterRole !== undefined && a.kind !== "rollover") throw new Error("requesterRole belongs to a rollover RFQ only");
   const shared = {
     schema_version: "2",
     kind: a.kind,
@@ -85,6 +86,7 @@ export function rfqOpenBody(chainId: number, requestId: string, a: RfqOpenReques
   if (a.kind === "rollover") {
     return {
       ...shared,
+      ...(a.requesterRole !== undefined ? { requester_role: a.requesterRole } : {}),
       source: { pool_id: lower(a.source?.poolId), shares: a.source?.shares },
       reference_asset: lower(a.referenceAsset),
       collateral_asset: lowerSpec(a.collateralAsset),

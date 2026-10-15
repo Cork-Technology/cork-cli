@@ -24,7 +24,8 @@ import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-o
 import { handleDeployRolloverContract, handleRolloverFill } from "./prepare-rollover-fill.ts";
 import { handleRfqWrite } from "./rfq-write.ts";
 import { deriveJitDestination, readRolloverQuote } from "./rfq-rollover.ts";
-import { rolloverQuoteDefaults, rolloverQuoteRefMismatch } from "../rfq-rollover.ts";
+import { rolloverQuoteDefaults, rolloverQuoteRefMismatch, rolloverQuoteSigner } from "../rfq-rollover.ts";
+import { readNativeApiCapability } from "./native-history-capability.ts";
 
 type RolloverIntentAction = Extract<PrepareOrdersInput["action"], { type: "rollover-intent" }>;
 /** A rollover-intent's terms once a cited quote has filled the ones the caller left out. */
@@ -240,6 +241,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   }
 
   if (action.type === "maker-order") {
+    if (action.allowsMultipleFills && (!action.allowsPartialFills || action.ocoGroup !== undefined)) {
+      return unavailable(chainId, "invalid_order_terms", "repeated fills require allowsPartialFills true and no ocoGroup; cancel each order hash manually", ctx);
+    }
     const lop = LOP_ADDRESSES[chainId];
     if (!lop) return unavailable(chainId, "no_lop", `no known 1inch LOP v4 deployment for chainId ${chainId}`, ctx);
     const nowSecs = nowSecondsOf(ctx);
@@ -426,6 +430,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         clientRequestId: input.clientRequestId,
         ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
         allowPartialFills: action.allowsPartialFills,
+        allowMultipleFills: action.allowsMultipleFills,
         usePermit2: action.usePermit2,
         ...(action.allowedSender !== undefined ? { allowedSender: action.allowedSender } : {}),
         ...(action.ocoGroup !== undefined ? { ocoGroup: action.ocoGroup } : {}),
@@ -472,6 +477,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       orderExpiry: decodeMakerTraits(built.order.makerTraits).expiry,
       ...(jitApprovalCtx ? { jit: jitApprovalCtx } : {}),
     }));
+    const invalidator = lopInvalidatorPlan(built.order.makerTraits).mode;
+    if (invalidator === "remaining") {
+      warnings.push({ code: "repeated_fill_notice", message: `partial fills consume the remaining making amount of order ${built.orderHash}, not the whole order. Withdraw by cancel with THIS orderHash and its signed makerTraits; cancel other rungs separately. Cancel before replacing to avoid double exposure. ${ORDERS_TOPIC_REFERENCE}` });
+    }
     const makerApprovalWarn = approvalMissingWarning(approvals, "before signing and listing this order");
     if (makerApprovalWarn) warnings.push(makerApprovalWarn);
     if (action.ocoGroup !== undefined) {
@@ -488,7 +497,9 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         // The venue listing must carry this exact value: cork_submit compares the listing's nonce
         // against what the signed makerTraits encode and refuses to relay a mismatch.
         nonce: built.nonce,
-        // The group this order's bit belongs to (null = stands alone on its id-derived bit).
+        invalidator,
+        allowsMultipleFills: decodeMakerTraits(built.order.makerTraits).allowMultipleFills,
+        // No group on the remaining invalidator; a bit order is standalone unless named OCO.
         ocoGroup: action.ocoGroup ?? null,
         // Exclusivity as the signed traits STORE it (decoded back from the built word, not echoed
         // from the input): the 10-byte suffix the book will show, null = any taker.
@@ -527,16 +538,18 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
   if (action.type === "rollover-intent") {
     // A cited rollover RFQ quote supplies every term the caller leaves out, and every term is
     // then held to the venue's quote rules (rolloverQuoteRefMismatch) once the order is built.
-    let quote: { rfq: Record<string, unknown>; option: Record<string, unknown> } | undefined;
+    let quote: { rfq: Record<string, unknown>; option: Record<string, unknown>; underwriter: string | null } | undefined;
     let act: RolloverIntentTerms;
     {
       const filled: Partial<RolloverIntentTerms> = {};
       if (action.quoteRef) {
         const read = await readRolloverQuote(ctx, chainId, action.quoteRef);
         if (!read.ok) return read.envelope;
-        quote = { rfq: read.rfq, option: read.option };
-        if (typeof read.rfq.requester !== "string" || !isAddressEqual(read.rfq.requester as `0x${string}`, input.account)) {
-          return unavailable(chainId, "invalid_order_terms", `only the RFQ's requester can accept its quote: RFQ '${action.quoteRef.rfqId}' was opened by ${String(read.rfq.requester)}, not account ${input.account} (the order's user — the venue would 400: order user is not the requester)`, ctx);
+        quote = { rfq: read.rfq, option: read.option, underwriter: read.underwriter };
+        const signer = rolloverQuoteSigner(read.rfq, read.underwriter);
+        if (!signer.ok) return unavailable(chainId, "invalid_order_terms", signer.reason, ctx);
+        if (!isAddressEqual(signer.user as `0x${string}`, input.account)) {
+          return unavailable(chainId, "invalid_order_terms", `only the RFQ's ${signer.role === "cst" ? "stored answering underwriter" : "requester"} can accept this quote: expected ${signer.user}, not account ${input.account}. Use that account to sign the rollover order`, ctx);
         }
         const d = rolloverQuoteDefaults(read.rfq, read.option);
         if (action.srcPoolId === undefined) filled.srcPoolId = d.srcPoolId;
@@ -834,7 +847,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         srcPoolId: act.srcPoolId,
         dstPoolId: act.dstPoolId,
         jitMarketHash: jitMarketHash ?? ZERO_JIT_MARKET_HASH,
-      });
+      }, quote.underwriter);
       if (mismatch) {
         const wireNote = jitWire !== "0.2" && (quote.option.destination as Record<string, unknown> | undefined)?.jit_market !== undefined ? ` — the venue hashes a quoted market on the 0.2 JITMarketParams layout, and settler ${act.settler} speaks ${jitWire ?? "no JIT wire"}: bind the order to a 0.2 settler` : "";
         return unavailable(chainId, "invalid_order_terms", `this order does not match the quote it cites: ${mismatch}${wireNote}. The venue would refuse it (400 Invalid quoteRef) — leave the term out to take it from the quote`, ctx);
@@ -955,11 +968,13 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
 
     const deps = venueDepsOf(ctx);
     try {
-      // Locate the resting order in the venue book under a hard page bound; an exhausted bound
-      // fails closed (no false "not found") rather than truncating silently.
+      const capability = await readNativeApiCapability(ctx);
+      if (!capability.supported) return unavailable(chainId, capability.code, capability.reason, ctx);
+      // Exact identity includes retired records: candidate-only filters would turn known
+      // unavailability into false absence. Keep the existing hard page bound.
       const book = await collectVenuePages(
         { maxPages: action.maxPages },
-        (cursor) => getLopOrderbook(deps, { chainId, limit: 100, ...(cursor ? { cursor } : {}) }),
+        (cursor) => getLopOrderbook(deps, { chainId, orderHash: wanted, limit: 100, ...(cursor ? { cursor } : {}) }),
       );
       const row = book.items.find((item) => {
         const nested = item.order && typeof item.order === "object" && !Array.isArray(item.order) ? (item.order as Record<string, unknown>) : item;
@@ -977,7 +992,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             ctx,
           });
         }
-        return unavailable(chainId, "order_not_found", `no resting venue order found for ${action.orderHash} on chainId ${chainId}`, ctx);
+        return unavailable(chainId, "order_not_found", `no venue order found for ${action.orderHash} on chainId ${chainId}`, ctx);
+      }
+      if ((row.availability as Record<string, unknown> | undefined)?.state === "unavailable") {
+        return unavailable(chainId, "invalid_order_terms", "the venue reports this order unavailable (indexed evidence, confidence unknown) — no fill bytes were built; reconcile before retrying", ctx);
       }
       const parsed = parseSignedLopOrder(row);
       if (!parsed.ok) return unavailable(chainId, "invalid_service_response", `venue returned a malformed signed order — ${parsed.error}`, ctx);
@@ -1060,6 +1078,9 @@ async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderA
   }
   const group = action.ocoGroup ?? ladderId;
   const policy = action.noncePolicy;
+  if (action.allowsMultipleFills && (policy !== "distinct" || action.ocoGroup !== undefined)) {
+    return unavailable(chainId, "invalid_order_terms", "repeated-fill ladders require noncePolicy distinct and no ocoGroup; cancel each rung separately", ctx);
+  }
   // The nonce policy, as ONE predicate: which rungs share the group's bit. shared-reserved is the
   // ruled default (a revision ladder for one taker; an open rung fills independently).
   const grouped = (reserved: boolean): boolean => policy === "shared" || (policy === "shared-reserved" && reserved);
@@ -1077,6 +1098,7 @@ async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderA
       makingAmount: rung.makingAmount ?? action.makingAmount,
       takingAmount: rung.takingAmount,
       allowsPartialFills: action.allowsPartialFills,
+      allowsMultipleFills: action.allowsMultipleFills,
       usePermit2: action.usePermit2,
       ...(rung.expirySeconds !== undefined ? { expirySeconds: rung.expirySeconds } : action.expirySeconds !== undefined ? { expirySeconds: action.expirySeconds } : {}),
       ...(rung.allowedSender !== undefined ? { allowedSender: rung.allowedSender } : {}),
@@ -1117,7 +1139,7 @@ async function handleMakerLadder(input: PrepareOrdersInput, action: MakerLadderA
       ? `rungs ${groupedIdx.join(",")} share one bit (count once, at the largest) and rungs ${openIdx.join(",")} each fill independently (each counts): ${makerAssetRequired} base units of makerAsset can be consumed in total`
       : groupedIdx.length > 0
         ? `every rung shares one bit: at most one fills, so the largest rung (${makerAssetRequired}) is the whole exposure`
-        : `every rung has its own bit: all can fill, so the sum (${makerAssetRequired}) is the exposure`;
+        : `every rung has its own ${action.allowsMultipleFills ? "remaining-amount budget" : "bit"}: all can fill, so the sum (${makerAssetRequired}) is the exposure`;
 
   // Warnings: rung warnings are collapsed by (code, message) with the rungs that raised them,
   // and the per-rung oco_group_notice is replaced by ONE ladder-level notice.
@@ -1206,33 +1228,40 @@ async function buildTakerFillArtifact(a: {
       ctx,
     });
   }
-  // Liveness pre-flight: the venue can list rows whose on-chain invalidator already
-  // says filled-or-cancelled (observed live 2026-08-06 — every resting sell row was dead).
-  // Fill bytes for such an order can only revert InvalidatedOrder, so a DEFINITIVE dead
-  // reading is a conflict (chain outranks the venue), not an artifact. Best-effort: no
-  // resolved RPC or a failed read builds as before (this tool never claimed liveness).
-  // The resolved client is hoisted: the approval-status annotation below reuses it, so this
-  // path's chain-contact policy is unchanged (one resolution, security + advisory reads).
+  // Resolve one authoritative live amount before pricing, readiness or calldata.
+  // A failed read is uncertainty, never the signed original presented as a remainder.
   const resolved = await getRpc(ctx, chainId);
-  {
-    if (resolved) {
-      try {
-        const plan = lopInvalidatorPlan(signed.order.makerTraits);
-        const status = classifyInvalidatorWord(plan, await readLopInvalidator(resolved.client, plan, lop, signed.order.maker, localOrderHash));
-        if (status.status === "filled-or-cancelled") {
-          return envelope({
-            state: "conflict",
-            data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
-            chainId,
-            source: "chain",
-            warnings: [{ code: "status_mismatch", message: `the venue lists this order as resting, but its on-chain ${plan.mode === "bit" ? "bit" : "remaining"} invalidator says FILLED-OR-CANCELLED — chain outranks the venue; a fill of these bytes can only revert InvalidatedOrder, so none were built` }],
-            ctx,
-          });
-        }
-      } catch {
-        /* liveness could not be read — build as before; the fill's own check decides */
-      }
+  if (!resolved) {
+    return envelope({
+      state: "unavailable",
+      data: null,
+      chainId,
+      source: "config",
+      warnings: [...(expiredWarning ? [expiredWarning] : []), { code: "funding_needs_rpc", message: "no RPC resolved to read the order's live invalidator; no fill amount or bytes were prepared" }],
+      ctx,
+    });
+  }
+  let remainingMaking: bigint;
+  try {
+    const plan = lopInvalidatorPlan(signed.order.makerTraits);
+    const status = classifyInvalidatorWord(plan, await readLopInvalidator(resolved.client, plan, lop, signed.order.maker, localOrderHash, ctx.atBlock));
+    if (status.status === "filled-or-cancelled") {
+      return envelope({
+        state: "conflict",
+        data: { orderHash: localOrderHash, venueStatus: "resting", chainStatus: status.status },
+        chainId,
+        source: "chain",
+        warnings: [{ code: "status_mismatch", message: "the on-chain invalidator says FILLED-OR-CANCELLED; no fill bytes were built" }],
+        ctx,
+      });
     }
+    remainingMaking = status.remaining ?? signed.order.makingAmount;
+  } catch (err) {
+    return unavailable(chainId, "chain_read_failed", `the order's live invalidator could not be read (${revertReason(err)}); its remaining amount is unknown and no fill bytes were prepared`, ctx);
+  }
+  const effectiveMaking = action.fillMakingAmount === undefined ? remainingMaking : BigInt(action.fillMakingAmount);
+  if (effectiveMaking <= 0n || effectiveMaking > remainingMaking) {
+    return unavailable(chainId, "invalid_order_terms", `fillMakingAmount ${effectiveMaking} must be positive and at most the live remaining making amount ${remainingMaking}; no fill bytes were built`, ctx);
   }
   // ForSelf mode contradictions are teaching errors BEFORE any building: the wrapper
   // structurally forces the target to the caller and cannot carry taker interactions.
@@ -1319,7 +1348,7 @@ async function buildTakerFillArtifact(a: {
     }
     if (auctionDec) {
       const nowSecs = nowSecondsOf(ctx);
-      const fillMaking = action.fillMakingAmount ? BigInt(action.fillMakingAmount) : signed.order.makingAmount;
+      const fillMaking = effectiveMaking;
       const whitelisted = isGetterWhitelisted(auctionDec.fees, account);
       const fee = fusionTotalFee(auctionDec.fees, whitelisted);
       const bumpNow = fusionRateBump(auctionDec.auction, nowSecs, null);
@@ -1362,7 +1391,7 @@ async function buildTakerFillArtifact(a: {
   let makerEntries = makerApprovalRequirements({
     maker: signed.order.maker,
     makerAsset: signed.order.makerAsset,
-    makingAmount: signed.order.makingAmount,
+    makingAmount: effectiveMaking,
     lop,
     usePermit2: makerCtx.target.usePermit2,
     orderExpiry: makerCtx.orderExpiry,
@@ -1377,7 +1406,7 @@ async function buildTakerFillArtifact(a: {
     makerEntries = annotatedMakerEntries;
     makerReadiness = assessMakerReadiness({
       makerAsset: signed.order.makerAsset,
-      makingAmount: action.fillMakingAmount !== undefined ? BigInt(action.fillMakingAmount) : signed.order.makingAmount,
+      makingAmount: effectiveMaking,
       allowPartialFills: makerCtx.allowPartialFills,
       usePermit2: makerCtx.target.usePermit2,
       jit: makerCtx.target.jit,
@@ -1414,7 +1443,7 @@ async function buildTakerFillArtifact(a: {
       forSelf: action.forSelf,
       signed,
       localOrderHash,
-      ...(action.fillMakingAmount !== undefined ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+      fillMakingAmount: effectiveMaking,
       ...(action.maximumTakingAmount !== undefined ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : {}),
       ...(auctionCap !== undefined ? { auctionCap } : {}),
       ...(auctionData !== undefined ? { auctionData } : {}),
@@ -1430,7 +1459,7 @@ async function buildTakerFillArtifact(a: {
       taker: account,
       extension: signed.extension,
       ...(action.receiver ? { receiver: action.receiver } : {}),
-      ...(action.fillMakingAmount ? { fillMakingAmount: BigInt(action.fillMakingAmount) } : {}),
+      fillMakingAmount: effectiveMaking,
       ...(action.maximumTakingAmount ? { maximumTakingAmount: BigInt(action.maximumTakingAmount) } : auctionCap !== undefined ? { maximumTakingAmount: auctionCap } : {}),
       ...(interaction ? { interaction } : {}),
     });
@@ -1534,12 +1563,14 @@ async function handleCancelSlotSweep(a: {
     return unavailable(chainId, "invalid_order_terms", `scope 'slot' needs a bit-invalidator order (NO_PARTIAL_FILLS set or ALLOW_MULTIPLE_FILLS unset — every Cork-built order); these makerTraits select the remaining-amount invalidator, where there is no slot word to sweep and the LOP reverts OrderIsNotSuitableForMassInvalidation. Use scope 'order' (cancelOrder) for this order`, ctx);
   }
   const deps = venueDepsOf(ctx);
+  const capability = await readNativeApiCapability(ctx);
+  if (!capability.supported) return unavailable(chainId, capability.code, capability.reason, ctx);
   let book: Awaited<ReturnType<typeof collectVenuePages>>;
   try {
     // The venue's own maker filter narrows the walk to this account's rows; the local maker
     // check below still runs, because the filter is the venue's claim and the signed order is
     // the fact.
-    book = await collectVenuePages({ maxPages: action.maxPages }, (cursor) => getLopOrderbook(deps, { chainId, maker: account, limit: 100, ...(cursor ? { cursor } : {}) }));
+    book = await collectVenuePages({ maxPages: action.maxPages }, (cursor) => getLopOrderbook(deps, { chainId, maker: account, view: "management", status: ["OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "EXPIRED"], limit: 100, ...(cursor ? { cursor } : {}) }));
   } catch (err) {
     return venueFailed(chainId, err, ctx);
   }

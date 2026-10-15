@@ -5,12 +5,12 @@
 // confused with), transport failure as "unknown" (never a verdict), and the bounded cause-chain
 // walk for viem's variably-nested revert data.
 import { afterEach, describe, expect, it } from "vitest";
-import { encodeErrorResult, parseAbi } from "viem";
+import { encodeErrorResult, keccak256, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { buildTakerFill, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
+import { buildTakerFill, decodeLopCall, encodeExtensionFields, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import type { SignedLopOrder } from "../src/datasources/venue.ts";
 import { defaultProbeBudget, type FillSimulation, PROBE_BUDGET, probeAccountTypeOf, probeUntilProven, simulateTopFill } from "../src/handlers/fill-simulate.ts";
-
+import { buildAuctionAmountData } from "../src/fusion.ts";
 const LOP = LOP_ADDRESSES[1]!;
 const ACCOUNT = "0x00000000000000000000000000000000000000aa" as const;
 const CST = "0x00000000000000000000000000000000000000c5" as const;
@@ -40,6 +40,7 @@ function clientOf(impl: (args: CallArgs) => unknown) {
   return {
     calls,
     client: {
+      readContract: async () => 0n,
       call: async (args: CallArgs) => {
         calls.push(args);
         return impl(args);
@@ -61,7 +62,7 @@ const errData = (name: string) =>
 describe("simulateTopFill — verdicts", () => {
   it("success is 'fillable', probed at the LOP from the fill sender", async () => {
     const { client, calls } = clientOf(() => ({ data: "0x" }));
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("fillable");
     expect(sim?.revert).toBeUndefined();
     expect(calls).toHaveLength(1);
@@ -69,21 +70,35 @@ describe("simulateTopFill — verdicts", () => {
     expect(calls[0]!.blockNumber).toBeUndefined();
   });
 
-  it("the probe carries takerTraits threshold 0 — the LOP skips the cap check, so an auction row probes at its LIVE price", async () => {
-    const { client, calls } = clientOf(() => ({ data: "0x" }));
-    const signed = await signedRow();
-    await simulateTopFill(client, { signed, lop: LOP, account: ACCOUNT });
-    const uncapped = buildTakerFill({ order, signature: signed.signature, makerAccountType: "EOA", taker: ACCOUNT, extension: "0x", maximumTakingAmount: 0n }).calldata;
-    const defaultCap = buildTakerFill({ order, signature: signed.signature, makerAccountType: "EOA", taker: ACCOUNT, extension: "0x" }).calldata;
-    expect(calls[0]!.data).toBe(uncapped);
-    expect(calls[0]!.data).not.toBe(defaultCap);
+  it("recognizes a healthy auction maker above the signed floor instead of inventing a cap failure", async () => {
+    const extension = encodeExtensionFields(buildAuctionAmountData(1, {
+      gasBumpEstimate: 0n, gasPriceEstimate: 0n, startTime: 1_790_000_000n,
+      duration: 3600n, initialRateBump: 1_000_000n, points: [],
+    }));
+    const auctionOrder = { ...order, salt: BigInt(keccak256(extension)) & ((1n << 160n) - 1n), makerTraits: 1n << 249n };
+    const signed: SignedLopOrder = { order: auctionOrder, signature: await maker.sign({ hash: hashLopOrder(1, LOP, auctionOrder) }), extension, makerAccountType: "EOA" };
+    // Independent LOP guard model at auction start: the getter charges 110% of the
+    // signed floor. A nonzero lower cap reverts before the healthy maker transfer;
+    // without that artificial cap, only this probe sender's taker allowance fails.
+    const { client } = clientOf(({ data }) => {
+      const fill = decodeLopCall(data);
+      if (fill.fn === "cancelOrder" || fill.fn === "cancelOrders" || fill.fn === "bitsInvalidateForOrder") throw new Error("expected fill");
+      const taking = (fill.order.takingAmount * fill.amount * 11n) / (fill.order.makingAmount * 10n);
+      if (fill.takerTraits.threshold !== 0n && taking > fill.takerTraits.threshold) throw revertWith(errData("TakingAmountTooHigh"));
+      throw revertWith(errData("TransferFromTakerToMakerFailed"));
+    });
+    const capped = buildTakerFill({ ...signed, taker: ACCOUNT, fillMakingAmount: auctionOrder.makingAmount, maximumTakingAmount: auctionOrder.takingAmount });
+    await expect(client.call({ to: LOP, data: capped.calldata, account: ACCOUNT })).rejects.toMatchObject({ cause: { data: errData("TakingAmountTooHigh") } });
+    const sim = await simulateTopFill(client, { chainId: 1, signed, lop: LOP, account: ACCOUNT });
+    expect(sim?.verdict).toBe("maker-ready");
+    expect(sim?.revert?.name).toBe("TransferFromTakerToMakerFailed");
   });
 
   it("TransferFromTakerToMakerFailed is 'maker-ready' — the fill got past the maker's ENTIRE side", async () => {
     const { client } = clientOf(() => {
       throw revertWith(errData("TransferFromTakerToMakerFailed"));
     });
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("maker-ready");
     expect(sim?.revert).toEqual({ name: "TransferFromTakerToMakerFailed", selector: errData("TransferFromTakerToMakerFailed").slice(0, 10) });
     expect(sim?.note).toContain("taker-asset allowance");
@@ -93,7 +108,7 @@ describe("simulateTopFill — verdicts", () => {
     const { client } = clientOf(() => {
       throw revertWith(errData("TransferFromMakerToTakerFailed"));
     });
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("would-revert");
     expect(sim?.revert?.name).toBe("TransferFromMakerToTakerFailed");
   });
@@ -102,14 +117,14 @@ describe("simulateTopFill — verdicts", () => {
     const { client: known } = clientOf(() => {
       throw revertWith(errData("InvalidatedOrder"));
     });
-    const simKnown = await simulateTopFill(known, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const simKnown = await simulateTopFill(known, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(simKnown?.verdict).toBe("would-revert");
     expect(simKnown?.revert?.name).toBe("InvalidatedOrder");
 
     const { client: unknown } = clientOf(() => {
       throw revertWith("0xdeadbeef00");
     });
-    const simUnknown = await simulateTopFill(unknown, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const simUnknown = await simulateTopFill(unknown, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(simUnknown?.verdict).toBe("would-revert");
     expect(simUnknown?.revert).toEqual({ name: null, selector: "0xdeadbeef" });
     expect(simUnknown?.note).toContain("outside the known LOP/Cork error set");
@@ -119,7 +134,7 @@ describe("simulateTopFill — verdicts", () => {
     const { client } = clientOf(() => {
       throw Object.assign(new Error("fetch failed"), { name: "HttpRequestError" });
     });
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("unknown");
     expect(sim?.revert).toBeUndefined();
   });
@@ -128,7 +143,7 @@ describe("simulateTopFill — verdicts", () => {
     const { client } = clientOf(() => {
       throw new Error("execution reverted");
     });
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("would-revert");
     expect(sim?.revert).toEqual({ name: null, selector: null });
   });
@@ -139,13 +154,13 @@ describe("simulateTopFill — the revert-data walk and edge mechanics", () => {
     const { client: nested } = clientOf(() => {
       throw revertWith(errData("PrivateOrder"), 4);
     });
-    const simNested = await simulateTopFill(nested, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const simNested = await simulateTopFill(nested, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(simNested?.revert?.name).toBe("PrivateOrder");
 
     const { client: tooDeep } = clientOf(() => {
       throw revertWith(errData("PrivateOrder"), 12);
     });
-    const simDeep = await simulateTopFill(tooDeep, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const simDeep = await simulateTopFill(tooDeep, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(simDeep?.revert).toEqual({ name: null, selector: null });
   });
 
@@ -153,33 +168,47 @@ describe("simulateTopFill — the revert-data walk and edge mechanics", () => {
     const { client } = clientOf(() => {
       throw revertWith("0xdead" as `0x${string}`);
     });
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.revert).toEqual({ name: null, selector: null });
   });
 
   it("terms the fill builder cannot encode yield NULL — no probe, no invented verdict", async () => {
     // Empirically: buildTakerFill throws "compactSignature of length 64 expected, got 2".
     const { client, calls } = clientOf(() => ({ data: "0x" }));
-    const sim = await simulateTopFill(client, { signed: await signedRow({ signature: "0x1234" as `0x${string}` }), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow({ signature: "0x1234" as `0x${string}` }), lop: LOP, account: ACCOUNT });
     expect(sim).toBeNull();
     expect(calls).toHaveLength(0);
   });
 
   it("a client whose call throws SYNCHRONOUSLY is still classified, not escaped", async () => {
     const client = {
+      readContract: (async () => 0n) as never,
       call: ((): never => {
         throw revertWith(errData("OrderExpired"));
       }) as never,
     };
-    const sim = await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
     expect(sim?.verdict).toBe("would-revert");
     expect(sim?.revert?.name).toBe("OrderExpired");
   });
 
-  it("atBlock pins the probe's block", async () => {
+  it("a partial live remainder is the probe amount, not the signed original", async () => {
     const { client, calls } = clientOf(() => ({ data: "0x" }));
-    await simulateTopFill(client, { signed: await signedRow(), lop: LOP, account: ACCOUNT, atBlock: 123n });
-    expect(calls[0]!.blockNumber).toBe(123n);
+    const remaining = 667n;
+    client.readContract = (async () => ((1n << 256n) - 1n) ^ remaining) as never;
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow({ order: { ...order, makerTraits: 1n << 254n } }), lop: LOP, account: ACCOUNT });
+    expect(sim?.verdict).toBe("fillable");
+    const decoded = decodeLopCall(calls[0]!.data);
+    if (decoded.fn === "cancelOrder" || decoded.fn === "cancelOrders" || decoded.fn === "bitsInvalidateForOrder") throw new Error("expected a fill");
+    expect(decoded.amount).toBe(remaining);
+  });
+
+  it.each(["transport", "contract-revert"])("unknown invalidator (%s) cannot become a full-size probe", async (failure) => {
+    const { client, calls } = clientOf(() => ({ data: "0x" }));
+    client.readContract = (async () => { throw new Error(failure); }) as never;
+    const sim = await simulateTopFill(client, { chainId: 1, signed: await signedRow(), lop: LOP, account: ACCOUNT });
+    expect(sim?.verdict).toBe("unknown");
+    expect(calls).toEqual([]);
   });
 });
 

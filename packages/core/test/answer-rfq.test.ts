@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { answerOcoGroup, buildMakerOrder, coverMakingAmount, decodeMakerTraits, impliedPremiumWad, LOP_ADDRESSES, premiumAmount, premiumFraction, RE_REST_MAX_SECONDS, RE_REST_MIN_SECONDS, reRestExpirySeconds, runTool, ToolInputError, YEAR_SECONDS, type HandlerContext, type ResolvedRpc } from "@cork/core";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, withNativeApiMetadata } from "./helpers.ts";
 import { DEMO_ACCOUNT } from "@cork/schemas";
 import { encodeAnchorArgs, encodeImpairmentArgs, inlineAdditionalData, inlineParamsOfTemplate, INLINE_IMPAIRMENT_SCHEMA, INLINE_LIQUIDITY_SCHEMA } from "@cork/core";
 import { DERIVED_JIT_POOL, FIRM_ANSWER_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, LIQUIDITY_RECIPE, RC2_CLONE_OWNER, RFQ_INLINE_ANCHOR, RFQ_INLINE_ANSWER_ID, RFQ_INLINE_ID, RFQ_INLINE_OPTION_ANCHOR, RFQ_NOSENDER_ID, RFQ_OPEN_ID, SIGNED_LOP_PAYLOAD, stubContext, DEPLOYED_FIXED_RATE, FIXED_RECIPE, RFQ_FIXED_ID, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_RATE, RFQ_FIXED_ANSWER_ID, RFQ_FIXED_OPTION_RATE, RFQ_IMPAIRMENT_ID, RFQ_IMPAIRMENT_PARTIAL_ID, RFQ_IMPAIRMENT_DURATION, RFQ_IMPAIRMENT_SPREAD, RFQ_IMPAIRMENT_EXPIRY, IMPAIRMENT_RECIPE } from "../../../evals/stub.ts";
@@ -412,7 +412,7 @@ describe("cork_prepare_orders refresh-order — the same terms on the same bit w
     side: "SELL",
     status: "OPEN",
   });
-  const venueWith = (rows: unknown[]) => async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: rows, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 }));
+  const venueWith = (rows: unknown[]) => withNativeApiMetadata(async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: rows, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 })));
   const chain = (word: bigint) => stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return word; throw new Error(`no stub for ${c.functionName}`); });
   type Refreshed = { kind: string; nonce: string; orderHash: string; allowedSender: string; typedData: { message: Record<string, string> }; refreshes: { orderHash: string; nonce: string; previousExpiry: string; newExpiry: string; extensionCarried: boolean }; execution: { then: string[] } };
 

@@ -62,6 +62,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: sh scripts/release-preflight.sh deploy
 
+      - name: Require compatible deployed default API behavior
+        env:
+          CORK_NATIVE_API_RELEASE_EVIDENCE: ${{ vars.CORK_NATIVE_API_RELEASE_EVIDENCE }}
+        run: node scripts/verify-compatible-api.mjs
+
       - name: Substitute the attested digest into the compose
         env:
           IMAGE_DIGEST: ${{ inputs.image-digest }}

@@ -17,7 +17,7 @@ import {
   type ContractReader,
   type HandlerContext,
 } from "@cork/core";
-import { stubResolved } from "./helpers.ts";
+import { stubResolved, withNativeApiMetadata } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const U256_MAX = (1n << 256n) - 1n;
@@ -136,12 +136,12 @@ function stubCtx(args: {
 }): HandlerContext {
   return {
     nowSeconds: 1_790_000_000n,
-    venueFetch: async (url) => {
+    venueFetch: withNativeApiMetadata(async (url) => {
       if (url.includes("/rollover/v1/orders/")) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
       if (url.includes("/limit-orders/v1/fills")) return new Response(JSON.stringify({ items: args.fills ?? [] }), { status: 200 });
-      if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: args.bookRow ? [args.bookRow] : [] }), { status: 200 });
+      if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: args.bookRow ? [{ chainId: 1, status: "OPEN", availability: { state: "candidate", reason: "no-known-blocker" }, confidence: "unknown", ...args.bookRow }] : [] }), { status: 200 });
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
-    },
+    }),
     resolveRpc:
       args.chainRead === undefined
         ? async () => null

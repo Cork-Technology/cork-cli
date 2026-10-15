@@ -105,6 +105,95 @@ maker cannot deliver, and gives the reason.
 `full-decentralized` (your RPC plus HyperSync, never the venue). The tool never substitutes a mode
 for you.
 
+### Native limit-order history
+
+**0.8 migration:** exact history and ranked discovery are separate contracts. Remove
+`--account`, `--since` and `--wait` when using `--order-hash`; these combinations return
+`invalid_input` (exit 2). MCP/SDK tool callers must likewise remove `filters.account`, `since`
+and `wait` from exact-history inputs. Use a separate discovery request for sender ranking
+and watermark watches. Do not require ranked-book metadata on exact history output, or
+coerce unknown history/resting state into absence. See the [SDK migration guide](sdk.md#migrating-from-07x-to-080-rc1).
+
+For an exact history read, supply both the chain and the order hash:
+
+```sh
+ch query orderbook --chain-id <id> --order-hash <0x…> --json
+ch track reconcile --chain-id <id> --subject '{"kind":"orderHash","orderHash":"<0x…>"}' --json
+```
+
+The exact orderbook read includes inactive, expired and unavailable records. It is unranked
+history, not a fill recommendation; combining it with `--account`, `--since` or `--wait`
+is refused. Additional venue filters, including an explicit status, still constrain the result.
+By default, without an order hash, CLI/MCP explicitly request strict `view=discovery` and keep the ranked sender view. The lower-level SDK transport still permits omitted-view legacy active membership.
+Taker-fill and refresh-order look up the supplied hash without a candidate-status filter.
+A known unavailable order is refused with `invalid_order_terms` and no fill/replacement
+bytes, rather than `order_not_found`. Signed-payload authentication and chain preflight remain.
+Native history admission makes one bounded `GET /meta/v1` per logical operation, shared only
+within that operation's pagination and nested book/fills reads. The configured API must declare
+the active `cork-api` component and an exact reviewed revision below. Missing, malformed,
+unsupported or unavailable metadata is unknown capability: never hash absence, complete zero
+history, a complete cancellation mask or `resting=false`. Independently observed valid fills
+remain available with unverified completeness and nullable resting. Caller cancellation remains
+`request_aborted`; there is no persistent capability cache, retry or additional onchain RPC.
+Older APIs can strip/ignore `view` and `orderHash`: ordinary HTTP200/empty/hasMore=false
+is not capability or complete point history. Do not fall back to filtered active scans.
+Default-endpoint availability and rollout remain release prerequisites; historical OpenAPI
+captures are not repinned to these reviewed sources.
+
+- `makingAmount` and `takingAmount` are the signed originals. `filledMakingAmount` and
+  `filledTakingAmount` are indexed actual cumulative fills; actual taking can exceed the signed
+  taking amount. `remainingMakingAmount` and `remainingTakingAmount` are indexed remainders,
+  not execution permission or a live fill-price calculation. Amounts use each token's native units;
+  no fee/gross/net split is established.
+- `availability.state: "candidate"` means only that the index knows no blocker. Row
+  `confidence` can be `unknown`, `provisional` or `confirmed`: a conservative chain-local
+  checkpoint-lag label, not finality or permission to execute. Aggregate `data.confidence`
+  remains `unknown`. Hybrid `verification` is a separate signature/invalidator check.
+- `lastStatusSyncBlock` is a lifecycle observation, not a confirmation or correction watermark.
+  A fill's `observedBlockTimestamp` can be null. Do not substitute the legacy `blockTimestamp`
+  response-time fallback for an observed event time. Fill identity includes chain, order hash,
+  transaction hash and log index, so two logs in one transaction remain distinct.
+- Reconciliation preserves an inactive record without accusing it of still resting. Missing
+  availability or a failed/incomplete lookup leaves resting state unknown. A foreign chain/hash
+  response is `invalid_service_response`, never proof of history or absence. An empty exact
+  venue result is not proof of on-chain absence.
+
+These native fields target merged [API #110](https://github.com/Cork-Technology/cork-indexing-api/pull/110):
+merge `6c459d5dd403a73455f4172f533040fd7a0957ee` and published candidate
+`b5c3405d15867f2bbbf383bb7729651c88ef18b6` share tree `1aebab014fcbe248c27e4c1c6917ce0dc3f28660`.
+That source association is not served capability, index readiness or deployment/rollout proof.
+Default-endpoint capability and rollout remain unverified. CLI and MCP regression coverage exercises every confidence label, unavailable
+active residuals, metadata failures and bounded cursor resumption. Cursors stay opaque, including
+saved two-part orderbook cursors and chain-qualified tokens; explicit chain inputs remain supported.
+Metadata failures are unavailability, never empty history or absence. On a live cited order,
+RFQ v2 refresh also returns `requote`: post the superseding answer carrying the replacement
+order before resting it. Known native unavailability refuses the refresh before that work.
+RFQ v1 and v2 history are not bridged by this integration.
+
+[Infra #76](https://github.com/Cork-Technology/cork-indexing-infra/pull/76) is merged into `dev`;
+the current dependency snapshot is `499f6411a10b9733dcac4c6a465f888663c302e8`. Verify the
+availability-aware readers **before producer activation**: sibling retirement commits in
+128-row batches. Native CANCELLED can mean spent-bit retirement, not explicit maker cancellation;
+positive mathematical remainder can remain. Replay/checkpoint observations do not establish
+finality, automatic orphan deletion or historical repair. There is no canonical-stack revival
+or alternate-version fallback.
+
+### Native orderbook management
+
+`ch query orderbook --view management` explicitly requests unavailable active records for
+inspection; ranking still excludes unavailable rows from fill candidates. Omit `--view` or
+use `--view discovery` for valid discovery. A maker or status filter never opts into
+management; requested terminal history remains part of discovery. RFQ views remain
+`full` and `current`, and an orderbook view is refused in full-decentralized mode.
+
+Slot-scope cancellation reads the maker-and-chain-bounded management book with all five
+explicit statuses: `OPEN`, `PARTIALLY_FILLED`, `CANCELLED`, `FILLED`, `EXPIRED`.
+Unavailable and expired same-slot siblings are included in its unsigned mask and retirement
+report. Management without explicit statuses remains active-only. Complete bounded pagination
+and admitted capability are required; incomplete/error/unknown history cannot produce bytes.
+Fill acquisition, refresh and track keep exact-hash reads without forcing management. A view
+or additive availability label alone is not capability or execution permission.
+
 ### Registry reads
 
 A pair's oracle serves every expiry of that pair, so these facts are market-level.
@@ -264,11 +353,65 @@ ch prepare order deploy-rollover-contract --chain-id <id> --account <0x…> --cl
 ch prepare order rollover-fill --chain-id <id> --account <0x…> --client-request-id <id> --order-digest <0x…> # cST holder: unsigned BaseFiller.execute calldata
 ```
 
-Three facts about orders. First, a Cork-built order fills once: the first fill of any size spends
-it. To serve several takers, post several smaller orders. Second, `--oco-group` ties orders to one
-nonce, so the first fill retires the rest. Third, `--allowed-sender` reserves the fill for the
-address that calls the protocol. For a ForSelf wallet that address is the adapter, not the Safe.
-`ch capabilities --topic orders` gives one term per concept.
+By default an order fills once: even a partial fill spends its bit. For a standing order,
+pass `--allows-multiple-fills true` with `--allows-partial-fills true` (the latter defaults to
+true). The LOP tracks remaining making amount per order hash. Cancel each hash explicitly;
+`refresh-order` does not replace these orders. Cancel the old order before signing a replacement
+to avoid double exposure. A repeated-fill ladder requires `--nonce-policy distinct`; its
+aggregate exposure is the sum of all rung sizes. Shared policies and `--oco-group` are refused.
+Existing single-fill/OCO behavior is unchanged. Prepared outputs label `invalidator` and
+`allowsMultipleFills` from the signed traits; `repeated_fill_notice` names the hash to cancel.
+The venue's listing has no separate repeated-fill switch: the signed word is authoritative.
+Omitting `--fill-making-amount` uses the authoritative live LOP remainder, not the original
+signed size or the venue's indexed remainder. An explicit amount above that remainder is
+refused. RPC absence/read failure returns uncertainty with no fill bytes. Readiness, payment
+ceilings, approvals, auctions and ForSelf wrappers use the same resolved amount; signed
+amounts, traits and order hash remain unchanged.
+
+`--allowed-sender` reserves for the address CALLING the LOP, not the beneficiary: a direct
+wallet on a raw fill, the ForSelf adapter on a wrapper fill. Leave it unset for an open order;
+do not guess a requester's fill sender. The local pilot policy is manual cancellation, not
+an automated reservation or replacement system. `ch capabilities --topic orders` explains
+both invalidators. Existing-pool direct-wallet flow: maker cST allowance → sign/finalize the
+order → taker premium-token allowance to LOP → prepare/simulate/sign individual partial fills.
+Approval preparation is not an approval transaction or proof of effective permission.
+
+### Bounded rollover batch (explicit module inputs)
+
+`ch prepare order rollover-fill` accepts `--bounded` as a JSON object with
+`fundingModule`, `unwindModule`, and `outputModule` addresses. The signed intent must have
+exactly one mandatory zero-value delegatecall in each pre/mid/post phase to those modules,
+with no premium hooks. Funding calldata names src cPT, src collateral, and dst cPT; unwind
+and output calldata carry positive native-unit numerator/denominator guards. This option
+also requires explicit `--filler-src-cst` and positive `--min-dst-per-src` (WAD).
+
+The supported account profile is a byte-verified Safe 1.4.1 proxy/singleton, exactly one
+non-delegated EOA owner, threshold one and no guard. The canonical MultiSendCallOnly runtime
+is verified too. `data.to` is the Safe; `data.from` is its owner and the root transaction signer.
+The Safe delegates to MultiSendCallOnly, which CALLs `fundingModule.stage(clone, orderDigest,
+fillerSrcCst)` then `BaseFiller.execute` / `executeWithMarket`. An inner failure reverts the
+whole transaction. Never send the inner calls separately: stage is permissionless, not an
+authenticated reservation. No-code, EIP-7702, guarded/multisig or unknown account profiles
+return `unsupported_account_profile` without bytes. Live account/clone/position reads are
+required; the tool neither deploys a wallet nor prepares a generic user operation.
+
+Outputs include the two calls, native-unit ceilings for both signed guards, a separate
+`ownerApproval` (holder src cPT → clone), the existing filler approvals (src cST and premium
+token → BaseFiller), and a `whitelistInventory` of caller/targets/tokens to check. This inventory
+is not verified permission and never asks for an allowance to a module. The holder's allowance
+covers `orderSize - clone.orderState(orderDigest).rolled`, not the filler chunk or the original
+size after partial progress. Sufficient live ERC20/Permit2 grants have `unsignedTx: null`;
+only missing grants carry approval bytes. Never lower a standing allowance. BaseFiller's
+partial-fill slot is per filler account, so do not assume one account can fill the same partial
+order repeatedly.
+
+Addresses are caller-supplied, NOT deployed defaults or code attestations.
+`module_identity_unverified` is emitted even with an RPC.
+`bounded.moduleIdentitiesVerified` is false; signed token names are not independently verified
+pool bindings. Check deployment/build identity, token/pool bindings, owner and filler grants,
+effective Safe permissions and both-chain execution/rollback before using the artifact.
+Independent contract/interface review and release approval remain separate gates. No native
+accounting/API or confirmation/correction contract is added by this option.
 
 ### Markets
 
@@ -320,7 +463,9 @@ ch track reconcile --chain-id <id> --subject '{"kind":"orderHash","orderHash":"0
 ```
 
 Each subject kind is also a subcommand: `ch track tx-hash reconcile --tx-hash <0x…>`. The chain
-outranks the venue. A disagreement is `conflict`.
+outranks the venue. A disagreement is `conflict`. Native order-hash reconciliation preserves
+up to 1000 observed fills. If pagination is not exhausted at that bound, even a positive match
+returns `fillsScanComplete: false` and `pagination_incomplete`; available history is retained.
 
 ## 9. Relay signed payloads — `ch submit`
 
@@ -547,6 +692,69 @@ release and config results apart.
 The README's synonym table lists the accepted synonyms, and the pre-rename names that answer with
 their new name.
 
+
+### Compatible API activation gate
+
+Every `v*` tag (including RCs), reusable/manual APK publication and hosted deployment
+runs `node scripts/verify-compatible-api.mjs`. `CORK_NATIVE_API_RELEASE_EVIDENCE` is a JSON
+repository variable containing `apiRevision`, `infraRevision`, `indexMigrationSha256`,
+`deployedAt` and an `endpoints` array. Each entry supplies `url`, `chainId`, `maker`,
+`activeOrderHash`, `inactiveOrderHash` and `blockedSiblingOrderHash` from an actual deployment.
+The canonical compatibility policy recognizes exact reviewed API revisions `6c459d5dd403a73455f4172f533040fd7a0957ee`
+and `b5c3405d15867f2bbbf383bb7729651c88ef18b6`; the required merged revision export remains
+an alias. Infra remains pinned to `499f6411a10b9733dcac4c6a465f888663c302e8`. Source association
+is not deployment proof: served metadata must match the separately supplied actual deployment
+identity. Identical migration bytes do not substitute for runtime revision binding.
+`venue-defaults.mjs` provides the one URL authority shared by the SDK and raw-Node guard.
+Missing evidence/endpoint, unsupported revision, failed HTTP, deprecated shim or inconclusive
+pagination blocks the job. An arbitrary nonempty, shortened or future commit is not admitted.
+
+Per endpoint the gate makes seven GETs: one metadata read and six existing orderbook probes,
+each read bounded to ten seconds; each book probe requires one exhausted 2000-row page.
+It checks strict discovery, management/all-status and active-only selection, inactive exact
+history, consumed-nonce siblings, native totals and checkpoint confidence (`unknown`,
+`provisional`, `confirmed`). These lag labels are not finality, reorg safety or permission.
+Choose a small known probe pair: incomplete scan evidence is not absence. Operator-supplied
+deployment identity and observed behavior do not attest DB grants, migration recovery or
+account/module permissions. Passing this check does not authorize publication, rollout or signing.
+
+### Local reference consumer proof
+
+Prerequisites: the pinned Bun toolchain, Node, Forge/Anvil, Docker/Podman, and read-only
+checkouts with submodules at the exact gate API/Infra pins and rollover source
+`894bc9129b1de96c3dd49ed75346adcbd8690e25`. Set `FORGE_STD_REFERENCE` to that checkout’s
+`lib/forge-std` (`620536fa5277db4e3fd46772d5cbc1ea0696fb43`). Install the CLI frozen
+lockfile and build the API using its own instructions. From this CLI repository:
+
+```sh
+export API_REPO=<api-checkout> INFRA_REPO=<infra-checkout>
+export ROLLOVER_REFERENCE=<rollover-checkout>
+export FORGE_STD_REFERENCE="$ROLLOVER_REFERENCE/lib/forge-std"
+export REFERENCE_BUILD_OUT=<owned-output-directory>
+bun install --frozen-lockfile
+bun run typecheck && bun run build && bun run verify:package
+bun experiments/fork-harness/fixtures/fill-reference/build.mjs
+bun scripts/compile-binaries.mjs --version v0.6.1-rc.3 --commit "$(git rev-parse HEAD)" \
+  --targets bun-darwin-arm64 --outdir "$REFERENCE_BUILD_OUT/bin"
+export REFERENCE_BIN="$REFERENCE_BUILD_OUT/bin/ch-darwin-arm64"
+export ROLLOVER_ARTIFACTS="$REFERENCE_BUILD_OUT/deploy"
+export REFERENCE_FACADE_ARTIFACTS="$REFERENCE_BUILD_OUT/facades"
+export REFERENCE_OUT="$REFERENCE_BUILD_OUT/run"
+bun experiments/fork-harness/fixtures/fill-reference/run.mjs
+```
+
+Select the matching compile target/binary on another host. The runner starts its own
+loopback Anvil (port 19547) and disposable Postgres16, runs compiled CLI and stdio MCP,
+then stops its children/container in `finally`. It uses public Anvil keys only. The report
+records signed originals, transactions, consumed amounts, approval transitions, failed-batch
+rollback, API behavior and incomplete 1000-row history. Reference production contracts use
+the deploy-size profile; no EIP-170 relaxation is enabled. Safe artifacts are the pinned
+LGPL-3.0 `@safe-global/safe-contracts` 1.4.1 dev dependency, not copied production sources.
+LOP and stateless wallet infrastructure runtimes are placed at canonical addresses only
+on disposable Anvil. Plain ERC20/Phoenix pool/attestation mocks are explicit fixture limits,
+not proof of production availability, Atlas rollout or live account/module permission.
+
+
 ## 12. Migrate from 0.6 to 0.7
 
 The 0.7 line breaks covered RFQ input contracts, so it starts a new minor line below 1.0. Do not
@@ -576,10 +784,18 @@ id.
 
 A rollover takes two parties. The cPT holder signs the order and receives the premium. The
 source cST holder fills with `rollover-fill` and pays the premium. Either party can open the
-rollover RFQ. When the cPT holder opens it, the cPT holder's order cites the quote with `quoteRef`.
-When the cST holder opens it (with `auth {method:"apiKey"}`), the cPT holder answers and rests an
-order that cannot cite the RFQ. The cST holder then fills that order by its terms
-(cork-indexing-api#121).
+rollover RFQ using signature authentication or an authorized API key. Set rollover-only
+`requesterRole: "cst"` when the requester holds cST: the cited authenticated cPT answerer must
+sign the rollover order. Explicit `"cpt"` or omission retains requester signing. The role is
+written as `requester_role` in the canonical RFQ body; omission inserts no default, preserving
+legacy hashes and signatures. Preparation and submission enforce the same signer and quote
+terms, including any cited answer revision from the API's full view.
+
+Pass the role inside the shared JSON input (`ch prepare orders --input …` or `ch submit --input …`),
+or the corresponding MCP/SDK request object. An explicit role requires an API122-compatible API;
+if it rejects the role, do not strip the field or silently retry as a legacy request. API capability
+rollout must precede role-aware writers. The existing premium comparison and filler authorization
+are unchanged; citation alone does not prove economic safety or execution at the quoted payer cap.
 
 A rollover RFQ uses `source { poolId, shares }` and `premiumToken`. It does not use the new-position
 modes/packageIds/notionalAssets. Each option names an existing destination pool or a just-in-time
@@ -650,6 +866,25 @@ Two more changes in the same release do not break a caller, but they can stop a 
 `cork_query rollover-orders` rows now carry `fillable` and `whyNotFillable`. Pass
 `--fillable true` to list only the orders a filler can fill now.
 
+
+### Rollover status and effective expiry
+
+Rollover query rows keep the API's raw `status`. Track keeps it as `data.lifecycle`
+and `data.order.status`. When the API supplies `effectiveStatus`, query returns it in
+`data.items[]` and track in `data.order`; the CLI and MCP preserve it without a summary alias.
+Older APIs can omit the annotation. Its absence does not require an upgrade.
+
+A pending order can have raw `PENDING`, effective `EXPIRED` and settler status `None`
+after its fill deadline. Effective expiry is a venue annotation, not a confirmed chain
+transition or an `OrderExpired` event. `expiredAt` stays null without a real event.
+Unknown annotations do not override raw lifecycle or confirm a chain status.
+Raw `EXPIRED` against chain `None` remains a conflict.
+
+Default query filters, row membership, `fillable` / `whyNotFillable`, and fill/signing
+protections do not change. Read warnings as well as provenance: a successful event-history
+read can give chain provenance even if the status read failed. It does not confirm lifecycle.
+When both reads fail, track retains the venue row with indexer provenance and failure warnings;
+hybrid query retains it as unverified, not absent.
 
 ### Reference: terminology
 

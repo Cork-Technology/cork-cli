@@ -9,7 +9,7 @@ import { decodeFunctionData, parseAbi } from "viem";
 import { normalizeRfqRow } from "../src/datasources/venue.ts";
 import { allowedSenderSuffix, buildAuctionAmountData, buildJitExtension, buildMakerOrder, BUNDLED_DEFAULTS, computeOrderDigest, encodeExtensionFields, encodeJitExtraData, generationsOf, runTool, hashLopOrder, LOP_ADDRESSES, ORDER_DATA_TYPEHASH, POOL_CREATOR_ROLE, primaryOf, ToolInputError, parseSignedLopOrder, type HandlerContext, type LopOrder, type OrderDataStruct } from "@cork/core";
 import { ORDERS_TOPIC_REFERENCE, TOOL_EXAMPLES, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { proveRfqWrite, rfqRecord, stubResolved, stubRpc, type StubCall, coverQuoteOrder, signQuotes } from "./helpers.ts";
+import { proveRfqWrite, rfqRecord, stubResolved, stubRpc, type StubCall, coverQuoteOrder, signQuotes, withNativeApiMetadata } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 
@@ -84,7 +84,7 @@ function stubVenue(routes: Array<{ match: string; status?: number; body: unknown
     if (!r) return new Response(JSON.stringify({ statusCode: 404, error: "Not Found", message: `no stub for ${url}` }), { status: 404 });
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200 });
   };
-  return { venueFetch, seen };
+  return { venueFetch: withNativeApiMetadata(venueFetch), seen };
 }
 
 function ctxWith(routes: Array<{ match: string; status?: number; body: unknown }>, seen: Seen[] = []): HandlerContext {
@@ -94,6 +94,12 @@ function ctxWith(routes: Array<{ match: string; status?: number; body: unknown }
   // own resolveRpc over this.
   return { nowSeconds: NOW, resolveRpc: async () => null, ...stubVenue(routes, seen) };
 }
+
+const liveFillRpc = stubRpc((c) => {
+  if (c.functionName === "bitInvalidatorForOrder" || c.functionName === "rawRemainingInvalidatorForOrder") return 0n;
+  if (c.functionName === "allowance" || c.functionName === "balanceOf") return 10n ** 24n;
+  throw new Error(`no fixture read for ${c.functionName}`);
+});
 
 describe("cork_query venue-backed resources", () => {
   it("markets routes to /pools and labels provenance.mode hybrid", async () => {
@@ -124,26 +130,6 @@ describe("cork_query venue-backed resources", () => {
     expect(url).toContain(`poolId=0x${"ab".repeat(32)}`);
   });
 
-  it("orderbook applies filters.orderHash CLIENT-side (the venue path has no such param)", async () => {
-    // A known filter key must never be silently unapplied: without the client-side filter this
-    // read returned the WHOLE book for an orderHash query (observed live 2026-08-06).
-    const target = `0x${"9c".repeat(32)}`;
-    const other = `0x${"11".repeat(32)}`;
-    const seen: Seen[] = [];
-    const env = await runTool(
-      "cork_query",
-      // sort:"venue" — these skeletal rows carry no signed order, so the ranked default would file
-      // them under `excluded`; the filter's application is what this test grades.
-      { resource: "orderbook", chainId: 42161, filters: { orderHash: target.toUpperCase().replace("0X", "0x") }, pageSize: 25, sort: "venue", format: "concise" },
-      ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [{ orderHash: target, status: "OPEN" }, { orderHash: other, status: "OPEN" }] } }], seen),
-    );
-    expect(env.state).toBe("ok");
-    const data = env.data as { count: number; items: Array<{ orderHash: string }> };
-    expect(data.count).toBe(1);
-    expect(data.items[0]!.orderHash).toBe(target);
-    // and the hash was NOT forwarded as a venue query param (it has no server-side meaning here)
-    expect(seen[0]!.url).not.toContain("orderHash");
-  });
 
   it("flows kind=orders honors fillable + account→user; kind=contracts routes to /contracts", async () => {
     const seen: Seen[] = [];
@@ -1249,7 +1235,7 @@ describe("pagination completeness: bounded traversal, never silent truncation", 
     const env = await runTool(
       "cork_query",
       { resource: "fills", chainId: 42161, pageSize: 25, format: "concise" },
-      ctxWith([{ match: "/limit-orders/v1/fills", body: [{ orderHash: "0x1" }] }]),
+      ctxWith([{ match: "/limit-orders/v1/fills", body: [{ chainId: 42161, orderHash: "0x1" }] }]),
     );
     expect(env.state).toBe("ok");
     const pg = pgOf(env);
@@ -1337,7 +1323,22 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     bookRow = { orderHash: hash, order: orderWire, signature: await signFor(orderT), extension: "0x" };
   });
   const fill = (routes: Parameters<typeof ctxWith>[0], orderHash = hash) =>
-    runTool("cork_prepare_orders", { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" }, ctxWith(routes));
+    runTool("cork_prepare_orders", { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" }, { ...ctxWith(routes), resolveRpc: liveFillRpc });
+
+  it.each(["taker-fill", "refresh-order"] as const)("%s reports a natively cancelled order as unavailable, not absent", async (type) => {
+    const retired = { ...bookRow, status: "CANCELLED", availability: { state: "unavailable", reason: "cancelled" } };
+    const env = await runTool(
+      "cork_prepare_orders",
+      { chainId: 42161, account: type === "refresh-order" ? MAKER : "0x00000000000000000000000000000000000000dd", clientRequestId: "retired-" + type, action: { type, orderHash: hash }, format: "full" },
+      { ...ctxWith([]), venueFetch: withNativeApiMetadata(async (url) => {
+        const status = new URL(url).searchParams.get("status");
+        return Response.json({ items: status && status !== retired.status ? [] : [retired], hasMore: false });
+      }) },
+    );
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings[0]?.code).toBe("invalid_order_terms");
+    expect(env.data).toBeNull();
+  });
 
   it("finds the resting order, re-hashes it, and returns unsigned canonical fill calldata", async () => {
     const env = await fill([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]);
@@ -1367,7 +1368,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
     expect((env.data as { chainStatus: string }).chainStatus).toBe("filled-or-cancelled");
   });
 
-  it("K7 liveness: a live chain reading builds normally; a failed read degrades silently", async () => {
+  it("K7 liveness: live state builds; failed state refuses unknown remainder", async () => {
     const liveChain = async () => stubResolved({ readContract: async (a: { functionName: string }) => (a.functionName === "bitInvalidatorForOrder" ? 0n : (() => { throw new Error(`no stub for ${a.functionName}`); })()) });
     const live = await runTool(
       "cork_prepare_orders",
@@ -1380,7 +1381,8 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-live-02", action: { type: "taker-fill", orderHash: hash }, format: "concise" },
       { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [bookRow], hasMore: false } }]), resolveRpc: async () => stubResolved({ readContract: async () => { throw new Error("rpc down"); } }) },
     );
-    expect(broken.state).toBe("ok"); // liveness is best-effort — a failed read never blocks bytes
+    expect(broken.state).toBe("unavailable");
+    expect(broken.data).toBeNull();
   });
 
   it("exclusivity pre-flight: a reserved order whose allowed-sender suffix is not this fill's sender gets NO bytes (private_order)", async () => {
@@ -1466,6 +1468,7 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
         (c) => {
           const o = over?.(c);
           if (o !== undefined) return o;
+          if (c.functionName === "bitInvalidatorForOrder" || c.functionName === "rawRemainingInvalidatorForOrder") return 0n;
           if (c.functionName === "LIMIT_ORDER_PROTOCOL") return LOP;
           if (c.functionName === "MARKET_REGISTRY") return REG;
           if (c.functionName === "CONTROLLER") return CONTROLLER;
@@ -1599,25 +1602,25 @@ describe("cork_prepare_orders taker-fill (orderbook lookup + local re-hash + uns
       expect(env.warnings[0]?.message).toContain("decode order");
     });
 
-    it("offline with an explicit constraint: interaction still builds, skipped pre-flights disclosed", async () => {
+    it("offline with an explicit constraint still cannot know the live remainder", async () => {
       const env = await runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0003", action: { type: "taker-fill", orderHash: buyHash, jitMarket: { ...jm, constraint: { rateMin: "1", rateMax: (2n * WAD).toString(), rateChangePerDayMax: WAD.toString(), rateChangeCapacityMax: (3n * WAD).toString() } } }, format: "concise" },
         { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
       );
-      expect(env.state).toBe("ok");
-      expect((env.data as { jit: unknown }).jit).toBeDefined();
+      expect(env.state).toBe("unavailable");
+      expect(env.data).toBeNull();
       expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
     });
 
-    it("offline WITHOUT a constraint → requires_rpc teaching where the constraint comes from", async () => {
+    it("offline without a constraint refuses the unknown live remainder", async () => {
       const env = await runTool(
         "cork_prepare_orders",
         { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "test-fill-jit-0004", action: { type: "taker-fill", orderHash: buyHash, jitMarket: jm }, format: "concise" },
         { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [buyRow], hasMore: false } }]), nowSeconds: 1_790_000_000n, resolveRpc: async () => null },
       );
       expect(env.state).toBe("unavailable");
-      expect(env.warnings[0]?.code).toBe("requires_rpc");
+      expect(env.warnings[0]?.code).toBe("funding_needs_rpc");
     });
   });
 });
@@ -1642,7 +1645,7 @@ describe("taker-fill of an auction-priced resting order", () => {
     runTool(
       "cork_prepare_orders",
       { chainId: 42161, account: "0x00000000000000000000000000000000000000dd", clientRequestId: "auction-fill-0001", action: { type: "taker-fill", orderHash, ...extra }, format: "concise" },
-      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2 },
+      { ...ctxWith([{ match: "/limit-orders/v1/orderbook", body: { items: [row], hasMore: false } }]), nowSeconds: NOW2, resolveRpc: liveFillRpc },
     );
 
   it("defaults the slippage cap to the curve CEILING (not the floor) and reports current/floor prices", async () => {

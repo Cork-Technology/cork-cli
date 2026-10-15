@@ -14,7 +14,7 @@ import {
   SETTLER_EVENTS,
   type HandlerContext,
 } from "@cork/core";
-import { stubResolved } from "./helpers.ts";
+import { stubResolved, withNativeApiMetadata } from "./helpers.ts";
 
 const NOW = 1_790_000_000n;
 const DIGEST = `0x${"4".repeat(64)}`;
@@ -448,10 +448,10 @@ describe("reconcile venue-miss sweep — venue absence must not silence the chai
   const missCtx = (orderStatusBySettler: Record<string, number>): HandlerContext => ({
     nowSeconds: 1_790_000_000n,
     // The venue knows nothing: rollover 404, LOP fills + orderbook empty (complete scans).
-    venueFetch: async (url: string) => {
+    venueFetch: withNativeApiMetadata(async (url: string) => {
       if (url.includes("/rollover/")) return new Response(JSON.stringify({ statusCode: 404, message: "not found" }), { status: 404 });
       return new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 });
-    },
+    }),
     resolveRpc: async () => ({
       url: "stub",
       source: "explicit",

@@ -583,6 +583,20 @@ CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
 bun run eval               # see evals/README.md for grading, env knobs, held-out rule
 ```
 
+For mutation evidence, set `CORK_MUTATION_RECEIPTS_DIR` to a **new, nonexistent directory**
+whose parent already exists. The runner retains each exact Vitest JSON report before unlinking
+its temporary file: `baseline.raw.json` and `<probe-id>.raw.json`, with matching `.receipt.json`
+metadata recording the baseline/probe label, selected test files, actual child exit code, byte
+length and SHA-256. Probe IDs are URI-encoded in filenames. Without this opt-in, report
+consumption and deletion remain unchanged. Retention never changes test assertions, selection,
+workers, timeouts or source-verdict classification.
+
+`MUTATION_RECEIPT_ERROR` or any missing, mismatched or unverified required report makes the
+**evidence gate RED**, even if the source mutation command exits successfully. A whole-catalogue
+verification needs the complete baseline report, expected/reported file sets, suite/test totals
+and failures, every selected probe disposition and the actual launcher exit. Do not substitute
+a focused baseline or CI totals for a missing whole-catalogue baseline.
+
 The tools read `CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint override) from the
 environment. Never commit them. Without `CORK_TEST_RPC`, the fork-parity/bundle-sim suites
 self-skip. Chain-backed tools still run at request time through the built-in default RPCs and

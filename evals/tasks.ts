@@ -7,6 +7,7 @@ import { DEMO_POOL_ID, DEMO_ACCOUNT, DEMO_SIGNED_TX } from "@cork/schemas";
 // a pinned literal here rotted on the 0.3.3 redeploy (recipe_not_found on a task that once passed).
 import { ROLL_FILL_DIGEST, ROLL_FILL_HOLDER_ADDRESS, RFQ_WRITER_ADDRESS, SIGNED_RFQ_ANSWER, SIGNED_RFQ_OPEN, SIGNED_RFQ_OPEN_FIXED, predictedFixedOracle, FIXED_RECIPE, RFQ_FIXED_ABOVE_ID, RFQ_FIXED_ABOVE_RATE, RFQ_FIXED_RATE, RFQ_IMPAIRMENT_EXPIRY, RFQ_IMPAIRMENT_ID, RESERVED_FILLER, GROUPED_RUNG, ARCHIVED_DIGEST, CST, MIGRATION_NEW_POOL, MIGRATION_OLD_POOL, DEMO_RECEIPT, DERIVED_JIT_POOL, FORSELF_ADAPTER, RFQ_ANSWER_ID, FINALIZE_REQUEST_ID, FINALIZE_SIGNATURE, PREPARED_MAKER_ORDER, RFQ_OPEN_ID, JIT_TASK_CONSTRAINT, JIT_TASK_EXPIRY, JIT_TASK_PAIR, IMPAIRMENT_RECIPE, LIQUIDITY_RECIPE, RC2_CLONE, RC2_EXACT_SETTLER, RC2_FACTORY, RESERVED_ORDER_HASH, RESTING_ORDER_HASH, RETIRED_EXACT_SETTLER, SIGNED_LOP_PAYLOAD, SIGNED_ROLLOVER_POST, WATCH_WATERMARK, ANSWER_TASK_EXPIRY, ANSWER_TASK_TAKING, TAMPERED_FINALIZE_SIGNATURE, FOREIGN_HOOK_SIGNED_ORDER, SUSDE, VBUSDC } from "./stub.ts";
 import corkDefaults from "../cork-defaults.v2.json";
+import boundedRolloverInput from "../packages/core/test/fixtures/bounded-rollover-input.json";
 
 // The mainnet adapter, read from the SAME schema-2 config the stub resolves (the pinned-literal
 // rot class the stub's own header documents; `cork-defaults.json` is the FROZEN schema-1 file of
@@ -71,7 +72,28 @@ const A = DEMO_ACCOUNT;
 // signing by packages/core/test/decode-tx.test.ts, so it cannot drift from the demo bytes).
 const SIGNED_TX = DEMO_SIGNED_TX;
 
+const REPEATED_FILL_INPUT = {
+  chainId: 1, account: A, clientRequestId: "eval-repeated-fill",
+  action: { type: "maker-order", poolId: P, side: "SELL", makerAsset: SUSDE, takerAsset: VBUSDC, makingAmount: "1000", takingAmount: "500", expirySeconds: 600, allowsPartialFills: true, allowsMultipleFills: true },
+};
+const REPEATED_OCO_INPUT = { ...REPEATED_FILL_INPUT, clientRequestId: "eval-repeated-oco", action: { ...REPEATED_FILL_INPUT.action, ocoGroup: "group" } };
+
 export const TASKS: EvalTask[] = [
+  {
+    id: "prepare-repeated-fill",
+    prompt: `Build only the unsigned maker-order artifact with this exact input: ${JSON.stringify(REPEATED_FILL_INPUT)}. This is a standing repeated-partial order, not OCO. Explain its manual cancellation. Do not sign or relay.`,
+    expect: { tool: "cork_prepare_orders", params: REPEATED_FILL_INPUT, state: "ok", code: "repeated_fill_notice", forbid: ["cork_submit"], maxCalls: 2 },
+  },
+  {
+    id: "refuse-repeated-oco",
+    prompt: `Call prepare-orders with this exact requested combination: ${JSON.stringify(REPEATED_OCO_INPUT)}. Report the incompatibility; do not silently relax either policy, sign or relay.`,
+    expect: { tool: "cork_prepare_orders", params: REPEATED_OCO_INPUT, state: "unavailable", code: "invalid_order_terms", forbid: ["cork_submit"], maxCalls: 2 },
+  },
+  {
+    id: "prepare-bounded-rollover",
+    prompt: `Build only the unsigned atomic Safe 1.4.1 single-EOA-owner stage-and-fill preparation using this supplied signed fixture and exact input: ${JSON.stringify(boundedRolloverInput)}. Module addresses are caller-supplied, NOT attested deployments. Name the outstanding code/binding/permission checks; never claim execution permission or send inner calls separately. Do not sign, relay or broadcast.`,
+    expect: { tool: "cork_prepare_orders", params: boundedRolloverInput, state: "ok", code: "module_identity_unverified", forbid: ["cork_submit"], maxCalls: 2 },
+  },
   // ── reads ──────────────────────────────────────────────────────────────
   { id: "read-market", prompt: `Read the current on-chain state of Cork pool ${P} and tell me the swap rate.`, expect: { tool: "cork_query", params: { resource: "cork-pool" }, state: "ok", answer: /0\.8|800000000000000000/, maxCalls: 2 } },
   { id: "read-balances", prompt: `What token balances does account ${A} hold in Cork pool ${P}?`, expect: { tool: "cork_query", params: { resource: "account-state" }, state: "ok", maxCalls: 2 } },
@@ -585,7 +607,7 @@ export const TASKS: EvalTask[] = [
     // group makes three orders wrong for the other reason (only one could fill). The grade is
     // the noncePolicy the agent chooses: distinct.
     id: "ladder-split-distinct",
-    prompt: `I want to rest a standing offer of 3 sUSDe on Cork pool ${P} (maker ${A}) so that three DIFFERENT takers can each buy 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 1000000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e), open to anyone, valid one hour. All three must be able to fill independently. Request id "eval-ladder-split-0001". How much sUSDe can this consume in total?`,
+    prompt: `Build a three-rung ladder of SEPARATELY SIGNED 1 sUSDe orders, not one repeated-fill order, for a total standing offer of 3 sUSDe on Cork pool ${P} (maker ${A}) so that three DIFFERENT takers can each buy 1 sUSDe (1000000000000000000 of 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497) for 1000000 vbUSDC (0x53E82ABbb12638F09d9e624578ccB666217a765e), open to anyone, valid one hour. All three must be able to fill independently. Request id "eval-ladder-split-0001". How much sUSDe can this consume in total?`,
     expect: {
       tool: "cork_prepare_orders",
       prelude: ["cork_capabilities"],

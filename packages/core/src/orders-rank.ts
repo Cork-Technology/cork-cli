@@ -4,7 +4,7 @@
 //
 // The order of business (2026-09-02):
 //   1. partition FILLABLE from not — a row is excluded when it is reserved for another fill
-//      sender, expired by its own signed traits, dead by venue status, or unparseable;
+//      sender, expired by its own signed traits, unavailable by native status/availability, or unparseable;
 //   2. price from the signed amounts (a decaying row at its price NOW), never from the listing's
 //      premium; a SELL of cover is cheaper when the taker pays less per unit made, a BUY (the
 //      maker buys cover) is better when the maker pays more;
@@ -14,8 +14,8 @@
 //      collapse to their best fillable rung, the group attached — because only one of them can
 //      ever fill.
 // The ranked view is computed over the rows it is GIVEN (one bounded venue walk); it does not
-// re-page. Group death is invisible to the venue: a rung whose sibling filled reads OPEN here
-// until the chain says otherwise, which is why the hybrid liveness leg runs before this.
+// re-page. A sibling can still read OPEN during batched native retirement: the API availability
+// verdict and hybrid liveness leg guard that intermediate state. Neither establishes finality.
 import { describeForeignTargets, extensionTargets, foreignExtensionTargets } from "./extension-targets.ts";
 import type { ResolvedGeneration } from "./generations.ts";
 import { decodeMakerTraits, hashLopOrder, isAllowedSender, type LopOrder, lopInvalidatorPlan } from "./orders.ts";
@@ -138,6 +138,11 @@ export function rankBookRows(rows: readonly BookRow[], opts: RankOptions): RankR
   const exclude = (row: BookRow, exclusion: BookExclusion, why: string) => excluded.push({ ...row, fillable: false, exclusion, whyNotFillable: why });
 
   for (const row of rows) {
+    const availability = row.availability as { state?: unknown; reason?: unknown } | undefined;
+    if (availability?.state === "unavailable") {
+      exclude(row, "venue-status", `native availability unavailable (${String(availability.reason ?? "unresolved")}); indexed status ${String(row.status ?? "unknown")}`);
+      continue;
+    }
     const pre = opts.parsed?.get(typeof row.orderHash === "string" ? row.orderHash.toLowerCase() : "");
     const parsed = pre ? ({ ok: true, value: pre.signed } as const) : parseSignedLopOrder(row);
     if (!parsed.ok) {

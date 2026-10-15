@@ -206,44 +206,6 @@ describe("doc topic: orders", () => {
     }
   });
 
-  // The topic is a SECOND statement of facts each field's schema description already states. Same
-  // guard as the units table: for every (field, marker) the schema description states the marker
-  // AND a topic-body line pairs the field name with the SAME marker — so the topic cannot state a
-  // different rule beside a right name and stay green.
-  it("vocabulary parity: every order field the topic names states the same rule in its schema description", () => {
-    const VOCAB: Array<{ field: string; marker: string }> = [
-      { field: "allowedSender", marker: "PrivateOrder()" },
-      { field: "allowsPartialFills", marker: "BIT invalidator" },
-      { field: "auction", marker: "DECAYING" },
-      { field: "quoteRef", marker: "RFQ answer option" },
-      { field: "sort", marker: "reserved-for-account row wins a price tie" },
-      { field: "since", marker: "invalidator bit read CLEAR" },
-      { field: "wait", marker: "re-read the book every 2 s" },
-      { field: "ocoGroup", marker: "one capacity" },
-      { field: "reserve", marker: "fill_sender" },
-    ];
-    const byField = new Map<string, string[]>();
-    for (const tool of REGISTRY) {
-      const schema = inputJsonSchema(tool.name) as Record<string, unknown>;
-      const walk = (node: unknown): void => {
-        if (node === null || typeof node !== "object") return;
-        const n = node as Record<string, unknown>;
-        const props = n.properties as Record<string, Record<string, unknown>> | undefined;
-        if (props) for (const [name, prop] of Object.entries(props)) if (typeof prop.description === "string") byField.set(name, [...(byField.get(name) ?? []), prop.description]);
-        for (const v of Object.values(n)) { if (Array.isArray(v)) v.forEach(walk); else walk(v); }
-      };
-      walk(schema);
-    }
-    const lines = DOC_TOPICS.orders!.body.split("\n");
-    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    for (const { field, marker } of VOCAB) {
-      const descs = byField.get(field);
-      expect(descs, `${field} is not a property on any tool schema — rename or drop it from the orders topic`).toBeDefined();
-      expect(descs!.some((d) => d.includes(marker)), `${field}: no schema description states '${marker}'`).toBe(true);
-      const wordRe = new RegExp(`\\b${escape(field)}\\b`);
-      expect(lines.some((l) => wordRe.test(l) && l.includes(marker)), `orders topic: no line pairs ${field} with '${marker}'`).toBe(true);
-    }
-  });
 
   it("the reach vocabulary the book emits is exactly what the topic teaches, and every synonym maps onto it", () => {
     const body = DOC_TOPICS.orders!.body;

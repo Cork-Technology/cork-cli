@@ -163,7 +163,7 @@ export async function checkRolloverWrite(ctx: HandlerContext, chainId: number, r
 }
 
 export type RolloverQuoteRead =
-  | { ok: true; rfq: Record<string, unknown>; option: Record<string, unknown> }
+  | { ok: true; rfq: Record<string, unknown>; option: Record<string, unknown>; underwriter: string | null }
   | { ok: false; envelope: Envelope };
 
 /** The RFQ and quote option a rollover order cites, read from the venue. A refusal names why the
@@ -179,5 +179,5 @@ export async function readRolloverQuote(ctx: HandlerContext, chainId: number, qu
       : found.reason;
     return { ok: false, envelope: unavailable(chainId as ChainId, "invalid_order_terms", `quoteRef cannot back a rollover order: ${why} (the venue would 400: Invalid quoteRef)`, ctx) };
   }
-  return { ok: true, rfq, option: found.option };
+  return { ok: true, rfq, option: found.option, underwriter: found.underwriter };
 }

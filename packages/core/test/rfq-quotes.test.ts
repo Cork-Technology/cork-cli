@@ -9,7 +9,7 @@ import { JIT_TASK_PAIR, LIQUIDITY_RECIPE, RFQ_OPEN_ID, stubContext } from "../..
 import { parseQuotedOrder, quotedOptionTermsViolation, quotedOrderWire } from "../src/rfq-quotes.ts";
 import { quotedOrderCitationViolation, orderReuseTeaching } from "../src/handlers/submit.ts";
 import { answerTemplate, wadToFraction } from "../src/handlers/prepare-orders-sugars.ts";
-import { proveRfqWrite, stubRpc } from "./helpers.ts";
+import { proveRfqWrite, stubRpc, withNativeApiMetadata } from "./helpers.ts";
 
 const NOW = 1_790_000_000n; // the eval stub's clock
 const UW = privateKeyToAccount(`0x${"5c".repeat(32)}`);
@@ -198,7 +198,7 @@ describe("refresh-order supersedes the quote its order carries", () => {
   it("the refreshed order rides a superseding answer, priced at what its unchanged amounts mean now", async () => {
     const row = { orderHash: resting.orderHash, order: { ...quotedOrderWire(resting.order), maker: UW.address }, signature: await UW.sign({ hash: resting.orderHash }), extension: resting.extension, makerAccountType: "EOA", side: "SELL", status: "OPEN", quoteRef: { rfq_id: "rfq_9", answer_id: "ans_1", option_id: "o1" } };
     const rfq = { rfq_id: "rfq_9", kind: "new_position", state: "open", answers: [{ answer_id: "ans_1", underwriter: UW.address.toLowerCase(), answer: { status: "quoted", options: [quote] } }], request: { chain_id: 1 } };
-    const venueFetch = async (url: string) => new Response(JSON.stringify(url.includes("/limit-orders/v1/orderbook") ? { items: [row], hasMore: false } : url.includes("/rfqs/v2/rfq_9") ? rfq : { items: [] }), { status: 200 });
+    const venueFetch = withNativeApiMetadata(async (url: string) => new Response(JSON.stringify(url.includes("/limit-orders/v1/orderbook") ? { items: [row], hasMore: false } : url.includes("/rfqs/v2/rfq_9") ? rfq : { items: [] }), { status: 200 }));
     const resolveRpc = stubRpc((c) => (c.functionName === "bitInvalidatorForOrder" ? 0n : c.functionName === "decimals" ? 18 : (() => { throw new Error(c.functionName); })()));
     const env = await runTool("cork_prepare_orders", { chainId: 1, account: UW.address, clientRequestId: "rq-refresh-0001", action: { type: "refresh-order", orderHash: resting.orderHash } }, { nowSeconds: NOW1, venueFetch, resolveRpc });
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");

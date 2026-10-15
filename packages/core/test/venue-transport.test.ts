@@ -5,7 +5,7 @@
 // network), which is what keeps the rest of the offline suite from polluting shared state.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_VENUE_URL,
+
   getLopFills,
   getLopMarkets,
   getLopOrderbook,
@@ -31,6 +31,7 @@ import {
   type VenueBreakerState,
   type VenueDeps,
 } from "@cork/core";
+import { withNativeApiMetadata } from "./helpers.ts";
 
 const HOST = "api-phoenix.cork.tech";
 const okList = () => new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
@@ -216,7 +217,7 @@ describe("429 Retry-After propagation", () => {
     const env = await runTool(
       "cork_query",
       { resource: "orderbook", chainId: 1 },
-      { venueFetch: async () => rateLimited({ "retry-after": "17" }) },
+      { venueFetch: withNativeApiMetadata(async () => rateLimited({ "retry-after": "17" })) },
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]!.code).toBe("venue_rate_limited");
@@ -228,11 +229,6 @@ describe("module-scoped routing (cork-api 0.3.3): base normalization + canonical
   const seenUrl = (capture: string[]): VenueDeps => ({
     fetch: async (url: string) => (capture.push(url), okList()),
     breaker: null,
-  });
-
-  it("DEFAULT_VENUE_URL is the bare origin — the version moved into the module paths", () => {
-    expect(DEFAULT_VENUE_URL).toBe("https://api-phoenix.cork.tech");
-    expect(venueBaseUrl()).toBe("https://api-phoenix.cork.tech");
   });
 
   it("normalizes a configured base still carrying the retired base-versioned form", () => {
@@ -359,13 +355,13 @@ describe("shim telemetry (Deprecation: true) + in-band venue warnings[]", () => 
     let page = 0;
     const ctx = {
       nowSeconds: 0n,
-      venueFetch: async () => {
+      venueFetch: withNativeApiMetadata(async () => {
         page += 1;
         return new Response(
           JSON.stringify({ items: [{ orderHash: `0x${page}` }], warnings: [notice], hasMore: page < 2, nextCursor: page < 2 ? "c2" : undefined }),
           { status: 200, headers: shimHeaders },
         );
-      },
+      }),
     } as never;
     const env = await runTool("cork_query", { resource: "orderbook", chainId: 1 }, ctx);
     expect(env.state).toBe("ok");

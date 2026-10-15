@@ -2,10 +2,17 @@
 // demo-pool fixture state (the vnet fixture pool 0xceeb…c16a) so eval runs need NO network
 // except the LLM API — deterministic, CI-friendly, and identical between runs.
 import { allowedSenderSuffix, buildRolloverIntent, BUNDLED_DEFAULTS, classifyAddress, computeMarketId, decodeJitExtraData, generationsOf, splitPermitSignature, type HandlerContext, hashLopOrder, LOP_ADDRESSES, type LopOrder, primaryOf, rolloverGenerationsOf, runTool, encodeBookWatermark, premiumAmount, decodeExtensionFields, encodeExtensionFields } from "@cork/core";
+import { DEFAULT_VENUE_URL, decodeMakerTraits } from "@cork/core";
+import { apiComponent, requiredApiRevision } from "../packages/core/src/datasources/native-api-contract.mjs";
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeEventTopics, encodeFunctionResult, getAddress, parseAbi, parseAbiItem, pad, keccak256 } from "viem";
 import { DEMO_ACCOUNT as DEMO_ACCOUNT_ADDR, DEMO_POOL_ID, TOOL_EXAMPLES } from "@cork/schemas";
+import boundedRolloverInput from "../packages/core/test/fixtures/bounded-rollover-input.json";
+import safeArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/Safe.sol/Safe.json";
+import proxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json";
+import multiSendArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/libraries/MultiSendCallOnly.sol/MultiSendCallOnly.json";
 import { planRfqWrite } from "../packages/core/src/rfq-bodies.ts";
+const BOUNDED_SINGLETON = "0x00000000000000000000000000000000000005a1";
 
 export const SUSDE = "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497";
 export const VBUSDC = "0x53E82ABbb12638F09d9e624578ccB666217a765e";
@@ -147,6 +154,10 @@ function readContract(args: { address: string; functionName: string; args?: unkn
   const rollCst = rollPoolOf(chainId, args.address, poolId);
   const known = ((typeof poolId !== "string" || poolId.toLowerCase() === DEMO_POOL_ID.toLowerCase()) && chainId === 1) || migration !== undefined;
   switch (args.functionName) {
+    case "getOwners": return [boundedRolloverInput.action.signedOrder.order.user];
+    case "getThreshold": return 1n;
+    case "getStorageAt": return args.args?.[0] === 0n ? pad(BOUNDED_SINGLETON) : `0x${"00".repeat(32)}`;
+    case "orderState": return { rolled: 250n, rolloverTerminal: false };
     case "market":
       // A 10-field manager answers the widened tuple (fees inside the identity).
       if (migration) return migration.wire === "10-field" ? { ...MARKET, swapFeePercentage: WAD, unwindSwapFeePercentage: WAD } : MARKET;
@@ -615,7 +626,7 @@ const ROLL_FILL_ROW = {
   slots: [],
 };
 /** The rollover factory world of every configured generation: owner → deployed clone. */
-const ROLLOVER_CLONES = new Map<string, string>([[ROLL_FILL_HOLDER.address.toLowerCase(), ROLL_FILL_CLONE]]);
+const ROLLOVER_CLONES = new Map<string, string>([[ROLL_FILL_HOLDER.address.toLowerCase(), ROLL_FILL_CLONE], [boundedRolloverInput.action.signedOrder.order.user.toLowerCase(), boundedRolloverInput.action.signedOrder.order.rolloverContract]]);
 
 // The JIT rollover task's CORRECT destination pool id: derived through the same Market-tuple
 // hash the fill runs, against the stub's pair oracle and the constraint the prompt carries —
@@ -808,6 +819,9 @@ const RESTING_ROW: Record<string, unknown> = {
   extension: "0x",
   makerAccountType: "EOA",
   orderHash: RESTING_ORDER_HASH,
+  chainId: 1,
+  availability: { state: "candidate", reason: "no-known-blocker" },
+  confidence: "unknown",
   side: "SELL",
   status: "OPEN",
   quoteRef: { rfq_id: RFQ_OPEN_ID, answer_id: FIRM_ANSWER_ID, option_id: "opt1" },
@@ -825,6 +839,10 @@ const RESERVED_ORDER: LopOrder = { ...RESTING_ORDER, salt: 8n, makerTraits: BigI
 export const RESERVED_ORDER_HASH = hashLopOrder(1, LOP_ADDRESSES[1]!, RESERVED_ORDER);
 const RESERVED_ROW: Record<string, unknown> = {
   ...SIGNED_LOP_PAYLOAD.order,
+  chainId: 1,
+  status: "OPEN",
+  availability: { state: "candidate", reason: "no-known-blocker" },
+  confidence: "unknown",
   salt: RESERVED_ORDER.salt.toString(),
   makerTraits: RESERVED_ORDER.makerTraits.toString(),
   signature: await RESTING_MAKER.sign({ hash: RESERVED_ORDER_HASH }),
@@ -836,6 +854,10 @@ const RESERVED_ROW: Record<string, unknown> = {
 /** Offline venue stub: canned api-phoenix responses for the eval tasks. */
 async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
   const r = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }));
+  // Authored API110 fixture declaration, not deployment evidence; no unknown-host admission.
+  if ((init?.method ?? "GET") === "GET" && url === DEFAULT_VENUE_URL + "/meta/v1") {
+    return r(200, { component: apiComponent, version: "0.4.6", status: "active", commit: requiredApiRevision });
+  }
   if (init?.method === "POST") {
     if (url.includes("/rollover/v1/orders")) return r(201, {}); // handler fills the digest from its local recomputation
     // Accept with no echoed orderHash — the venue's own shape. Echoing a DIFFERENT hash is a
@@ -933,7 +955,30 @@ async function venueFetch(url: string, init?: RequestInit): Promise<Response> {
     const listed = state === "open" && (underwriter === null || answeredBy.has(underwriter.toLowerCase())) && (kind === null || kind === "new_position");
     return r(200, { items: listed ? [withAnswers ? { ...row, answers, answer_count: answers.length } : row] : [], nextCursor: null, hasMore: false });
   }
-  if (url.includes("/limit-orders/v1/orderbook")) return r(200, { items: [RESTING_ROW, RESERVED_ROW] });
+  if (url.includes("/limit-orders/v1/orderbook")) {
+    const p = new URL(url).searchParams;
+    const statuses = p.getAll("status");
+    return r(200, { items: [RESTING_ROW, RESERVED_ROW].filter(row => {
+      if (p.has("chainId") && row.chainId !== Number(p.get("chainId"))) return false;
+      if (p.has("orderHash") && row.orderHash !== p.get("orderHash")) return false;
+      if (p.has("maker") && String(row.maker).toLowerCase() !== p.get("maker")!.toLowerCase()) return false;
+      const active = row.status === "OPEN" || row.status === "PARTIALLY_FILLED";
+      if (statuses.length ? !statuses.includes(String(row.status)) : !p.has("orderHash") && !active) return false;
+      if (active && !p.has("orderHash") && p.get("view") !== "management") {
+        const expiry = decodeMakerTraits(BigInt(String(row.makerTraits))).expiry;
+        if (expiry !== 0n && expiry <= NOW) return false;
+      }
+      if (active && p.get("view") === "discovery") {
+        const availability = row.availability;
+        if (typeof availability === "object" && availability !== null && "state" in availability && availability.state === "unavailable") return false;
+        const remainder = row.remainingMakingAmount === undefined
+          ? BigInt(String(row.makingAmount)) - BigInt(String(row.filledMakingAmount ?? "0"))
+          : BigInt(String(row.remainingMakingAmount));
+        if (remainder <= 0n) return false;
+      }
+      return true;
+    }), hasMore: false });
+  }
   if (url.includes("/limit-orders/")) return r(200, { items: [] });
   return r(404, { message: `no stub for ${url}` });
 }
@@ -960,6 +1005,9 @@ export function stubContext(): HandlerContext {
         // an EOA so the maker-signature ladder takes its ecrecover branch rather than ERC-1271.
         getCode: async (a: { address?: string } | undefined) => {
           const address = String(a?.address ?? "").toLowerCase();
+          if (address === boundedRolloverInput.account.toLowerCase()) return proxyArtifact.deployedBytecode;
+          if (address === BOUNDED_SINGLETON.toLowerCase()) return safeArtifact.deployedBytecode;
+          if (address === "0x9641d764fc13c8b624c04430c7356c1c7c8102e2") return multiSendArtifact.deployedBytecode;
           if (address === FORSELF_ADAPTER.toLowerCase()) return FORSELF_ADAPTER_CODE;
           if (address === predictedFixedOracle(DEPLOYED_FIXED_RATE).toLowerCase()) return "0x6080604052";
           // The fixture TOKENS are deployed contracts in this world: the maker-readiness probe

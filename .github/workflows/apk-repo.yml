@@ -147,6 +147,13 @@ jobs:
           esac
           { echo "tag=$TAG"; echo "candidate=$candidate"; echo "apkver=$apkver"; } >> "$GITHUB_OUTPUT"
           echo "tag=$TAG candidate=$candidate apkver=$apkver"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.p.outputs.tag }}
+      - name: Require compatible deployed default API behavior
+        env:
+          CORK_NATIVE_API_RELEASE_EVIDENCE: ${{ vars.CORK_NATIVE_API_RELEASE_EVIDENCE }}
+        run: node scripts/verify-compatible-api.mjs
 
   melange-build:
     needs: plan

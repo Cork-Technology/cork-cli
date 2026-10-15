@@ -20,7 +20,8 @@
 // BYTES or a wrong money answer — struct/tuple field order, enum ordinals, bit flags, hash
 // inputs, rounding directions, boundary comparators, storage-slot math — not statement coverage.
 // The catalog is append-only in spirit: when a survivor is killed, keep the probe.
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { baselineOk, verdictOf, type VitestJsonReport } from "./mutation-verdict.ts";
 import { suiteVerdict } from "./suite-verdict.ts";
@@ -156,6 +157,24 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+{"id":"compatible-api-confidence-unchecked","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(CONFIDENCE_VALUES.includes(row.confidence), \"unsupported native checkpoint confidence; never finality or execution permission\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+{"id":"compatible-api-api-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(supportedApiRevisions.includes(evidence.apiRevision), \"deployment identity must match an exact reviewed native API source revision\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+{"id":"compatible-api-infra-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+{"id":"compatible-api-index-digest-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.indexMigrationSha256, INDEX_SHA256);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+{"id":"compatible-api-endpoint-evidence-excess","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.endpoints.length, endpoints.length, \"evidence must cover exactly every shipped default endpoint\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+  {"id":"native-boundary-rank-confidence-permission","file":"packages/core/src/orders-rank.ts","find":"if (availability?.state === \"unavailable\") {","replace":"if (availability?.state === \"unavailable\" && row.confidence !== \"confirmed\") {","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"native-boundary-taker-confidence-permission","file":"packages/core/src/handlers/prepare-orders.ts","find":"if ((row.availability as Record<string, unknown> | undefined)?.state === \"unavailable\") {","replace":"if ((row.availability as Record<string, unknown> | undefined)?.state === \"unavailable\" && row.confidence !== \"confirmed\") {","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"native-boundary-refresh-confidence-permission","file":"packages/core/src/handlers/prepare-orders-sugars.ts","find":"if ((row.availability as Record<string, unknown> | undefined)?.state === \"unavailable\") {","replace":"if ((row.availability as Record<string, unknown> | undefined)?.state === \"unavailable\" && row.confidence !== \"confirmed\") {","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"native-boundary-envelope-confidence-promoted","file":"packages/core/src/handlers/query.ts","find":"            confidence: \"unknown\",","replace":"            confidence: \"confirmed\",","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"native-boundary-fill-cursor-restarted","file":"packages/core/src/datasources/venue.ts","find":"return asList(await getJson(deps, `/limit-orders/v1/fills${qs(p)}`), \"fills\");","replace":"return asList(await getJson(deps, `/limit-orders/v1/fills${qs({ ...p, cursor: undefined })}`), \"fills\");","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"native-boundary-book-cursor-restarted","file":"packages/core/src/datasources/venue.ts","find":"orderHash: p.orderHash, poolId: p.poolId, side: p.side, status: typeof p.status === \"string\" ? p.status : undefined, maker: p.maker, view: p.view, cursor: p.cursor, limit: p.limit","replace":"orderHash: p.orderHash, poolId: p.poolId, side: p.side, status: typeof p.status === \"string\" ? p.status : undefined, maker: p.maker, view: p.view, cursor: undefined, limit: p.limit","tests":["packages/mcp/test/native-api-compat.test.ts"]},
+  {"id":"taker-live-remainder-original-size","file":"packages/core/src/handlers/prepare-orders.ts","find":"const effectiveMaking = action.fillMakingAmount === undefined ? remainingMaking : BigInt(action.fillMakingAmount);","replace":"const effectiveMaking = action.fillMakingAmount === undefined ? signed.order.makingAmount : BigInt(action.fillMakingAmount);","tests":["packages/core/test/taker-fill-inline.test.ts"]},
+  {"id":"bounded-owner-grant-original-size","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"const remainingPosition = order.orderSize - state.rolled;","replace":"const remainingPosition = order.orderSize;","tests":["packages/core/test/rollover-fill.test.ts"]},
+  {"id":"native-history-false-completeness","file":"packages/core/src/handlers/track.ts","find":"fillsScanComplete: capability.supported && fillsScan.complete,\n              count: fills.items.length,","replace":"fillsScanComplete: true,\n              count: fills.items.length,","tests":["packages/core/test/native-api-reconcile.test.ts"]},
+  {"id":"repeated-fill-trait-ignored","file":"packages/core/src/orders.ts","find":"allowMultipleFills: a.allowMultipleFills ?? false,","replace":"allowMultipleFills: false,","tests":["packages/core/test/orders.test.ts","packages/core/test/maker-ladder.test.ts"]},
+  {"id":"bounded-fill-caller-changed","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"to: bounded ? account : baseFiller,","replace":"to: baseFiller,","tests":["packages/core/test/rollover-fill.test.ts"]},
+  {"id":"native-exact-history-ranked-away","file":"packages/core/src/handlers/query.ts","find":"const verification = input.resource === \"orderbook\" && filters.orderHash !== undefined ? null : await verifyVenueRows","replace":"const verification = await verifyVenueRows","tests":["packages/core/test/native-api-reconcile.test.ts"]},
+  {"id":"native-inactive-resting-conflict","file":"packages/core/src/handlers/track.ts","find":"if (bookRow && resting === true && onChain.status === \"filled-or-cancelled\")","replace":"if (bookRow && onChain.status === \"filled-or-cancelled\")","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {
     // Cached rows keep the label the config gave them when they were cached (the 2026-10-09
     // account-state / pool-read disagreement on the pool manager two sets share).
@@ -1357,8 +1376,8 @@ const CATALOG: Mutant[] = [
     // The venue is asked for EVERY maker's rows (the maker filter dropped from the query).
     id: "handler-sweep-maker-query-dropped",
     file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "getLopOrderbook(deps, { chainId, maker: account, limit: 100,",
-    replace: "getLopOrderbook(deps, { chainId, limit: 100,",
+    find: 'getLopOrderbook(deps, { chainId, maker: account, view: "management",',
+    replace: 'getLopOrderbook(deps, { chainId, view: "management",',
     tests: [T.cancelSweep],
   },
   {
@@ -1520,8 +1539,8 @@ const CATALOG: Mutant[] = [
     // The ranked view is the DEFAULT; making `best` opt-in silently restores newest-first.
     id: "query-orderbook-default-sort-venue",
     file: "packages/core/src/handlers/query.ts",
-    find: 'if (input.resource === "orderbook" && (input.sort ?? "best") === "best") {',
-    replace: 'if (input.resource === "orderbook" && input.sort === "best") {',
+    find: 'if (input.resource === "orderbook" && filters.orderHash === undefined && (input.sort ?? "best") === "best") {',
+    replace: 'if (input.resource === "orderbook" && filters.orderHash === undefined && input.sort === "best") {',
     tests: [T.rank],
   },
   {
@@ -2426,7 +2445,7 @@ const CATALOG: Mutant[] = [
     // The definitive half of the split rule is lost: dead book rows serve as confirmed.
     id: "hybrid-dead-row-drop-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
-    find: 'if (word !== undefined && word !== "error" && classifyInvalidatorWord(ref.plan!, word).status === "filled-or-cancelled") {',
+    find: 'if (live?.status === "filled-or-cancelled") {',
     replace: 'if (false) {',
     tests: [T.hybridVerify],
   },
@@ -2445,8 +2464,8 @@ const CATALOG: Mutant[] = [
     id: "hybrid-vocabulary-guard-lost",
     file: "packages/core/src/handlers/hybrid-verify.ts",
     find: 'else if (!knownVenueStatus(venueStatus) || chain.startsWith("unknown(")) {',
-    replace: "else if (false) {",
-    tests: [T.hybridVerify],
+    replace: 'else if (false) {',
+    tests: [T.hybridVerify, "packages/core/test/rollover-expiry.test.ts"],
   },
   {
     // The pools drop gate regresses to keep: a pool no configured PM knows serves as confirmed.
@@ -3876,13 +3895,12 @@ const CATALOG: Mutant[] = [
     tests: [T.cli],
   },
   {
-    // A known filter key silently unapplied: an orderHash query would return the WHOLE book —
-    // the caller mistakes it for a per-order answer (the live bug this filter fixed, 2026-08-06).
+    // Exact native history must ask for its hash, not substitute candidate discovery.
     id: "query-orderbook-orderhash-unfiltered",
     file: "packages/core/src/handlers/query.ts",
-    find: "return filters.orderHash ? { ...list, items: list.items.filter((r) => String((r as { orderHash?: unknown }).orderHash ?? \"\").toLowerCase() === filters.orderHash!.toLowerCase()) } : list;",
-    replace: "return list;",
-    tests: [T.venue],
+    find: "getLopOrderbook(deps, { chainId, ...(filters.orderHash ? { orderHash: filters.orderHash } : {}),",
+    replace: "getLopOrderbook(deps, { chainId,",
+    tests: ["packages/core/test/native-api-reconcile.test.ts"],
   },
   // ── ForSelf adapter surface: calldata a caged wallet signs — struct field order, traits
   //    bits, the pull-cap bound, and the market-binding comparator (cast-fixture gated) ──────
@@ -5589,8 +5607,8 @@ const CATALOG: Mutant[] = [
     // sender — valid input refused, the over-refusal direction the acceptance test pins.
     id: "query-filter-scope-row-tightened",
     file: "packages/core/src/handlers/filters.ts",
-    find: '"orderbook": ["poolId", "side", "status", "orderHash", "account"],',
-    replace: '"orderbook": ["poolId", "side", "status", "orderHash"],',
+    find: '"orderbook": ["poolId", "side", "status", "orderHash", "account", "view"],',
+    replace: '"orderbook": ["poolId", "side", "status", "orderHash", "view"],',
     tests: [T.filterScope, T.hybridVerify],
   },
   {
@@ -5922,8 +5940,8 @@ const CATALOG: Mutant[] = [
     // temporary rewrite (or 404s once it retires) instead of the canonical module path.
     id: "venue-orderbook-path-legacy-form",
     file: "packages/core/src/datasources/venue.ts",
-    find: "`/limit-orders/v1/orderbook${qs(",
-    replace: "`/v1/limit-orders/orderbook${qs(",
+    find: "`/limit-orders/v1/orderbook${",
+    replace: "`/v1/limit-orders/orderbook${",
     tests: [T.venueTransport],
   },
   {
@@ -6150,8 +6168,8 @@ const CATALOG: Mutant[] = [
     // comparator would nag every exact-approve holder with a false approval_missing.
     id: "sdk-approval-satisfied-boundary",
     file: "packages/core/src/order-approvals.ts",
-    find: "{ satisfied: current >= BigInt(e.amount) }",
-    replace: "{ satisfied: current > BigInt(e.amount) }",
+    find: "const satisfied = e.amount !== null ? current >= BigInt(e.amount) : undefined;",
+    replace: "const satisfied = e.amount !== null ? current > BigInt(e.amount) : undefined;",
     tests: [T.approvals],
   },
   {
@@ -6330,8 +6348,8 @@ const CATALOG: Mutant[] = [
     // The contract shifts again, reads an empty word, and every dead order looks live.
     id: "invalidator-read-preshifted-slot",
     file: "packages/core/src/orders.ts",
-    find: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.nonceOrEpoch] }',
-    replace: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.slot] }',
+    find: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.nonceOrEpoch],',
+    replace: 'functionName: "bitInvalidatorForOrder", args: [maker, plan.slot],',
     tests: [T.invalidator, T.inlineFill, T.hybridVerify],
   },
   {
@@ -8184,12 +8202,13 @@ const CATALOG: Mutant[] = [
     tests: [T.foreignHook],
   },
   {
-    // The zone made optional (an EMPTY alternative): a zone-less ISO string reaches Date.parse,
-    // which reads it as LOCAL time — the ambiguity the strict parser exists to refuse.
+    // The zone made optional and defaulted to UTC: a zone-less ISO string is admitted even though
+    // the strict boundary requires callers to state the zone explicitly. Defaulting keeps this
+    // semantic mutant deterministic across host time zones.
     id: "mig-venue-iso-zone-optional",
     file: "packages/schemas/src/instant.ts",
-    find: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})$/;",
-    replace: "(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2}|)$/;",
+    find: "  const m = STRICT_ISO.exec(v);",
+    replace: "  const m = /^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2}|)$/.exec(v);\n  if (m?.[8] === \"\") m[8] = \"Z\";",
     tests: [T.instant, T.migration],
   },
   {
@@ -9528,7 +9547,7 @@ const CATALOG: Mutant[] = [
     tests: [T.rfqRollover],
   },
   {
-    // The order's user is the requester.
+    // The order's user is the signer selected by the requester role.
     id: "rollover-quoteref-user-unchecked",
     file: "packages/core/src/rfq-rollover.ts",
     find: "  if (!same(requester, order.user)) return",
@@ -9688,11 +9707,32 @@ const CATALOG: Mutant[] = [
     tests: [T.rfqRollover],
   },
   {
-    // Only the requester accepts its quote.
-    id: "rollover-intent-requester-unchecked",
-    file: "packages/core/src/handlers/prepare-orders.ts",
-    find: "        if (typeof read.rfq.requester !== \"string\" || !isAddressEqual(read.rfq.requester as `0x${string}`, input.account)) {",
-    replace: "        if (false) {",
+    // cST must select the cited authenticated answerer, not the requester.
+    id: "rollover-intent-cst-signer-replaced-by-requester",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  const user = role === \"cst\" ? underwriter : rfq.requester;",
+    replace: "  const user = rfq.requester;",
+    tests: [T.rfqRollover],
+  },
+  {
+    id: "rollover-role-omitted-from-signed-body",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "      ...(a.requesterRole !== undefined ? { requester_role: a.requesterRole } : {}),",
+    replace: "",
+    tests: [T.rfqRollover],
+  },
+  {
+    id: "rollover-role-default-inserted-into-legacy-body",
+    file: "packages/core/src/rfq-bodies.ts",
+    find: "      ...(a.requesterRole !== undefined ? { requester_role: a.requesterRole } : {}),",
+    replace: "      requester_role: a.requesterRole ?? \"cpt\",",
+    tests: [T.rfqSigning, T.rfqRollover],
+  },
+  {
+    id: "rollover-role-unknown-metadata-falls-back-to-payload",
+    file: "packages/core/src/rfq-rollover.ts",
+    find: "  const underwriter = Object.hasOwn(answer, \"underwriter\") ? answer.underwriter : answer.answer.underwriter;",
+    replace: "  const underwriter = answer.underwriter ?? answer.answer.underwriter;",
     tests: [T.rfqRollover],
   },
   {
@@ -10399,22 +10439,46 @@ process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 console.log(`sandbox: ${sandbox} (the working tree is never mutated — concurrent runs in the tree are safe)`);
 
-async function vitest(tests: string[]): Promise<{ exitCode: number; report: VitestJsonReport | undefined }> {
-  // Every vitest child runs at the LOWEST CPU priority whatever launched the catalogue: a niced
-  // parent does not reach these children (`bun x` re-execs through npm with a fresh scheduling
-  // class — observed nice=0 children under a nice=19 parent, 2026-09-23), and a full run
-  // saturates every core and starves the terminal. `nice` is POSIX; the value is
-  // clamped where the platform's range is narrower.
+// Opt-in evidence only: preserve source verdicts/exit codes, and let the caller reject missing receipts.
+const receiptDirectory = process.env.CORK_MUTATION_RECEIPTS_DIR;
+let receiptDirectoryReady = false;
+if (receiptDirectory !== undefined) {
+  try {
+    mkdirSync(receiptDirectory); // An existing directory is not a fresh run and must not be reused.
+    receiptDirectoryReady = true;
+  } catch (error) {
+    console.error(`MUTATION_RECEIPT_ERROR ${JSON.stringify({ label: "setup", error: String(error) })}`);
+  }
+}
+
+async function vitest(tests: string[], label: string): Promise<{ exitCode: number; report: VitestJsonReport | undefined }> {
+  // Keep every child at the lowest CPU priority so the catalogue cannot starve the terminal.
+  // The awaited entry point retains default fork isolation and completes the JSON reporter.
+  // `nice` is POSIX; the value is clamped where the platform's range is narrower.
   //
   // The verdict comes from the JSON REPORT, not the exit code: a suite that fails to LOAD also
   // exits non-zero, and that faked 600 "caught" in nine minutes on a Node-less host
   // (scripts/mutation-verdict.ts has the rule and the pinned cases).
   const out = join(sandbox, `.vitest-report-${String(process.pid)}-${String(Date.now())}.json`);
-  const proc = Bun.spawn(["nice", "-n", "19", "bun", "x", "vitest", "run", "--reporter=json", `--outputFile=${out}`, ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
+  const proc = Bun.spawn(["nice", "-n", "19", process.execPath, join(sandbox, "scripts/mutation-vitest.ts"), out, ...tests], { cwd: sandbox, stdout: "ignore", stderr: "ignore" });
   const exitCode = await proc.exited;
   let report: VitestJsonReport | undefined;
   try {
-    report = JSON.parse(readFileSync(out, "utf8")) as VitestJsonReport;
+    const raw = receiptDirectory === undefined ? readFileSync(out, "utf8") : readFileSync(out);
+    if (receiptDirectoryReady) {
+      try {
+        const name = encodeURIComponent(label);
+        const rawFile = `${name}.raw.json`;
+        writeFileSync(join(receiptDirectory!, rawFile), raw, { flag: "wx" });
+        writeFileSync(join(receiptDirectory!, `${name}.receipt.json`), JSON.stringify({
+          label, selectedTestFiles: tests, childExitCode: exitCode, rawFile,
+          bytes: Buffer.byteLength(raw), sha256: createHash("sha256").update(raw).digest("hex"),
+        }, null, 2) + "\n", { flag: "wx" });
+      } catch (error) {
+        console.error(`MUTATION_RECEIPT_ERROR ${JSON.stringify({ label, selectedTestFiles: tests, childExitCode: exitCode, error: String(error) })}`);
+      }
+    }
+    report = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8")) as VitestJsonReport;
     rmSync(out, { force: true });
   } catch {
     report = undefined;
@@ -10426,15 +10490,22 @@ async function vitest(tests: string[]): Promise<{ exitCode: number; report: Vite
 // this also proves the sandbox copy itself is runnable, so a copy defect cannot fake "caught".
 const allTests = [...new Set(catalog.flatMap((m) => m.tests))];
 console.log(`baseline: ${allTests.length} test files clean-run…`);
-const base = await vitest(allTests);
+const base = await vitest(allTests, "baseline");
 // Two rules, both must hold: tests ran and none failed (baselineOk), AND every targeted file
 // reported (suiteVerdict) — a baseline that silently ran 1 of 106 files (the 2026-10-07 shape of
 // the CI tests step) would otherwise read green and every later kill would be judged against
 // a suite that never executed.
 const baseRan = baselineOk(base.report, base.exitCode);
-const baseVerdict = baseRan.ok ? suiteVerdict(base.report, base.exitCode, allTests.map((t) => resolve(sandbox, t))) : baseRan;
+const baseVerdict = baseRan.ok ? suiteVerdict(base.report, base.exitCode, allTests.map((t) => realpathSync(resolve(sandbox, t)))) : baseRan;
 if (!baseVerdict.ok) {
   console.error(`BASELINE RED (${baseVerdict.reason})`);
+  if ("missing" in baseVerdict) {
+    for (const file of baseVerdict.missing.slice(0, 10)) console.error(`  missing    ${file}`);
+    for (const file of baseVerdict.unexpected.slice(0, 10)) console.error(`  unexpected ${file}`);
+  }
+  for (const result of base.report?.testResults ?? []) {
+    if (result.status === "failed") console.error(`${result.name}: ${result.message ?? "assertion failure; run this file for details"}`);
+  }
   console.error("BASELINE RED — fix the suite before running mutation probes (a red baseline would fake 'caught'). If the plain tree is green, the sandbox copy is the suspect: a test may depend on something git ls-files does not enumerate.");
   process.exit(1);
 }
@@ -10465,7 +10536,7 @@ for (const m of catalog) {
   const twin = join(sandbox, m.file);
   writeFileSync(twin, original.split(m.find).join(m.replace));
   try {
-    const run = await vitest(m.tests);
+    const run = await vitest(m.tests, m.id);
     const v = verdictOf(run.report, run.exitCode, m.file);
     if (v.verdict === "survived") {
       console.log(`SURVIVED ${m.id} — the suite cannot see this defect; write a killer test`);

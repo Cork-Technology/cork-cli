@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { encodeErrorResult, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, LOP_ADDRESSES, runTool, ToolInputError } from "@cork/core";
-import { stubRpc, TOKEN_CODE } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE, withNativeApiMetadata } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -36,14 +36,14 @@ const answer = (answer_id: string, underwriter: string, opts: ReturnType<typeof 
 const rfq = (rfq_id: string, answers: unknown[]) => ({ rfq_id, state: "open", chain_id: 1, requester: REQUESTER, version: 1, answers, answer_count: answers.length });
 
 /** A venue serving exactly the two routes the view composes. */
-const venueWith = (book: unknown[], rfqs: unknown[], seen: string[] = []) => async (url: string) => {
+const venueWith = (book: unknown[], rfqs: unknown[], seen: string[] = []) => withNativeApiMetadata(async (url: string) => {
   seen.push(url);
   if (url.includes("/limit-orders/v1/orderbook")) return new Response(JSON.stringify({ items: book, hasMore: false }), { status: 200 });
   const single = /\/rfqs\/v2\/([^/?]+)/.exec(url)?.[1];
   if (single) { const hit = (rfqs as Array<{ rfq_id: string }>).find((r) => r.rfq_id === decodeURIComponent(single)); return new Response(JSON.stringify(hit ?? { message: "not found" }), { status: hit ? 200 : 404 }); }
   if (url.includes("/rfqs/v2")) return new Response(JSON.stringify({ items: rfqs, next_cursor: null }), { status: 200 });
   return new Response(JSON.stringify({ items: [] }), { status: 200 });
-};
+});
 // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
 const live = stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE } });
 const offers = (venue: (u: string) => Promise<Response>, filters: Record<string, unknown> = { account: ME }) => runTool("cork_query", { resource: "offers", chainId: 1, filters, format: "concise" }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: live });
@@ -131,7 +131,7 @@ describe("cork_query offers — live orders joined with the quotes they cite; th
 
   it("when the RFQ leg fails the view still serves the book, says so, and every order reads uncited", async () => {
     const standing = await row("o-9", { quoteRef: { rfq_id: "rfq_1", answer_id: "a1", option_id: "opt1" } });
-    const venue = async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: [standing], hasMore: false }), { status: 200 }) : new Response("upstream down", { status: 503 }));
+    const venue = withNativeApiMetadata(async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items: [standing], hasMore: false }), { status: 200 }) : new Response("upstream down", { status: 503 })));
     const env = await offers(venue);
     expect(env.state).toBe("ok");
     const d = env.data as OffersData;

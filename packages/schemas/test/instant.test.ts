@@ -1,6 +1,7 @@
 // venueInstant — the ONE boundary parser for every venue timestamp. Two admitted
 // shapes, both unambiguous; everything Date.parse would have quietly accepted is refused.
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { isoOfSeconds, venueInstant } from "../src/instant.ts";
 
 describe("venueInstant", () => {
@@ -21,6 +22,23 @@ describe("venueInstant", () => {
     expect(a.iso).toBe(b.iso);
     expect(a.seconds).toBe(b.seconds);
     expect(isoOfSeconds(1786365000n)).toBe(a.iso);
+  });
+  it("refuses timezone-free venue timestamps even when the operator runs in UTC", () => {
+    const source = new URL("../src/instant.ts", import.meta.url).href;
+    const script = `import { venueInstant } from ${JSON.stringify(source)};
+      console.log(JSON.stringify({
+        unzoned: venueInstant("2026-08-10T12:30:00") ?? null,
+        zoned: venueInstant("2026-08-10T12:30:00Z"),
+      }));`;
+    const child = spawnSync("bun", ["--eval", script], {
+      env: { ...process.env, TZ: "UTC" },
+      encoding: "utf8",
+    });
+    expect(child.status, child.stderr || child.error?.message).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toEqual({
+      unzoned: null,
+      zoned: { iso: "2026-08-10T12:30:00Z", seconds: "1786365000", shape: "iso" },
+    });
   });
   it("refuses every ambiguous or lenient shape", () => {
     const refused: unknown[] = [

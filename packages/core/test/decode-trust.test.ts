@@ -218,7 +218,7 @@ describe("kind:order — the JIT hook's adapter is verified against the configur
     const order = orderWith(extensionAt(FAKE));
     // The tool's own fill encoder (the bytes cork_prepare_orders taker-fill emits), with a
     // placeholder maker signature: the decode reads the order and its extension, not the sig.
-    const fill = buildTakerFill({
+    const fill = buildTakerFill({ fillMakingAmount: 1n,
       order: { salt: BigInt(order.salt), maker: order.maker, receiver: order.receiver, makerAsset: order.makerAsset, takerAsset: order.takerAsset, makingAmount: 1n, takingAmount: 1n, makerTraits: 0n },
       signature: `0x${"11".repeat(32)}${"22".repeat(32)}1b`,
       taker: USER,

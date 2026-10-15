@@ -31,7 +31,7 @@ const NEVER_RUN = new Set(["mcp", "self-update"]);
 /** Commands with side effects outside this machine; they run offline (the venue is unreachable) and never live. */
 const SIDE_EFFECTS = new Set(["submit", "auth", "wallet", "sign"]);
 /** Exit 3 offline is honest only for these: the answer needs the chain, the venue, or a token. */
-const AVAILABILITY = new Set(["requires_rpc", "venue_unreachable", "hypersync_unavailable"]);
+const AVAILABILITY = new Set(["requires_rpc", "venue_unreachable", "hypersync_unavailable", "native_api_unavailable"]);
 
 /** Outcomes the docs state, by file and a fragment of the command. */
 const OUTCOMES: Array<{ file: string; match: RegExp; tier: "offline" | "live"; exit: number; code: string; why: string }> = [

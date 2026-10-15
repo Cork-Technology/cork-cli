@@ -10,14 +10,13 @@
 // is the pre-flight — every refusal names the on-chain revert it pre-empts — and the envelope.
 //
 // Re-entry contract: this module is a sub-feature of cork_prepare_orders and never imports the
-// dispatcher (no cycle); the dispatcher calls it. Chain reads are best-effort disclosures except
-// where a verdict needs them (the digest recomputation is pure; the settler status, the clone
-// ownership and the allowances are read when an RPC resolves and disclosed as unverified when
-// none does — a fill is never REFUSED on a transport blip, only on a definitive answer). The one
-// exception is the price floor (rollover-fill-safety.ts): an omitted minDstPerSrc that cannot be
-// derived — no RPC, or a read that failed — builds no bytes, because the alternative signs a
-// fill the holder's hooks can empty.
-import { isAddressEqual, pad, zeroAddress, zeroHash } from "viem";
+// dispatcher (no cycle); the dispatcher calls it. Ordinary fills disclose unavailable reads.
+// Bounded fills require live account identity, owner allowance and clone progress; unknown
+// execution authority or remaining owner position refuses transaction preparation.
+// An omitted minDstPerSrc that cannot be derived builds no bytes: the alternative signs
+// a fill the holder's hooks can empty.
+import { decodeFunctionData, encodeFunctionData, isAddressEqual, pad, parseAbi, zeroAddress, zeroHash } from "viem";
+import { encodeSafeOwnerBatch, safeOwnerProfile } from "./safe-owner-batch.ts";
 import { type ChainId, Envelope, executionEthTransaction, type PrepareOrdersInput, UNITS_TOPIC_REFERENCE } from "@cork/schemas";
 import { erc20Abi } from "../chain/abis.ts";
 import { resolveGenerations, resolveRollover } from "../config-remote.ts";
@@ -36,6 +35,38 @@ import { chainReadFailed, envelope, firstLine, getRpc, type HandlerContext, isTr
 type RolloverFillAction = Extract<PrepareOrdersInput["action"], { type: "rollover-fill" }>;
 type DeployCloneAction = Extract<PrepareOrdersInput["action"], { type: "deploy-rollover-contract" }>;
 type Warning = { code: string; message: string };
+
+const stageAbi = parseAbi(["function stage(address clone, bytes32 orderDigest, uint256 amount)"]);
+const fundingAbi = parseAbi(["function execute(address srcCpt, address srcCollateral, address dstCpt)"]);
+const guardAbi = parseAbi(["function execute(uint256 numerator, uint256 denominator)"]);
+const cloneStateAbi = parseAbi(["function orderState(bytes32) view returns ((uint256 rolled, bool rolloverTerminal) state)"]);
+
+/** Source pin: rollover-private 894bc912 (module source unchanged from cdb3e8c7).
+ * Identities are supplied explicitly until externally deployed/attested; not a config default. */
+function boundedProfile(intent: ParsedRolloverPayload["intent"], modules: NonNullable<RolloverFillAction["bounded"]>, amount: bigint) {
+  const phases = [intent.preRolloverHooks, intent.midRolloverHooks, intent.postRolloverHooks];
+  const targets = [modules.fundingModule, modules.unwindModule, modules.outputModule];
+  if (new Set(targets.map((t) => t.toLowerCase())).size !== 3 || targets.some((t) => isAddressEqual(t, zeroAddress))) throw new Error("bounded modules must be distinct nonzero addresses");
+  for (const [i, phase] of phases.entries()) {
+    const hook = phase[0];
+    if (phase.length !== 1 || !hook || !isAddressEqual(hook.target, targets[i]!) || !hook.isDelegateCall || hook.allowFailure || hook.value !== 0n) {
+      throw new Error("bounded fills require exactly one mandatory zero-value delegatecall per phase: funding, unwind, output; no missing, reordered or extra hooks");
+    }
+  }
+  if (intent.premiumHooks.length !== 0) throw new Error("bounded canonical profile has no premium hooks");
+  const funding = decodeFunctionData({ abi: fundingAbi, data: phases[0]![0]!.callData });
+  const [srcCpt, srcCollateral, dstCpt] = funding.args;
+  const tokens = [srcCpt, srcCollateral, dstCpt];
+  if (new Set(tokens.map((t) => t.toLowerCase())).size !== 3 || tokens.some((t) => isAddressEqual(t, zeroAddress))) throw new Error("bounded profile tokens must be distinct and nonzero");
+  const minimum = (data: `0x${string}`) => {
+    const { args: [numerator, denominator] } = decodeFunctionData({ abi: guardAbi, data });
+    if (numerator === 0n || denominator === 0n) throw new Error("bounded protection requires positive native-unit numerator and denominator in both signed guards");
+    const value = (amount * numerator + denominator - 1n) / denominator;
+    if (value >= 1n << 256n) throw new Error("bounded proportional minimum exceeds uint256");
+    return { numerator: numerator.toString(), denominator: denominator.toString(), minimum: value.toString() };
+  };
+  return { srcCpt, srcCollateral, dstCpt, unwind: minimum(phases[1]![0]!.callData), output: minimum(phases[2]![0]!.callData) };
+}
 
 const TERMINAL: ReadonlySet<string> = new Set(["Settled", "Expired", "Cancelled", "Closing"]);
 
@@ -234,9 +265,20 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   if (premiumCapEstimated) {
     amountNotices.push({ code: "premium_cap_estimated", message: `premiumCap defaulted to ${premiumEstimate} = ceil(fillerSrcCst × minPremiumPerShare / 1e18): exact when the destination pool mints one dst cST per src cST consumed; a destination pool minting MORE shares per collateral charges more (ceil(dstCstProduced × rate / 1e18)) and reverts Settler__PremiumExceedsCap above the cap — simulate, and raise the cap if the simulation names that error; BaseFiller refunds the unspent part either way` });
   }
-  // minDstPerSrc has NO schema default: omitted, it is derived below from the two previews the
-  // clone's own path runs; a fill whose floor can be neither given nor derived builds no bytes.
+  // An omitted ordinary-fill floor is derived below. Bounded mode still requires an explicit positive floor.
   const explicitFloor = action.minDstPerSrc !== undefined ? BigInt(action.minDstPerSrc) : undefined;
+  let bounded: ReturnType<typeof boundedProfile> | undefined;
+  if (action.bounded) {
+    if (action.fillerSrcCst === undefined || explicitFloor === undefined || explicitFloor === 0n) {
+      return refuse("invalid_order_terms", "bounded fills require explicit fillerSrcCst and positive minDstPerSrc; venue remainder and zero protection are not a bounded policy");
+    }
+    try {
+      bounded = boundedProfile(intent, action.bounded, fillerSrcCst);
+    } catch (err) {
+      return refuse("invalid_order_terms", firstLine(err));
+    }
+    warnings.push({ code: "module_identity_unverified", message: "bounded-module addresses are caller-supplied, not deployment or attestation evidence. Verify all three module code/source identities, canonical pool-token bindings and the verified account execution permissions before signing. The stage is transaction-local: never send the two inner calls separately" });
+  }
 
   // ── the JIT destination market the order committed to ──
   const committed = order.rolloverParams.jitMarketHash;
@@ -287,7 +329,29 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     }
   }
 
-  // ── chain pre-flights (best-effort; a transport failure discloses, never refuses) ──
+  // ── chain pre-flights (bounded execution requires authoritative live reads) ──
+  let ownerApproval: Pick<ApprovalRequirement, "holder" | "token" | "spender" | "amount" | "currentAllowance" | "satisfied" | "unsignedTx" | "note"> | undefined;
+  let safeProfile: Awaited<ReturnType<typeof safeOwnerProfile>> & { supported: true } | undefined;
+  if (bounded) {
+    if (!resolved) return refuse("funding_needs_rpc", "bounded delivery needs live account identity and owner permissions; no raw account.execute artifact is executable without them");
+    try {
+      const profile = await safeOwnerProfile(resolved.client, account, ctx.atBlock);
+      if (!profile.supported) return refuse("unsupported_account_profile", `${profile.accountType}: ${profile.reason}`);
+      safeProfile = profile;
+      const block = ctx.atBlock !== undefined ? { blockNumber: ctx.atBlock } : {};
+      const [state, allowance] = await Promise.all([
+        resolved.client.readContract({ address: order.rolloverContract, abi: cloneStateAbi, functionName: "orderState", args: [localDigest], ...block }),
+        resolved.client.readContract({ address: bounded.srcCpt, abi: erc20Abi, functionName: "allowance", args: [order.user, order.rolloverContract], ...block }),
+      ]);
+      if (state.rolloverTerminal || state.rolled >= order.orderSize) return refuse("status_mismatch", "clone rollover state is terminal or the authorized position is exhausted; no owner approval or fill bytes");
+      const remainingPosition = order.orderSize - state.rolled;
+      if (fillerSrcCst > remainingPosition) return refuse("invalid_order_terms", "bounded source amount exceeds the authoritative clone remainder; no approval or fill bytes");
+      const satisfied = allowance >= remainingPosition;
+      ownerApproval = { holder: order.user, token: bounded.srcCpt, spender: order.rolloverContract, amount: remainingPosition.toString(), currentAllowance: allowance.toString(), satisfied, unsignedTx: satisfied ? null : erc20ApproveTx(bounded.srcCpt, order.rolloverContract, remainingPosition), note: "owner cPT allowance to its clone covers orderSize minus clone.orderState(digest).rolled, not this filler chunk. A sufficient standing grant is preserved; never approve a module or BaseFiller for the owner cPT" };
+    } catch (err) {
+      return refuse("chain_read_failed", `bounded account execution identity/permission is unknown: ${firstLine(err)}; no transaction bytes`);
+    }
+  }
   let chainStatus: string | null = null;
   // The settler's clone admission for the address the order names (rollover-clone-admission.ts);
   // null when no RPC resolved or the reads failed in transport.
@@ -377,7 +441,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       balances.srcCst = String(srcBal);
       balances.premiumToken = String(premBal);
     } catch (err) {
-      if (!isTransportFailure(err)) return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
+      if (bounded || !isTransportFailure(err)) return chainReadFailed(chainId, err, [...rpcWarn(resolved), ...warnings], ctx, resolved);
       warnings.push({ code: "chain_read_failed", message: `the settler status / clone / balance reads failed in transport (${revertReason(err)}) — the fill is built unverified; simulate before signing` });
     }
     if (chainStatus !== null && TERMINAL.has(chainStatus)) {
@@ -469,14 +533,26 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     return refuse("invalid_order_terms", firstLine(err));
   }
   const hooks = { pre: intent.preRolloverHooks.length, mid: intent.midRolloverHooks.length, post: intent.postRolloverHooks.length, premiumPhase: intent.premiumHooks.length };
+  const calls = bounded && action.bounded ? [
+    { target: action.bounded.fundingModule, value: 0n, callData: encodeFunctionData({ abi: stageAbi, functionName: "stage", args: [order.rolloverContract, localDigest, fillerSrcCst] }) },
+    { target: baseFiller, value: 0n, callData: calldata },
+  ] : undefined;
+  if (calls && safeProfile) calldata = encodeSafeOwnerBatch(safeProfile, calls);
   return envelope({
     state: "ok",
     data: {
       kind: "rollover-fill",
-      to: baseFiller,
+      to: bounded ? account : baseFiller,
+      from: safeProfile?.owner ?? account,
       calldata,
       value: "0",
       fillFunction: jitParams !== undefined ? "executeWithMarket" : "execute",
+      ...(bounded && calls ? {
+        batch: { caller: account, signer: safeProfile!.owner, profile: "safe-1.4.1-single-eoa-owner", mode: "Safe.execTransaction delegatecall MultiSendCallOnly; inner CALLs revert atomically", calls, clone: order.rolloverContract, orderDigest: localDigest },
+        bounded: { ...bounded, sourceAmount: fillerSrcCst.toString(), moduleIdentitiesVerified: false },
+        ownerApproval,
+        whitelistInventory: [account, baseFiller, action.bounded!.fundingModule, order.srcCstToken, order.premiumToken],
+      } : {}),
       orderDigest: localDigest,
       settler: order.settler,
       settlerKind: cls.kind,
@@ -524,6 +600,10 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
         minDstPerSrc: "1e18 = 1.0 (WAD)",
         dstFloor: "honestRate 1e18 = 1.0 (WAD); srcBurned, quantum and expectedDstCst are cST shares, 18 decimals; collateralOut is base units of collateralAsset (its own decimals)",
         approvalsAmount: "approvals[].amount is base units of that entry's own token",
+        ...(bounded ? {
+          boundedSourceAmount: "bounded.sourceAmount and ownerApproval.amount are native src cPT units (18 decimals)",
+          boundedGuards: "bounded.unwind/output numerator is native collateral/dst cPT units respectively; denominator is native src cPT units; minimum is ceil(sourceAmount × numerator / denominator)",
+        } : {}),
         unitsTopic: UNITS_TOPIC_REFERENCE,
       },
       simulationRequired: true,
@@ -532,7 +612,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     },
     chainId,
     source: artifactSource,
-    warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings, { code: "unsigned_artifact", message: `unsigned BaseFiller.${jitParams !== undefined ? "executeWithMarket" : "execute"} calldata only — simulate it (cork_track simulate with to/calldata/account) and grant the two allowances in data.approvals to BaseFiller ${baseFiller} before signing; the dst cST is delivered to the sender (${account})` }],
+    warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings, { code: "unsigned_artifact", message: `unsigned ${bounded ? "Safe owner eth-transaction wrapping atomic stage + BaseFiller batch" : `BaseFiller.${jitParams !== undefined ? "executeWithMarket" : "execute"} calldata`} only — simulate it (cork_track simulate with to/calldata and account=data.from) and grant only missing allowances in data.approvals to BaseFiller ${baseFiller} before signing; the dst cST is delivered to the sender (${account})` }],
     ...(resolved ? rpcProvenance(input.format, resolved) : {}),
     ctx,
   });

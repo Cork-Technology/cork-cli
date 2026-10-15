@@ -9,10 +9,10 @@
 import { describe, expect, it } from "vitest";
 import { keccak256, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
+import { decodeLopCall, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
 import { orderExpiredWarning } from "../src/handlers/prepare-orders.ts";
-import { stubRpc, TOKEN_CODE } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE, withNativeApiMetadata } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
@@ -32,12 +32,14 @@ const venueMustNotBeCalled = async (): Promise<Response> => {
  *  reads funded/allowed (a code-less makerAsset is the silent-noop class the readiness pre-flight
  *  flags — maker-readiness.test.ts owns those cases); every address without an entry in `code`
  *  answers eth_getCode "0x" (an EOA). */
-const liveChain = (opts: { code?: Record<string, string>; isValidSignature?: string | Error } = {}) =>
+const liveChain = (opts: { code?: Record<string, string>; isValidSignature?: string | Error; invalidators?: FakeLopInvalidators; invalidatorError?: Error } = {}) =>
   stubRpc(
     (c) => {
       switch (c.functionName) {
         case "bitInvalidatorForOrder":
-          return 0n; // untouched slot — live
+        case "rawRemainingInvalidatorForOrder":
+          if (opts.invalidatorError) throw opts.invalidatorError;
+          return opts.invalidators ? opts.invalidators.readContract(c) : 0n;
         case "isValidSignature":
           if (opts.isValidSignature instanceof Error) throw opts.isValidSignature;
           return opts.isValidSignature ?? "0x1626ba7e";
@@ -107,7 +109,7 @@ describe("taker-fill signedOrder — the venue-free path", () => {
       { chainId: 1, account: ACCOUNT, clientRequestId: "inline-fill-0001", action: { type: "taker-fill", orderHash }, format: "concise" },
       {
         nowSeconds: NOW,
-        venueFetch: async (url: string) => (url.includes("orderbook") ? new Response(JSON.stringify({ items: [row], hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 })),
+        venueFetch: withNativeApiMetadata(async (url: string) => (url.includes("orderbook") ? new Response(JSON.stringify({ items: [row], hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 }))),
         resolveRpc: liveChain(),
       },
     );
@@ -179,6 +181,25 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     expect(env.state).toBe("ok");
   });
 
+  it("discloses an unread maker-code probe beside a valid inline EOA fill", async () => {
+    const { order, orderHash, signature } = await signedInline();
+    const resolve = liveChain();
+    const rpc = (await resolve(1, undefined))!;
+    const client = rpc.client as unknown as { getCode: (a: { address: string }) => Promise<string> };
+    const getCode = client.getCode;
+    client.getCode = async (a) => {
+      if (a.address.toLowerCase() === maker.address.toLowerCase()) throw new Error("maker-code transport unavailable");
+      return getCode(a);
+    };
+    const env = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: async () => rpc });
+    expect(env.state).toBe("ok");
+    expect(env.warnings.map((w) => w.code)).toContain("chain_read_failed");
+    const decoded = decodeLopCall((env.data as { calldata: `0x${string}` }).calldata);
+    if (decoded.fn === "cancelOrder" || decoded.fn === "cancelOrders" || decoded.fn === "bitsInvalidateForOrder") throw new Error("expected a fill");
+    expect(decoded.order.maker).toBe(maker.address);
+    expect(decoded.amount).toBe(order.makingAmount);
+  });
+
   it("refuses a signature from the wrong signer (recoveredSigner disclosed)", async () => {
     const { order, orderHash } = await signedInline();
     const signature = await stranger.sign({ hash: orderHash });
@@ -240,17 +261,52 @@ describe("taker-fill signedOrder — the venue-free path", () => {
     expect((env.data as { isValidSignatureAnswer: string }).isValidSignatureAnswer).toBe("0xffffffff");
   });
 
-  it("without an RPC: ecrecover still gates, code-detection gap disclosed, liveness skipped", async () => {
+  it("without an RPC, an authentic signature is not evidence of live remainder", async () => {
     const { order, orderHash, signature } = await signedInline();
     const env = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: async () => null });
-    expect(env.state).toBe("ok");
-    expect(env.warnings.some((w) => w.code === "chain_read_failed" && w.message.includes("whether the maker has code"))).toBe(true);
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings.some((w) => w.code === "funding_needs_rpc")).toBe(true);
+    expect(env.data).toBeNull();
     // ...and the wrong signer still refuses offline.
     const bad = await fill(orderHash, { order: wire(order), signature: await stranger.sign({ hash: orderHash }) }, { resolveRpc: async () => null });
     expect(bad.state).toBe("conflict");
   });
 });
 
+
+describe("live remainder controls every fill-acquisition path", () => {
+  it.each(["inline", "venue", "native"])("%s defaults to chain remainder, rounds payment up and refuses over-request", async (path) => {
+    const { order, orderHash, signature } = await signedInline({ makingAmount: 1000n, takingAmount: 7n, makerTraits: 1n << 254n });
+    const invalidators = new FakeLopInvalidators();
+    invalidators.setRemaining(maker.address, orderHash, 667n);
+    const row = { orderHash, ...wire(order), signature, extension: "0x", makerAccountType: "EOA", ...(path === "native" ? { chainId: 1, status: "PARTIALLY_FILLED", filledMakingAmount: "1", filledTakingAmount: "0", remainingMakingAmount: "999", remainingTakingAmount: "7", availability: { state: "candidate", reason: "no-known-blocker" }, confidence: "unknown" } : {}) };
+    const ctx = { nowSeconds: NOW, resolveRpc: liveChain({ invalidators }), venueFetch: path === "inline" ? venueMustNotBeCalled : withNativeApiMetadata(async () => Response.json({ items: [row], hasMore: false })) };
+    const action = { type: "taker-fill", orderHash, ...(path === "inline" ? { signedOrder: { order: wire(order), signature } } : {}) };
+    const env = await runTool("cork_prepare_orders", { chainId: 1, account: ACCOUNT, clientRequestId: "remainder-default", action }, ctx);
+    expect(env.state).toBe("ok");
+    const data = env.data as { calldata: `0x${string}`; orderHash: string; requiredMakingAmount: string; requiredTakingAmount: string; approvals: Array<{ role: string; amount: string }> };
+    expect(data).toMatchObject({ orderHash, requiredMakingAmount: "667", requiredTakingAmount: "5" });
+    expect(data.approvals.find((a) => a.role === "maker")?.amount).toBe("667");
+    expect(data.approvals.find((a) => a.role === "taker")?.amount).toBe("5");
+    const decoded = decodeLopCall(data.calldata);
+    if (decoded.fn === "cancelOrder" || decoded.fn === "cancelOrders" || decoded.fn === "bitsInvalidateForOrder") throw new Error("expected fill");
+    expect(decoded.amount).toBe(667n);
+    expect(decoded.order.makingAmount).toBe(1000n);
+    expect(decoded.order.takingAmount).toBe(7n);
+    const over = await runTool("cork_prepare_orders", { chainId: 1, account: ACCOUNT, clientRequestId: "remainder-over", action: { ...action, fillMakingAmount: "668" } }, ctx);
+    expect(over.state).toBe("unavailable");
+    expect(over.warnings.map((w) => w.code)).toContain("invalid_order_terms");
+    expect(over.data).toBeNull();
+  });
+
+  it("a failed live invalidator read cannot produce a signed-original fallback", async () => {
+    const { order, orderHash, signature } = await signedInline({ makerTraits: 1n << 254n });
+    const env = await fill(orderHash, { order: wire(order), signature }, { resolveRpc: liveChain({ invalidatorError: new Error("RPC unavailable") }) });
+    expect(env.state).toBe("unavailable");
+    expect(env.warnings.map((w) => w.code)).toContain("chain_read_failed");
+    expect(env.data).toBeNull();
+  });
+});
 describe("taker-fill: an order whose signed expiry has passed", () => {
   const expiring = (expiry: bigint, salt: bigint) => signedInline({ makerTraits: expiry << 80n, salt });
   const expiredNotice = (env: { warnings: Array<{ code: string; message: string }> }) => env.warnings.find((w) => w.code === "would_revert" && /EXPIRED/u.test(w.message));
@@ -260,7 +316,8 @@ describe("taker-fill: an order whose signed expiry has passed", () => {
     // answer-rfq expiry already passed (the ranked book hides such rows, this path has no book).
     const past = await expiring(NOW - 1n, 50n);
     const env = await fill(past.orderHash, { order: wire(past.order), signature: past.signature }, { resolveRpc: async () => null });
-    expect(env.state).toBe("ok");
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
     expect(expiredNotice(env)!.message).toMatch(new RegExp(`^the order EXPIRED at ${NOW - 1n} \\(now ${NOW} by this host's clock\\).*OrderExpired\\(\\).*refresh-order`, "u"));
     // The same notice with a chain in hand.
     expect(expiredNotice(await fill(past.orderHash, { order: wire(past.order), signature: past.signature }))).toBeDefined();
@@ -276,5 +333,6 @@ describe("taker-fill: an order whose signed expiry has passed", () => {
     expect(orderExpiredWarning(0n, NOW)).toBeUndefined();
     expect(orderExpiredWarning(NOW, NOW)).toBeUndefined();
     expect(orderExpiredWarning(NOW - 1n, NOW)?.code).toBe("would_revert");
+
   });
 });

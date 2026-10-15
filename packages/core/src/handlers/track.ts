@@ -15,6 +15,7 @@ import { chainReadFailed, envelope, firstLine, generationData, getDep, getPoolDe
 import { resolveGenerations } from "../config-remote.ts";
 import { classifyForSelfAdapter } from "./forself.ts";
 import { collectVenuePages } from "./query.ts";
+import { readNativeApiCapability } from "./native-history-capability.ts";
 
 /** Chain-verification payload on rollover-order reconcile results: the settler's live
  *  orderStatus view, plus (when a logs endpoint resolves) the digest's labeled event history —
@@ -418,27 +419,46 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
         }
         // ── LOP surface: fills + resting-book row, then the on-chain invalidator leg ──
         const hash = ref.toLowerCase();
+        const capability = await readNativeApiCapability(ctx);
         // Bounded traversals: a single-page scan could falsely report "no fills" /
         // "not resting" / "not found" for anything beyond page 1.
         const fillsScan = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopFills(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
         const fills = { items: fillsScan.items };
-        // The orderbook endpoint has no orderHash filter — walk the book client-side to
-        // recover the maker/makerTraits the invalidator views need.
+        // The pinned native contract supports exact chain+hash lookup, including inactive rows.
+        // Presence in this reconciliation response is not evidence of a resting candidate.
         let bookRow: Record<string, unknown> | undefined;
         let bookComplete = true;
+        let bookError: unknown;
+        let bookIntegrity = false;
         try {
-          const book = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopOrderbook(deps, { chainId, ...(cursor ? { cursor } : {}), limit: 100 }));
+          const book = await collectVenuePages({ maxPages: 10 }, (cursor) => getLopOrderbook(deps, { chainId, orderHash: hash, ...(cursor ? { cursor } : {}), limit: 100 }));
           bookComplete = book.complete;
-          bookRow = book.items.find((r) => {
-            const o = r as Record<string, unknown>;
-            const h = o.orderHash ?? o.order_hash ?? o.hash ?? (o.order as Record<string, unknown> | undefined)?.orderHash;
-            return typeof h === "string" && h.toLowerCase() === hash;
-          }) as Record<string, unknown> | undefined;
-        } catch {
-          bookComplete = false; // book scan is best-effort; fills/chain legs below still apply
+          for (const row of book.items) {
+            const native = row as Record<string, unknown> | null;
+            if (native?.chainId !== chainId || typeof native?.orderHash !== "string" || native.orderHash.toLowerCase() !== hash) {
+              bookIntegrity = true;
+              bookComplete = false;
+              bookRow = undefined;
+              break;
+            }
+            bookRow ??= native;
+          }
+        } catch (err) {
+          bookError = err;
+          bookComplete = false; // keep independently available fills; never turn failure into absence
         }
+        const availability = bookRow?.availability as Record<string, unknown> | undefined;
+        const status = bookRow?.status;
+        const resting = !capability.supported ? null : bookRow
+          ? status === "FILLED" || status === "CANCELLED" || status === "EXPIRED" || availability?.state === "unavailable"
+            ? false
+            : (status === "OPEN" || status === "PARTIALLY_FILLED") && availability?.state === "candidate" ? true : null
+          : bookComplete ? false : null;
         if (fills.items.length > 0 || bookRow) {
-          const warnings: Array<{ code: string; message: string }> = [];
+          const warnings: Array<{ code: string; message: string }> = bookError !== undefined ? [...venueFailed(chainId, bookError, ctx).warnings] : [];
+          if (!capability.supported) warnings.push({ code: capability.code, message: capability.reason });
+          if (!fillsScan.complete) warnings.push({ code: "pagination_incomplete", message: "the bounded fills scan stopped before exhaustion; these observed rows are valid history but do not prove complete totals" });
+          if (bookIntegrity) warnings.push({ code: "invalid_service_response", message: "the exact native history response contains a foreign chainId/orderHash; resting state is unknown, not absent" });
           let chainVerification: LopChainVerification | undefined;
           // maker + makerTraits from the book row (resting) or the first fill row (historical).
           const src = (bookRow?.order as Record<string, unknown> | undefined) ?? bookRow ?? (fills.items[0] as Record<string, unknown> | undefined);
@@ -464,13 +484,13 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
                 cancellable: onChain.status !== "filled-or-cancelled",
               };
               // Chain outranks the venue: a book-listed order the chain says is dead is a conflict.
-              if (bookRow && onChain.status === "filled-or-cancelled") {
+              if (bookRow && resting === true && onChain.status === "filled-or-cancelled") {
                 return envelope({
                   state: "conflict",
-                  data: { kind: "lop-order", orderHash: hash, venueStatus: "resting (orderbook row present)", chainStatus: onChain.status, order: bookRow, fills: fills.items, chainVerification },
+                  data: { kind: "lop-order", orderHash: hash, confidence: "unknown", venueStatus: "candidate (indexed availability, not execution permission)", chainStatus: onChain.status, order: bookRow, fills: fills.items, fillsScanComplete: capability.supported && fillsScan.complete, chainVerification },
                   chainId,
                   source: "chain",
-                  warnings: [{ code: "status_mismatch", message: "the venue orderbook still lists this order but the LOP invalidator says it is filled or cancelled — chain outranks indexer; do not attempt a fill, and a cancel would revert" }],
+                  warnings: [...warnings, { code: "status_mismatch", message: "the venue orderbook still lists this order but the LOP invalidator says it is filled or cancelled — chain outranks indexer [K7]; do not attempt a fill, and a cancel would revert" }],
                   ctx,
                 });
               }
@@ -493,8 +513,15 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               kind: "lop-order",
               orderHash: hash,
               // An incomplete book walk that found nothing cannot honestly claim "not resting".
-              resting: bookRow ? true : bookComplete ? false : null,
+              resting,
+              confidence: "unknown",
+              scales: {
+                order: "makingAmount/filledMakingAmount/remainingMakingAmount: raw maker-asset units; takingAmount/filledTakingAmount/remainingTakingAmount: raw taker-asset units. Originals are signed; totals are actual indexed executions; remainders are not execution permission or price guarantees.",
+                fills: "makingAmount/takingAmount: actual per execution in raw maker/taker asset units; no fee/gross-net guarantee",
+                unitsTopic: UNITS_TOPIC_REFERENCE,
+              },
               ...(bookRow ? { order: bookRow } : {}),
+              fillsScanComplete: capability.supported && fillsScan.complete,
               count: fills.items.length,
               fills: fills.items,
               ...(chainVerification ? { chainVerification } : {}),
@@ -509,10 +536,15 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
           // Neither surface found it, but at least one scan stopped short — no absence claim.
           return envelope({
             state: "conflict",
-            data: { requestedRef: ref, fillsScanComplete: fillsScan.complete, orderbookScanComplete: bookComplete },
+            data: { requestedRef: ref, fillsScanComplete: capability.supported && fillsScan.complete, orderbookScanComplete: capability.supported && bookComplete },
             chainId,
             source: "service",
-            warnings: [{ code: "pagination_incomplete", message: "the venue scans were incomplete, so 'not found' cannot be honestly claimed — retry, narrow the search, or raise maxPages" }],
+            warnings: [
+              ...(bookError !== undefined ? venueFailed(chainId, bookError, ctx).warnings : []),
+              ...(!capability.supported ? [{ code: capability.code, message: capability.reason }] : []),
+              ...(bookIntegrity ? [{ code: "invalid_service_response", message: "the exact native history response contains a foreign chainId/orderHash; no absence claim is possible" }] : []),
+              { code: "pagination_incomplete", message: "the venue scans were incomplete, so 'not found' cannot be honestly claimed — retry, narrow the search, or raise maxPages" },
+            ],
             ctx,
           });
         }
@@ -541,7 +573,9 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
               const chainStatus = chainStatusName(statusNum);
               if (chainStatus === "None") continue;
               const warnings: Array<{ code: string; message: string }> = [
-                { code: "order_not_found", message: `the venue serves no row for this digest (normal once a generation is archived), but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer` },
+                capability.supported
+                  ? { code: "order_not_found", message: `the admitted venue serves no row for this digest, but the settler ${settler} holds live state for it — reconstructed from the chain, which outranks the indexer` }
+                  : { code: capability.code, message: `${capability.reason}; the settler ${settler} independently holds live state for this digest` },
               ];
               let attribution: AttributedLogs | undefined;
               const logsEndpoint = resolveLogsEndpoint(chainId, ctx.logsUrl);
@@ -583,6 +617,7 @@ export async function handleTrack(input: TrackInput, ctx: HandlerContext): Promi
             }
           }
         }
+        if (!capability.supported) return unavailable(chainId, capability.code, capability.reason, ctx);
         return unavailable(chainId, "order_not_found", `no rollover order, LOP orderbook row, or LOP fills known to the venue for ${ref} on chainId ${chainId}, and no configured settler holds state for it (a normal outcome for an unposted/unfilled order)`, ctx);
       }
       return unavailable(chainId, "order_not_found", `submissionRef '${ref}' is not a 32-byte order digest — RFQ ids (rfq_/ans_) reconcile via cork_query once the RFQ read surface is wired`, ctx);

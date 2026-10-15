@@ -17,7 +17,7 @@ import {
   ocoGroupNonce,
 } from "@cork/core";
 import { UNITS_TOPIC_REFERENCE } from "@cork/schemas";
-import { poolTokensRpc, stubResolved } from "./helpers.ts";
+import { poolTokensRpc, stubResolved, withNativeApiMetadata } from "./helpers.ts";
 
 const POOL = "0xceebea356e5159c9cb06612c39ef2e6e0fe9cd3bb047541e26e0c0767bd1c16a" as const;
 const RCV = "0xc0ffee0000000000000000000000000000000001" as const;
@@ -659,7 +659,7 @@ describe("runTool: cork_prepare_orders", () => {
     const env = await runTool(
       "cork_prepare_orders",
       { chainId: 1, account: RCV, clientRequestId: "ord-00000003", action: { type: "taker-fill", orderHash: `0x${"3".repeat(64)}` }, format: "concise" },
-      { nowSeconds: NOW, venueFetch: async () => new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 }) },
+      { nowSeconds: NOW, venueFetch: withNativeApiMetadata(async () => new Response(JSON.stringify({ items: [], hasMore: false }), { status: 200 })) },
     );
     expect(env.state).toBe("unavailable");
     expect(env.warnings[0]?.code).toBe("order_not_found");

@@ -4,6 +4,14 @@
 // boilerplate that was hand-rolled across the handler test files.
 import type { HandlerContext } from "@cork/core";
 import { BUNDLED_DEFAULTS, generationsOf } from "@cork/core";
+import { apiComponent, requiredApiRevision } from "../src/datasources/native-api-contract.mjs";
+
+/** Authored offline API110 declaration, never deployment evidence. Opt in only for pinned fixture readers. */
+export const nativeApiMetadataFixture = { component: apiComponent, version: "0.4.6", status: "active", commit: requiredApiRevision };
+
+export function withNativeApiMetadata(fetch: NonNullable<HandlerContext["venueFetch"]>): NonNullable<HandlerContext["venueFetch"]> {
+  return (url, init) => new URL(url).pathname === "/meta/v1" && (init?.method ?? "GET") === "GET" ? Promise.resolve(Response.json(nativeApiMetadataFixture)) : fetch(url, init);
+}
 
 /** Every address the approved-implementations guard fingerprints, read from the same config the
  *  guard resolves them from — every GENERATION's corkAdapter/whitelistManager/registry/adapter/

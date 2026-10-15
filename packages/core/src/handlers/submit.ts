@@ -301,7 +301,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           srcPoolId: o.rolloverParams.srcPoolId,
           dstPoolId: o.rolloverParams.dstPoolId,
           jitMarketHash: o.rolloverParams.jitMarketHash,
-        });
+        }, quote.underwriter);
         if (mismatch) return unavailable(chainId, "invalid_order_terms", `quoteRef does not back this order: ${mismatch} — NOT relayed (the venue would 400: Invalid quoteRef). Build the order with cork_prepare_orders rollover-intent and the same quoteRef, which takes these terms from the quote`, ctx);
       }
       // Recover the signature against the locally recomputed EIP-712 digest: a garbage-

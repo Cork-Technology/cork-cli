@@ -214,7 +214,7 @@ export async function handleQueryOffers(input: QueryInput, filters: QueryFilters
         if (candidates.length === 0) continue;
         const walk = await probeUntilProven(
           candidates,
-          (c) => simulateTopFill(resolvedSim.client, { signed: c.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
+          (c) => simulateTopFill(resolvedSim.client, { chainId, signed: c.signed, lop, account: probeAccount, ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) }),
           { probeBudget },
         );
         for (const { candidate, sim } of walk.probed) (candidate.row as Record<string, unknown>).fillSimulation = sim;

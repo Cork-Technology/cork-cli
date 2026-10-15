@@ -158,6 +158,9 @@ describe("annotateApprovalStatus — boundary-exact against a stub client", () =
   it("erc20: current == required is satisfied (>= at the boundary); one wei under is not", async () => {
     const [eq] = await annotateApprovalStatus(client({ erc20: AMOUNT }) as never, { entries: plain(), nowSeconds: NOW });
     expect(eq).toMatchObject({ satisfied: true, currentAllowance: AMOUNT.toString() });
+    expect(eq!.unsignedTx).toBeNull();
+    const [high] = await annotateApprovalStatus(client({ erc20: AMOUNT * 100n }) as never, { entries: plain(), nowSeconds: NOW });
+    expect(high).toMatchObject({ satisfied: true, currentAllowance: (AMOUNT * 100n).toString(), unsignedTx: null });
     const [under] = await annotateApprovalStatus(client({ erc20: AMOUNT - 1n }) as never, { entries: plain(), nowSeconds: NOW });
     expect(under!.satisfied).toBe(false);
   });

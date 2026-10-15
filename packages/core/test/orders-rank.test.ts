@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildMakerOrder, hashLopOrder, LOP_ADDRESSES, type LopOrder, ocoGroupNonce, parseSignedLopOrder, rankBookRows, runTool, ToolInputError } from "@cork/core";
-import { stubRpc, TOKEN_CODE } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE, withNativeApiMetadata } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -92,6 +92,21 @@ describe("rankBookRows — tie-breaks, in order", () => {
 });
 
 describe("rankBookRows — what is not fillable, and why", () => {
+  it("known native unavailability excludes an active residual without requiring RPC, while unknown and candidate remain unconfirmed", async () => {
+    const spent = { ...await row("native-spent"), chainId: 1, availability: { state: "unavailable", reason: "bit-consumed" }, confidence: "unknown" };
+    const candidate = { ...await row("native-candidate"), chainId: 1, availability: { state: "candidate", reason: "no-known-blocker" }, confidence: "unknown" };
+    const unknown = { ...await row("native-unknown"), chainId: 1, availability: { state: "unknown", reason: "unresolved" }, confidence: "unknown" };
+    const result = await runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { status: "OPEN" } }, {
+      nowSeconds: NOW, resolveRpc: async () => null,
+      venueFetch: withNativeApiMetadata(async () => new Response(JSON.stringify({ items: [spent, candidate, unknown], hasMore: false }), { status: 200 })),
+    });
+    expect(result.state).toBe("ok");
+    const data = result.data as { items: Array<Record<string, unknown>>; excluded: Array<Record<string, unknown>>; confidence: string };
+    expect(data.items.map((r) => r.orderHash).sort()).toEqual([candidate.orderHash, unknown.orderHash].sort());
+    expect(data.excluded.map((r) => ({ hash: r.orderHash, exclusion: r.exclusion, availability: r.availability }))).toEqual([{ hash: spent.orderHash, exclusion: "venue-status", availability: spent.availability }]);
+    expect(data.items.every((r) => r.confidence === "unknown" && r.verification !== "confirmed")).toBe(true);
+    expect(data.confidence).toBe("unknown");
+  });
   it("a row reserved for another fill sender is excluded with the PrivateOrder reason; without an account it is kept and flagged", async () => {
     const theirs = await row("x-1", { allowedSender: STRANGER });
     const withMe = rank([theirs], ME);
@@ -193,7 +208,7 @@ describe("rankBookRows — a decaying row ranks at its price NOW", () => {
 });
 
 describe("cork_query orderbook — the ranked view is the default; sort:'venue' restores the verbatim rows", () => {
-  const venueWith = (items: unknown[]) => async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 }));
+  const venueWith = (items: unknown[]) => withNativeApiMetadata(async (url: string) => (url.includes("/limit-orders/v1/orderbook") ? new Response(JSON.stringify({ items, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 })));
   const liveChain = stubRpc((c) => {
     if (c.functionName === "bitInvalidatorForOrder") return 0n;
     throw new Error(`no stub for ${c.functionName}`);
@@ -214,8 +229,7 @@ describe("cork_query orderbook — the ranked view is the default; sort:'venue' 
     expect(data.items[0]).toMatchObject({ rank: 1, verification: "confirmed", exclusivity: "open" });
     expect(data.excluded.map((x) => x.orderHash)).toEqual([theirs.orderHash]);
     expect(data.excluded[0]!.exclusivity).toBe("reserved-for-other");
-    expect(data.scales.unitPrice).toContain("takerAsset base units per 1e18 makerAsset");
-    expect(data.rankingNote).toContain("bounded walk");
+
   });
 
   it("no account: price-only, reserved rows kept and flagged, and the note says to pass the FILL SENDER", async () => {

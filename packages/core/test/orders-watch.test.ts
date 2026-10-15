@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { bookWatermarkOf, buildMakerOrder, decodeBookWatermark, diffBook, encodeBookWatermark, isBetterOffer, LOP_ADDRESSES, rankBookRows, runTool, ToolInputError, WATCH_POLL_SECONDS, WatermarkError } from "@cork/core";
-import { stubRpc, TOKEN_CODE } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE, withNativeApiMetadata } from "./helpers.ts";
 
 const LOP = LOP_ADDRESSES[1]!;
 const NOW = 1_800_000_000n;
@@ -160,7 +160,7 @@ describe("cork_query orderbook — since / wait", () => {
   }, { code: { [CST.toLowerCase()]: TOKEN_CODE } }); // the fixture token has code — a code-less makerAsset is the silent-noop class the ranker excludes
   type BookData = { watermark: string; changes?: { changed: boolean; appeared: string[]; gone: string[]; unconfirmed: string[]; better: Array<{ orderHash: string }> }; waited?: { pollsMade: number; polls: number; changed: boolean; endedBy: string }; items: Array<{ orderHash: string }>; verification: { dropped: number } };
   const read = (venue: (u: string) => Promise<Response>, extra: Record<string, unknown> = {}, sleeps?: number[]) =>
-    runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: chain, sleep: async (ms) => { sleeps?.push(ms); } });
+    runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: withNativeApiMetadata(venue), resolveRpc: chain, sleep: async (ms) => { sleeps?.push(ms); } });
 
   it("first read returns a watermark and no changes; the second read with `since` announces the confirmed better order", async () => {
     const old = await row("q-1", { taking: 5n * 10n ** 16n });
@@ -268,7 +268,7 @@ describe("cork_query orderbook — the watch tick's probe fill", () => {
     stubRpc((c) => { if (c.functionName === "bitInvalidatorForOrder") return 0n; throw new Error(`no stub for ${c.functionName}`); }, { code: { [CST.toLowerCase()]: TOKEN_CODE }, ...(call ? { call } : {}) });
   type ProbedBook = { watermark: string; changes?: { best: Record<string, { changed: boolean; fillSimulation?: { verdict: string } } | null> } };
   const read = (venue: (u: string) => Promise<Response>, resolveRpc: unknown, extra: Record<string, unknown> = {}) =>
-    runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: venue, resolveRpc: resolveRpc as never });
+    runTool("cork_query", { resource: "orderbook", chainId: 1, filters: { account: ME }, format: "concise", ...extra }, { nowSeconds: NOW, venueFetch: withNativeApiMetadata(venue), resolveRpc: resolveRpc as never });
 
   it("a tick whose best CHANGED probes it with the real fill calldata: green eth_call rides as verdict 'fillable' on the best entry", async () => {
     const old = await row("pf-1", { taking: 5n * 10n ** 16n });

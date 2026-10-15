@@ -3,7 +3,10 @@
 // same intent builder a holder signs with, signed with a throwaway key, and the fill calldata is
 // decoded back through the BaseFiller ABI to prove the job the contract will read.
 import { describe, expect, it } from "vitest";
-import { decodeAbiParameters, getAddress, hashTypedData, type Hex, keccak256, encodeAbiParameters, toHex, zeroAddress, zeroHash } from "viem";
+import safeArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/Safe.sol/Safe.json";
+import proxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json";
+import multiSendArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/libraries/MultiSendCallOnly.sol/MultiSendCallOnly.json";
+import { decodeAbiParameters, encodeFunctionData, getAddress, hashTypedData, parseAbi, type Hex, keccak256, encodeAbiParameters, toHex, zeroAddress, zeroHash } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   buildRolloverIntent,
@@ -249,6 +252,79 @@ const codes = (env: { warnings: Array<{ code: string }> }) => env.warnings.map((
 /** The minDstPerSrc the fill calldata actually carries, decoded from the bytes. */
 const job = (env: { data: unknown }) => (decodeBaseFillerCall((env.data as { calldata: Hex }).calldata).args[0] as unknown as { minDstPerSrc: bigint }).minDstPerSrc;
 type Data = Record<string, unknown> & { calldata: Hex; approvals: Array<{ token: string; spender: string; amount: string; kind: string; satisfied?: boolean }> };
+
+describe("rollover-fill bounded Safe batch", () => {
+  const modules = { fundingModule: "0x00000000000000000000000000000000000000a1", unwindModule: "0x00000000000000000000000000000000000000a2", outputModule: "0x00000000000000000000000000000000000000a3" } as const;
+  const srcCpt = "0x00000000000000000000000000000000000000b1" as const;
+  const dstCpt = "0x00000000000000000000000000000000000000b2" as const;
+  const fundingAbi = parseAbi(["function execute(address,address,address)"]);
+  const guardAbi = parseAbi(["function execute(uint256,uint256)"]);
+  const hooks = (numerator = 7n, denominator = 10n) => ({
+    preRolloverHooks: [{ target: modules.fundingModule, value: 0n, isDelegateCall: true, allowFailure: false, callData: encodeFunctionData({ abi: fundingAbi, functionName: "execute", args: [srcCpt, PREMIUM, dstCpt] }) }],
+    midRolloverHooks: [{ target: modules.unwindModule, value: 0n, isDelegateCall: true, allowFailure: false, callData: encodeFunctionData({ abi: guardAbi, functionName: "execute", args: [numerator, denominator] }) }],
+    postRolloverHooks: [{ target: modules.outputModule, value: 0n, isDelegateCall: true, allowFailure: false, callData: encodeFunctionData({ abi: guardAbi, functionName: "execute", args: [9n, 10n] }) }],
+    premiumHooks: [],
+  });
+  function supportedChain(rolled: bigint, allowance: bigint) {
+    const singleton = "0x00000000000000000000000000000000000005a1";
+    return stubRpc((c: StubCall) => {
+      switch (c.functionName) {
+        case "getOwners": return [holder.address];
+        case "getThreshold": return 1n;
+        case "getStorageAt": return c.args?.[0] === 0n ? toHex(BigInt(singleton), { size: 32 }) : zeroHash;
+        case "orderState": return { rolled, rolloverTerminal: false };
+        case "orderStatus": return 1n;
+        case "isDeployedRolloverContract": return String(c.args?.[0]).toLowerCase() === CLONE.toLowerCase();
+        case "predictRolloverContractOf": return CLONE;
+        case "owner": return holder.address;
+        case "rolloverContractOf": return CLONE;
+        case "balanceOf": return 10000n;
+        case "allowance": return allowance;
+        default: throw new Error(`unsupported fixture read ${c.functionName}`);
+      }
+    }, { code: { [FILLER.toLowerCase()]: proxyArtifact.deployedBytecode, [singleton]: safeArtifact.deployedBytecode, ["0x9641d764fc13c8b624c04430c7356c1c7c8102e2"]: multiSendArtifact.deployedBytecode } });
+  }
+  it.each([0n, 10000n])("sizes missing owner grants to the live position and preserves sufficient %s allowance", async (allowance) => {
+    const { payload, digest } = await signedOrder({ orderSize: 1000n, settler: PARTIAL, allowPartialFills: true, hooks: hooks() });
+    const env = await fill({ signedOrder: payload, orderDigest: digest, bounded: modules, fillerSrcCst: "11", minDstPerSrc: "1" }, { resolveRpc: supportedChain(250n, allowance) });
+    expect(env.state).toBe("ok");
+    const d = env.data as { to: string; from: string; ownerApproval: { amount: string; spender: string; unsignedTx: { calldata: Hex } | null } };
+    expect(d.to).toBe(FILLER);
+    expect(d.from).toBe(holder.address);
+    expect(d.ownerApproval.amount).toBe("750");
+    expect(d.ownerApproval.spender).toBe(CLONE);
+    if (allowance === 0n) {
+      const grant = decodeAbiParameters([{ type: "address" }, { type: "uint256" }], ("0x" + d.ownerApproval.unsignedTx!.calldata.slice(10)) as Hex);
+      expect(grant).toEqual([CLONE, 750n]);
+    } else expect(d.ownerApproval.unsignedTx).toBeNull();
+  });
+  it.each([990n, 1000n])("refuses a chunk above remaining capacity at rolled %s without transaction bytes", async (rolled) => {
+    const { payload, digest } = await signedOrder({ orderSize: 1000n, settler: PARTIAL, allowPartialFills: true, hooks: hooks() });
+    const env = await fill({ signedOrder: payload, orderDigest: digest, bounded: modules, fillerSrcCst: "11", minDstPerSrc: "1" }, { resolveRpc: supportedChain(rolled, 10000n) });
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
+  });
+  it.each(["0x", "0xef01000000000000000000000000000000000000000001", "0x6080604052"])("refuses unsupported account code %s without fill or approval bytes", async (code) => {
+    const { payload, digest } = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: hooks() });
+    const env = await fill({ signedOrder: payload, orderDigest: digest, bounded: modules, fillerSrcCst: "11", minDstPerSrc: "1" }, { resolveRpc: stubRpc(() => { throw new Error("unsupported account must not be enriched"); }, { code: { [FILLER.toLowerCase()]: code } }) });
+    expect(env.state).toBe("unavailable");
+    expect(env.data).toBeNull();
+    expect(codes(env)).toContain("unsupported_account_profile");
+  });
+  it("rejects omitted sizing, zero floors, missing guards and declared-module mismatch without building transaction bytes", async () => {
+    const good = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: hooks() });
+    const zero = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: hooks(0n) });
+    const zeroDenom = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: hooks(1n, 0n) });
+    const missing = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: { ...hooks(), midRolloverHooks: [] } });
+    const common = { bounded: modules, fillerSrcCst: "11", minDstPerSrc: "1" };
+    for (const [order, extra] of [[good, { fillerSrcCst: undefined }], [good, { minDstPerSrc: "0" }], [zero, {}], [zeroDenom, {}], [missing, {}], [good, { bounded: { ...modules, unwindModule: modules.outputModule } }]] as const) {
+      const env = await fill({ ...common, signedOrder: order.payload, orderDigest: order.digest, ...extra });
+      expect(env.state).toBe("unavailable");
+      expect(env.data).toBeNull();
+      expect(codes(env)).toContain("invalid_order_terms");
+    }
+  });
+});
 
 describe("rollover-fill — the filler's BaseFiller.execute from the signed payload", () => {
   it("inline payload: the job decodes back field-for-field, the envelope is abi.encode(order), both allowances go to BaseFiller, the premium cap defaults to ceil(size × rate / 1e18)", async () => {

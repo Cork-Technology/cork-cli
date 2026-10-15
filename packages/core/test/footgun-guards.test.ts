@@ -90,11 +90,11 @@ describe("taker-fill derives-and-clamps against the signed order", () => {
     const aon = { ...order, makerTraits: 1n << 255n };
     expect(() => buildTakerFill({ order: aon, signature: SIG, taker: TAKER, fillMakingAmount: 50n })).toThrow(/NO_PARTIAL_FILLS/);
     // A FULL fill of the same order is fine.
-    expect(buildTakerFill({ order: aon, signature: SIG, taker: TAKER }).requiredMakingAmount).toBe("100");
+    expect(buildTakerFill({ fillMakingAmount: aon.makingAmount, order: aon, signature: SIG, taker: TAKER }).requiredMakingAmount).toBe("100");
   });
 
   it("refuses a zero-makingAmount order (malformed venue row) instead of a divisor RangeError", () => {
-    expect(() => buildTakerFill({ order: { ...order, makingAmount: 0n }, signature: SIG, taker: TAKER })).toThrow(/makingAmount is 0/);
+    expect(() => buildTakerFill({ fillMakingAmount: 0n, order: { ...order, makingAmount: 0n }, signature: SIG, taker: TAKER })).toThrow(/makingAmount is 0/);
   });
 
   it("valid partials still ceil the taking amount exactly", () => {

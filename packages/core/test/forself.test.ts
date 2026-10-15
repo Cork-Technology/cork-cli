@@ -19,7 +19,7 @@ import {
 } from "@cork/core";
 import { forSelfPairAllowed } from "../src/handlers/forself.ts";
 import { allowedSenderSuffix } from "../src/orders.ts";
-import { stubRpc } from "./helpers.ts";
+import { stubRpc, withNativeApiMetadata } from "./helpers.ts";
 
 const POOL = `0x${"11".repeat(32)}` as const;
 const NOW = 1_800_000_000n;
@@ -242,10 +242,10 @@ const chainStubAnswer = (c: { functionName: string }, over: { cork?: string; lop
   }
 };
 
-const venueWith = (row: Record<string, unknown>) => async (url: string) => {
+const venueWith = (row: Record<string, unknown>) => withNativeApiMetadata(async (url: string) => {
   if (url.includes("orderbook")) return new Response(JSON.stringify({ items: [row], hasMore: false }), { status: 200 });
   return new Response(JSON.stringify({ items: [] }), { status: 200 });
-};
+});
 
 describe("runTool: cork_prepare_orders taker-fill forSelf", () => {
   it("exclusivity is judged on the ADAPTER — the LOP's msg.sender on this path — never on the account", async () => {

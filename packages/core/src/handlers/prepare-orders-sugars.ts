@@ -19,6 +19,7 @@ import { collectVenuePages, handleQuery } from "./query.ts";
 import { authenticateSignedOrder } from "./order-auth.ts";
 import { quoteRefOf } from "./query-offers.ts";
 import { quotedTerms } from "./answer-terms.ts";
+import { readNativeApiCapability } from "./native-history-capability.ts";
 
 type MakerOrderAction = Extract<PrepareOrdersInput["action"], { type: "maker-order" }>;
 
@@ -426,6 +427,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     takingAmount: takingAmount.toString(),
     expirySeconds,
     allowsPartialFills: action.allowsPartialFills,
+    allowsMultipleFills: false,
     usePermit2: action.usePermit2,
     ocoGroup,
     ...(allowedSender !== undefined ? { allowedSender } : {}),
@@ -553,7 +555,9 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
   const deps = venueDepsOf(ctx);
   let row: Record<string, unknown> | undefined;
   try {
-    const book = await collectVenuePages({ maxPages: action.maxPages }, (cursor) => getLopOrderbook(deps, { chainId, limit: 100, ...(cursor ? { cursor } : {}) }));
+    const capability = await readNativeApiCapability(ctx);
+    if (!capability.supported) return unavailable(chainId, capability.code, capability.reason, ctx);
+    const book = await collectVenuePages({ maxPages: action.maxPages }, (cursor) => getLopOrderbook(deps, { chainId, orderHash: wanted, limit: 100, ...(cursor ? { cursor } : {}) }));
     row = book.items.find((item) => {
       const nested = item.order && typeof item.order === "object" && !Array.isArray(item.order) ? (item.order as Record<string, unknown>) : item;
       const h = nested.orderHash ?? nested.order_hash ?? item.orderHash ?? item.order_hash;
@@ -561,10 +565,13 @@ export async function handleRefreshOrder(input: PrepareOrdersInput, action: Refr
     });
     if (!row) {
       if (!book.complete) return envelope({ state: "conflict", data: { requestedOrderHash: action.orderHash, pagesFetched: book.pagesFetched, reason: book.reason, ...(book.nextCursor ? { nextCursor: book.nextCursor } : {}) }, chainId, source: "service", warnings: [{ code: "pagination_incomplete", message: `the orderbook search was incomplete (${book.reason}); no absence claim and no refreshed order were produced` }], ctx });
-      return unavailable(chainId, "order_not_found", `no resting venue order found for ${action.orderHash} on chainId ${chainId} — an order that is not resting has nothing to refresh; post a maker-order`, ctx);
+      return unavailable(chainId, "order_not_found", `no venue order found for ${action.orderHash} on chainId ${chainId} — an order that is not resting has nothing to refresh; post a maker-order`, ctx);
     }
   } catch (err) {
     return venueFailed(chainId, err, ctx);
+  }
+  if ((row.availability as Record<string, unknown> | undefined)?.state === "unavailable") {
+    return unavailable(chainId, "invalid_order_terms", "the venue reports this order unavailable (indexed evidence, confidence unknown) — no refresh was built; reconcile before replacing", ctx);
   }
   const parsed = parseSignedLopOrder(row);
   if (!parsed.ok) return unavailable(chainId, "invalid_service_response", `venue returned a malformed signed order — ${parsed.error}`, ctx);

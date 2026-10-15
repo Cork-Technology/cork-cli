@@ -8,7 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { allowedSenderSuffix, hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { HYBRID_VERIFY_BUDGET } from "../src/handlers/hybrid-verify.ts";
 import { runTool } from "../src/handlers.ts";
-import { stubRpc, TOKEN_CODE } from "./helpers.ts";
+import { stubRpc, TOKEN_CODE, withNativeApiMetadata } from "./helpers.ts";
 import { FakeLopInvalidators } from "./lop-fakes.ts";
 
 const NOW = 1_790_000_000n;
@@ -22,8 +22,8 @@ const POOL = `0x${"cc".repeat(32)}` as const;
 const MAKER_ASSET = "0x00000000000000000000000000000000000000c5" as const;
 const TOKEN_FIXTURE = { code: { [MAKER_ASSET]: TOKEN_CODE } };
 
-const venueWith = (path: string, items: unknown[]) => async (url: string) =>
-  url.includes(path) ? new Response(JSON.stringify({ items, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 });
+const venueWith = (path: string, items: unknown[]) => withNativeApiMetadata(async (url: string) =>
+  url.includes(path) ? new Response(JSON.stringify({ items, hasMore: false }), { status: 200 }) : new Response(JSON.stringify({ items: [] }), { status: 200 }));
 
 async function bookRow(salt: bigint, over: Partial<LopOrder> = {}) {
   const order: LopOrder = {
@@ -162,8 +162,8 @@ describe("hybrid verification — read dedup + order stability (the parallel rew
     const loTx = `0x${"b2".repeat(32)}`;
     const oh = `0x${"0d".repeat(32)}`;
     const rows = [
-      { blockNumber: "900000", txHash: hiTx, orderHash: oh },
-      { blockNumber: "1000", txHash: loTx, orderHash: oh },
+      { chainId: 1, blockNumber: "900000", txHash: hiTx, orderHash: oh },
+      { chainId: 1, blockNumber: "1000", txHash: loTx, orderHash: oh },
     ];
     const resolveRpc = async () => {
       const base = await stubRpc(() => {
@@ -221,8 +221,8 @@ describe("hybrid verification — pools, pairs, fills, rollover, rfqs", () => {
     const fakeTx = `0x${"b2".repeat(32)}`;
     const oh = `0x${"0d".repeat(32)}`;
     const rows = [
-      { blockNumber: "1000", txHash: realTx, orderHash: oh },
-      { blockNumber: "1001", txHash: fakeTx, orderHash: oh },
+      { chainId: 1, blockNumber: "1000", txHash: realTx, orderHash: oh },
+      { chainId: 1, blockNumber: "1001", txHash: fakeTx, orderHash: oh },
     ];
     const chain = stubRpc(() => {
       throw new Error("no readContract expected");
@@ -483,5 +483,20 @@ describe("hybrid verification — maker readiness in the one batch", () => {
     expect(d.items[0]!.verification).toBe("confirmed");
     expect((d.items[0]!.makerReadiness as { status: string } | undefined)?.status).toBe("unknown");
     expect(env.warnings.some((w) => w.code === "maker_not_ready")).toBe(false);
+  });
+  it.each([true, false])("readiness uses known remainder only (invalidator available: %s)", async (available) => {
+    const row = await bookRow(36n, { makingAmount: 1000n, takingAmount: 7n, makerTraits: 1n << 254n });
+    const resolveRpc = stubRpc((c) => {
+      if (c.functionName === "rawRemainingInvalidatorForOrder") {
+        if (!available) throw new Error("invalidator unavailable");
+        return ((1n << 256n) - 1n) ^ 667n;
+      }
+      if (c.functionName === "allowance" || c.functionName === "balanceOf") return 667n;
+      throw new Error("unexpected read");
+    }, TOKEN_FIXTURE);
+    const env = await query("orderbook", { venueFetch: venueWith("orderbook", [row]), resolveRpc }, { sort: "venue" });
+    const data = env.data as VerifiedData;
+    expect(data.items[0]!.makerReadiness).toMatchObject({ status: available ? "ready" : "unknown", reasons: [] });
+    expect(data.items[0]!.verification).toBe(available ? "confirmed" : "unverified");
   });
 });

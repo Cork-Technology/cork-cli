@@ -12,18 +12,23 @@
 // rewrite that answers with `Deprecation: true` + `x-cork-canonical-path`; those headers are
 // captured per call and surfaced as telemetry so a stale literal (or a stale user override)
 // announces itself instead of riding the shim silently until the shim retires.
+import { venueUrl } from "./venue-defaults.mjs";
 import { z } from "zod";
 import { fetchFollowingSameOrigin } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
 import { hostOf } from "../chain/rpc.ts";
 import type { LopOrder } from "../orders.ts";
 
-export const DEFAULT_VENUE_URL = "https://api-phoenix.cork.tech";
+
+export const DEFAULT_VENUE_URL = venueUrl;
+
+
 /** The book's open-order cap (cork-api limit-orders POST): a maker may have at most this many
  *  OPEN or PARTIALLY_FILLED, unexpired orders on one chain whose maker and taker assets both
  *  belong to one pool (the asset PAIR for a JIT order whose pool does not exist yet); the next
  *  one is refused with HTTP 400. A signed order the venue refuses never rests. */
 export const VENUE_OPEN_ORDERS_PER_POOL = 5;
+
 
 /** Resolve the venue base and normalize away the retired base-versioned form: a configured
  *  base ending in /v<n> (the pre-0.3.3 convention, when the version lived in the base) would
@@ -64,7 +69,7 @@ export const MIRRORED_VENUE_LOGIC = [
   { gate: "rollover rfq quote options: the RFQ's chain, a premium_token the requester accepts, shares_max <= source.shares, exactly one destination that is not the source pool, no order fields", mirror: "packages/core/src/rfq-rollover.ts#rolloverOptionViolation", venueSource: "venue RFQ v2 answer schema (RolloverAnswerOptionSchema) + answer POST route (checkRolloverOptions)" },
   { gate: "rollover rfq counter premium_token: one of the RFQ's premium_token set", mirror: "packages/core/src/rfq-rollover.ts#premiumTokenAllowed", venueSource: "venue RFQ v2 counter POST route + RFQ v2 common schema (premiumTokenAllowed)" },
   { gate: "rollover jit_market_hash: BaseFiller's JITMarketParams hash on the 0.2 layout (oracleSalt in, enableJitMint out)", mirror: "packages/core/src/rollover.ts#hashJitMarketParams", venueSource: "venue JIT market hash helper" },
-  { gate: "rollover order quoteRef: a v2 rollover RFQ on this chain, a quoted answer holding the option, user = requester, source pool, quoted destination (pool with zero jitMarketHash, or the stored jit_market_hash), premium token, minPremiumPerShare >= premium_per_share, orderSize <= shares_max", mirror: "packages/core/src/rfq-rollover.ts#rolloverQuoteRefMismatch", venueSource: "venue rollover v1 quote-ref rule (quoteRefMismatch)" },
+  { gate: "rollover order quoteRef: a v2 rollover RFQ on this chain, a quoted v2 rollover answer holding the option, cst selects the cited authenticated answerer and omitted/cpt selects requester, source pool, quoted destination (pool with zero jitMarketHash, or the stored jit_market_hash), premium token, minPremiumPerShare >= premium_per_share, orderSize <= shares_max", mirror: "packages/core/src/rfq-rollover.ts#rolloverQuoteRefMismatch", venueSource: "venue rollover v1 quote-ref rule (quoteRefMismatch)" },
   { gate: "orderbook allowedSender decode (makerTraits low 80 bits, null = open)", mirror: "packages/core/src/handlers/hybrid-verify.ts#annotateBookRows", venueSource: "venue limit-orders v1 orderbook GET route (decodeAllowedSenderSuffix)" },
   { gate: "rfqs exclude_request_prefix bounds (1..64, LITERAL — the venue escapes LIKE wildcards itself)", mirror: "packages/core/src/handlers/filters.ts#parseQueryFilters", venueSource: "venue RFQ v2 list-query schema" },
 ] as const;
@@ -362,16 +367,24 @@ export async function getPools(deps: VenueDeps, chainId: number, page: PageParam
 export interface LopBookParams extends PageParams {
   chainId: number;
   poolId?: string;
+  orderHash?: string;
   side?: string;
-  status?: string;
+  status?: string | readonly string[];
   /** Only this maker's rows (the venue's `maker` orderbook query). */
   maker?: string;
+  /** Omission preserves legacy membership; explicit discovery filters unavailable active rows. */
+  view?: "discovery" | "management";
 }
 
-/** GET /limit-orders/v1/orderbook — resting orders (each row carries the full signed order). */
+/** GET /limit-orders/v1/orderbook; exact chain + hash retains lifecycle history. */
 export async function getLopOrderbook(deps: VenueDeps, p: LopBookParams): Promise<VenueList> {
-  return asList(await getJson(deps, `/limit-orders/v1/orderbook${qs({ chainId: p.chainId, poolId: p.poolId, side: p.side, status: p.status, maker: p.maker, cursor: p.cursor, limit: p.limit })}`), "orderbook");
+  let query = qs({ chainId: p.chainId, orderHash: p.orderHash, poolId: p.poolId, side: p.side, status: typeof p.status === "string" ? p.status : undefined, maker: p.maker, view: p.view, cursor: p.cursor, limit: p.limit });
+  if (p.status !== undefined && typeof p.status !== "string") {
+    for (const status of p.status) query += `${query ? "&" : "?"}status=${encodeURIComponent(status)}`;
+  }
+  return asList(await getJson(deps, `/limit-orders/v1/orderbook${query}`), "orderbook");
 }
+
 
 /** GET /limit-orders/v1/fills. */
 export async function getLopFills(deps: VenueDeps, p: { chainId: number; orderHash?: string; cursor?: string; limit?: number }): Promise<VenueList> {

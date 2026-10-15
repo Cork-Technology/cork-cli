@@ -19,7 +19,7 @@
 // callers simulate only rows that passed it, and a "maker-ready"/"fillable" verdict here is
 // conditioned on that gate having run.
 import { decodeErrorResult, parseAbi } from "viem";
-import { buildTakerFill } from "../orders.ts";
+import { buildTakerFill, classifyInvalidatorWord, hashLopOrder, lopInvalidatorPlan, readLopInvalidator } from "../orders.ts";
 import { marketCreatorAbi } from "../market-registry.ts";
 import type { SignedLopOrder } from "../datasources/venue.ts";
 import type { ResolvedRpc } from "../chain/rpc.ts";
@@ -72,7 +72,7 @@ export interface FillSimulation {
   note: string;
 }
 
-type FillSimClient = Pick<ResolvedRpc["client"], "call">;
+type FillSimClient = Pick<ResolvedRpc["client"], "call" | "readContract">;
 
 /** Walk an eth_call error's cause chain for the raw revert data (viem nests it at varying
  *  depths depending on transport). Bounded; null = no revert data surfaced. */
@@ -93,8 +93,17 @@ function revertDataOf(err: unknown): `0x${string}` | null {
  *  misreport a forgery's BadSignature as the maker's problem. */
 export async function simulateTopFill(
   client: FillSimClient,
-  a: { signed: SignedLopOrder; lop: `0x${string}`; account: `0x${string}`; atBlock?: bigint },
+  a: { signed: SignedLopOrder; chainId: number; lop: `0x${string}`; account: `0x${string}`; atBlock?: bigint },
 ): Promise<FillSimulation | null> {
+  let remainingMaking: bigint;
+  try {
+    const plan = lopInvalidatorPlan(a.signed.order.makerTraits);
+    const status = classifyInvalidatorWord(plan, await readLopInvalidator(client, plan, a.lop, a.signed.order.maker, hashLopOrder(a.chainId, a.lop, a.signed.order), a.atBlock));
+    if (status.status === "filled-or-cancelled") return { verdict: "would-revert", note: "the live invalidator says filled-or-cancelled; no probe fill was built" };
+    remainingMaking = status.remaining ?? a.signed.order.makingAmount;
+  } catch (err) {
+    return { verdict: "unknown", note: `the live remaining amount could not be read (${revertReason(err)}); no probe fill was built` };
+  }
   let calldata: `0x${string}`;
   try {
     calldata = buildTakerFill({
@@ -103,6 +112,7 @@ export async function simulateTopFill(
       makerAccountType: a.signed.makerAccountType,
       taker: a.account,
       extension: a.signed.extension,
+      fillMakingAmount: remainingMaking,
       maximumTakingAmount: 0n,
     }).calldata;
   } catch {
