@@ -33,6 +33,7 @@ Human-readable text and log formats are not covered.
 #### Other fixes
 
 - Admit API `0.5.0` metadata using its served short Git revision, validated against exactly one reviewed source pin. The release gate binds evidence to the same served value and the reviewed infrastructure rollout; malformed, unreviewed and ambiguous revisions remain blocked. API deployment workflows, bundled addresses and config publication semantics are unchanged.
+- Refresh the production OpenAPI capture for API `0.5.0`: retired RFQ v1 routes and the native-history, rollover-role and effective-status additions already supported by this candidate. The live contract-drift check remains enabled; runtime behavior and bundled configuration are unchanged.
 - Re-aimed the native orderbook cursor-restart mutation probe at the management-aware query: it retains `view` while dropping only the opaque cursor. Existing CLI/MCP cursor-continuation assertions catch the defect; runtime behavior is unchanged.
 - Re-aimed three stale mutation probes at the management-aware maker sweep, exact-order-hash query and account filter scope without changing their defects or consumer assertions. Existing hermetic APK/release checks run unskipped with the supported local yq; release scripts and workflows are unchanged.
 - The RPC-cache hermetic tests now start isolated children with `HOME` already set and check the actual cache path reported by the child. The runtime cache guard and explicit cache-file opt-in remain unchanged.

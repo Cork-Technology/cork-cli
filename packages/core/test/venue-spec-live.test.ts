@@ -6,9 +6,11 @@
 // the surface-drift gate, pointed outward: on an EXPECTED change, review the fixture diff and
 // re-capture deliberately with UPDATE_VENUE_SPEC=1.
 //
-// The committed capture is PRODUCTION (api-phoenix.cork.tech, cork-api 0.4.6, commit c10ae6b,
-// 2026-10-08), including RFQ v2 and its full-answer proof fix. Release evidence must run against
-// the production default, without a staging override; a staging success is not production proof.
+// The committed capture is PRODUCTION (api-phoenix.cork.tech, cork-api 0.5.0, commit 72010c8,
+// 2026-10-16). Reviewed changes retire RFQ v1 and add native order history, rollover requester
+// roles and effective status; RFQ v2's full-answer authorization remains intact.
+// Release evidence must run against the production default, without a staging override;
+// a staging success is not production proof.
 //
 // Self-skips unless CORK_RPC_LIVE=1 (the offline suite stays deterministic), and self-skips
 // with a loud log when the venue itself is unreachable — an outage is not a contract change.

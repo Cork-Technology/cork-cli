@@ -5,7 +5,7 @@
  "info": {
   "description": "Read-only analytics API for Cork data (flows, pools, etc.)",
   "title": "Cork Protocol API",
-  "version": "0.4.6"
+  "version": "0.5.0"
  },
  "openapi": "3.0.3",
  "paths": {
@@ -1340,6 +1340,15 @@
               "maximum": 9007199254740991,
               "type": "integer"
              },
+             "confidence": {
+              "description": "Index-lag observation only: unknown without a LOP checkpoint, provisional above the chain’s conservative LOP confirmed checkpoint, confirmed at or below it. Not canonicality, reorg protection or finalized accounting.",
+              "enum": [
+               "unknown",
+               "provisional",
+               "confirmed"
+              ],
+              "type": "string"
+             },
              "createdAt": {
               "type": "string"
              },
@@ -1356,6 +1365,11 @@
               "type": "string"
              },
              "makingAsset": {
+              "type": "string"
+             },
+             "observedBlockTimestamp": {
+              "description": "Native block timestamp, null when unavailable. Unlike legacy blockTimestamp, no response-time fallback.",
+              "nullable": true,
               "type": "string"
              },
              "orderHash": {
@@ -1392,7 +1406,9 @@
              "takingAmount",
              "isPartialFill",
              "createdAt",
-             "updatedAt"
+             "updatedAt",
+             "confidence",
+             "observedBlockTimestamp"
             ],
             "type": "object"
            },
@@ -1872,8 +1888,21 @@
   },
   "/limit-orders/v1/orderbook": {
    "get": {
-    "description": "Get limit orders with pagination support. Expiry filtering is keyed to each row's status: fillable rows (OPEN, PARTIALLY_FILLED) whose expiry has passed are excluded, while terminal rows (FILLED, CANCELLED, EXPIRED) are returned regardless of expiry — an explicit terminal-status query is a history read, so settled orders from short-tenor markets stay readable after their expiry passes.",
+    "description": "Get native limit orders and actual cumulative execution. Omitted view preserves legacy list membership: active rows with null or future expiry, including indexed unavailable rows, plus requested terminal history. view=discovery excludes unavailable active rows even with maker/status filters. view=management also includes expired active rows with availability labels. Omitted status selects active states. Exact orderHash reconciles every lifecycle state regardless of view; chainId optionally restricts the lookup. Confidence unknown/provisional/confirmed describes index lag only, not finality or execution permission; no atomic cross-request snapshot, correction watermark or global nonce coverage.",
     "parameters": [
+     {
+      "description": "Optional. Omission preserves legacy list membership: active rows with null or future expiry, including indexed unavailable rows, plus explicitly requested terminal history. discovery excludes unavailable active rows even with maker/status filters. management also includes expired active rows with honest availability labels. No mode implies execution permission. Omitted status selects OPEN and PARTIALLY_FILLED. Exact orderHash retains every lifecycle state regardless of view, subject to explicit filters.",
+      "in": "query",
+      "name": "view",
+      "required": false,
+      "schema": {
+       "enum": [
+        "discovery",
+        "management"
+       ],
+       "type": "string"
+      }
+     },
      {
       "description": "Optional. Numeric chain id, leave empty for all chains.",
       "in": "query",
@@ -1883,6 +1912,16 @@
        "exclusiveMinimum": true,
        "maximum": 9007199254740991,
        "type": "integer"
+      }
+     },
+     {
+      "description": "Optional exact native order hash. Without chainId, returns matching rows across chains; explicit chainId restricts the lookup. Does not apply active-book defaults.",
+      "in": "query",
+      "name": "orderHash",
+      "required": false,
+      "schema": {
+       "pattern": "^0x[a-fA-F0-9]{64}$",
+       "type": "string"
       }
      },
      {
@@ -1896,7 +1935,7 @@
       }
      },
      {
-      "description": "Optional. Maker address filter.",
+      "description": "Optional. Maker address filter; does not change the selected view. Omitted view preserves legacy expiry and membership; use view=discovery for strict available active rows or view=management for expired active rows. Supply explicit statuses for terminal history.",
       "in": "query",
       "name": "maker",
       "required": false,
@@ -1939,7 +1978,7 @@
       }
      },
      {
-      "description": "Optional. Order status filter — single value (?status=OPEN) or repeated (?status=OPEN&status=PARTIALLY_FILLED). Filtering by OPEN also returns PARTIALLY_FILLED orders (both are fillable). When omitted, defaults to the fillable book (OPEN + PARTIALLY_FILLED); pass explicit statuses to read terminal rows. Expiry filtering is status-keyed per row: fillable rows (OPEN, PARTIALLY_FILLED) past their expiry are always excluded, terminal rows (FILLED, CANCELLED, EXPIRED) are returned regardless of expiry.",
+      "description": "Optional single or repeated status filter; does not change the selected view. OPEN and PARTIALLY_FILLED expand to both. Omitted view preserves legacy expiry and membership. discovery excludes unavailable active rows while retaining requested terminal history; management also includes expired active rows. Omitted status selects active states, except with orderHash where every lifecycle state is included. Explicit statuses still apply to exact hash reads.",
       "in": "query",
       "name": "status",
       "required": false,
@@ -2027,8 +2066,48 @@
              "allowsPartialFills": {
               "type": "boolean"
              },
+             "availability": {
+              "additionalProperties": false,
+              "description": "Indexed venue evidence only. Candidate means no known blocker, not onchain permission or a confirmed actionable quote; foreign activity is not covered.",
+              "properties": {
+               "reason": {
+                "enum": [
+                 "cancelled",
+                 "expired",
+                 "exhausted",
+                 "bit-consumed",
+                 "no-known-blocker",
+                 "evidence-limit",
+                 "unresolved"
+                ],
+                "type": "string"
+               },
+               "state": {
+                "enum": [
+                 "candidate",
+                 "unavailable",
+                 "unknown"
+                ],
+                "type": "string"
+               }
+              },
+              "required": [
+               "state",
+               "reason"
+              ],
+              "type": "object"
+             },
              "chainId": {
               "type": "number"
+             },
+             "confidence": {
+              "description": "Index-lag observation only: unknown without an observed block or LOP checkpoint, provisional above the chain’s conservative LOP confirmed checkpoint, confirmed at or below it. Not canonicality, reorg protection or execution permission.",
+              "enum": [
+               "unknown",
+               "provisional",
+               "confirmed"
+              ],
+              "type": "string"
              },
              "createdAt": {
               "description": "ISO-8601 UTC timestamp.",
@@ -2039,6 +2118,22 @@
              },
              "extension": {
               "type": "string"
+             },
+             "filledMakingAmount": {
+              "description": "Actual cumulative execution in raw maker-asset units, from native fills; not reconstructed from price.",
+              "type": "string"
+             },
+             "filledTakingAmount": {
+              "description": "Actual cumulative execution in raw taker-asset units; may exceed signed takingAmount. No separate fee/gross-net guarantee.",
+              "type": "string"
+             },
+             "lastStatusSyncBlock": {
+              "description": "Native lifecycle observation block, not a confirmation or correction watermark.",
+              "nullable": true,
+              "type": "string"
+             },
+             "lastStatusSyncTxHash": {
+              "nullable": true
              },
              "maker": {
               "type": "string"
@@ -2162,7 +2257,13 @@
              "updatedAt",
              "status",
              "remainingMakingAmount",
-             "remainingTakingAmount"
+             "remainingTakingAmount",
+             "filledMakingAmount",
+             "filledTakingAmount",
+             "availability",
+             "lastStatusSyncBlock",
+             "lastStatusSyncTxHash",
+             "confidence"
             ],
             "type": "object"
            },
@@ -2330,7 +2431,7 @@
   },
   "/meta/v1/": {
    "get": {
-    "description": "Which component version this deployment serves (versioning policy R4); the distribution manifest maps it to Distributions",
+    "description": "Which component version this deployment serves; the distribution manifest maps it to Distributions",
     "responses": {
      "200": {
       "content": {
@@ -15075,2169 +15176,6 @@
     ]
    }
   },
-  "/rfqs/v1/": {
-   "get": {
-    "parameters": [
-     {
-      "in": "query",
-      "name": "chain_id",
-      "required": false,
-      "schema": {
-       "exclusiveMinimum": true,
-       "maximum": 9007199254740991,
-       "type": "integer"
-      }
-     },
-     {
-      "in": "query",
-      "name": "state",
-      "required": false,
-      "schema": {
-       "default": "open",
-       "enum": [
-        "open",
-        "expired"
-       ],
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "reference_asset",
-      "required": false,
-      "schema": {
-       "pattern": "^0x[a-fA-F0-9]{40}$",
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "requester",
-      "required": false,
-      "schema": {
-       "pattern": "^0x[a-fA-F0-9]{40}$",
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "underwriter",
-      "required": false,
-      "schema": {
-       "pattern": "^0x[a-fA-F0-9]{40}$",
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "cursor",
-      "required": false,
-      "schema": {
-       "maxLength": 256,
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "limit",
-      "required": false,
-      "schema": {
-       "default": 25,
-       "maximum": 100,
-       "minimum": 1,
-       "type": "integer"
-      }
-     },
-     {
-      "description": "Exclude RFQs whose request_id starts with this literal prefix (e.g. \"healthcheck-\" to drop status-page heartbeats). Matching is literal: LIKE wildcards in the prefix are escaped.",
-      "in": "query",
-      "name": "exclude_request_prefix",
-      "required": false,
-      "schema": {
-       "maxLength": 64,
-       "minLength": 1,
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "with_answers",
-      "required": false,
-      "schema": {
-       "enum": [
-        "true",
-        "false"
-       ],
-       "type": "string"
-      }
-     },
-     {
-      "in": "query",
-      "name": "view",
-      "required": false,
-      "schema": {
-       "default": "full",
-       "enum": [
-        "full",
-        "current"
-       ],
-       "type": "string"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "items": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "answer_count": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             },
-             "answers": {
-              "items": {
-               "additionalProperties": false,
-               "properties": {
-                "answer": {
-                 "additionalProperties": {},
-                 "type": "object"
-                },
-                "answer_id": {
-                 "type": "string"
-                },
-                "received_at": {
-                 "maximum": 9007199254740991,
-                 "minimum": -9007199254740991,
-                 "type": "integer"
-                },
-                "revisions": {
-                 "maximum": 9007199254740991,
-                 "minimum": -9007199254740991,
-                 "type": "integer"
-                },
-                "underwriter": {
-                 "type": "string"
-                }
-               },
-               "required": [
-                "answer_id",
-                "received_at",
-                "answer"
-               ],
-               "type": "object"
-              },
-              "type": "array"
-             },
-             "answers_truncated": {
-              "type": "boolean"
-             },
-             "counter": {
-              "additionalProperties": false,
-              "nullable": true,
-              "properties": {
-               "counter": {
-                "additionalProperties": {},
-                "type": "object"
-               },
-               "counter_id": {
-                "type": "string"
-               },
-               "received_at": {
-                "maximum": 9007199254740991,
-                "minimum": -9007199254740991,
-                "type": "integer"
-               }
-              },
-              "required": [
-               "counter_id",
-               "received_at",
-               "counter"
-              ],
-              "type": "object"
-             },
-             "received_at": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             },
-             "request": {
-              "additionalProperties": {},
-              "type": "object"
-             },
-             "rfq_id": {
-              "type": "string"
-             },
-             "state": {
-              "enum": [
-               "open",
-               "expired"
-              ],
-              "type": "string"
-             },
-             "version": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             }
-            },
-            "required": [
-             "rfq_id",
-             "state",
-             "received_at",
-             "answer_count",
-             "version",
-             "request"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          },
-          "next_cursor": {
-           "nullable": true,
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "items",
-          "next_cursor"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "400": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     }
-    },
-    "tags": [
-     "RFQ"
-    ]
-   },
-   "post": {
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "additionalProperties": false,
-        "properties": {
-         "chain_id": {
-          "exclusiveMinimum": true,
-          "maximum": 9007199254740991,
-          "type": "integer"
-         },
-         "collateral_asset": {
-          "anyOf": [
-           {
-            "additionalProperties": false,
-            "properties": {
-             "exact": {
-              "pattern": "^0x[a-fA-F0-9]{40}$",
-              "type": "string"
-             }
-            },
-            "required": [
-             "exact"
-            ],
-            "type": "object"
-           },
-           {
-            "additionalProperties": false,
-            "properties": {
-             "one_of": {
-              "items": {
-               "pattern": "^0x[a-fA-F0-9]{40}$",
-               "type": "string"
-              },
-              "maxItems": 8,
-              "minItems": 1,
-              "type": "array"
-             }
-            },
-            "required": [
-             "one_of"
-            ],
-            "type": "object"
-           }
-          ]
-         },
-         "expiry_window": {
-          "additionalProperties": false,
-          "properties": {
-           "not_after": {
-            "exclusiveMinimum": true,
-            "maximum": 9007199254740991,
-            "type": "integer"
-           },
-           "not_before": {
-            "exclusiveMinimum": true,
-            "maximum": 9007199254740991,
-            "type": "integer"
-           }
-          },
-          "required": [
-           "not_before",
-           "not_after"
-          ],
-          "type": "object"
-         },
-         "market_template": {
-          "anyOf": [
-           {
-            "additionalProperties": false,
-            "properties": {
-             "market_template_id": {
-              "pattern": "^0x[a-fA-F0-9]{64}$",
-              "type": "string"
-             }
-            },
-            "required": [
-             "market_template_id"
-            ],
-            "type": "object"
-           },
-           {
-            "additionalProperties": false,
-            "properties": {
-             "inline": {
-              "additionalProperties": false,
-              "properties": {
-               "nav_source_id": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-               },
-               "oracle_params": {
-                "additionalProperties": {
-                 "anyOf": [
-                  {
-                   "maxLength": 256,
-                   "type": "string"
-                  },
-                  {
-                   "type": "number"
-                  },
-                  {
-                   "type": "boolean"
-                  },
-                  {
-                   "enum": [
-                    null
-                   ],
-                   "nullable": true,
-                   "type": "string"
-                  }
-                 ]
-                },
-                "type": "object"
-               },
-               "oracle_recipe": {
-                "pattern": "^0x[a-fA-F0-9]{40}$",
-                "type": "string"
-               },
-               "price_source_id": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-               },
-               "rate_band_id": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-               }
-              },
-              "required": [
-               "oracle_recipe",
-               "oracle_params"
-              ],
-              "type": "object"
-             }
-            },
-            "required": [
-             "inline"
-            ],
-            "type": "object"
-           }
-          ],
-          "description": "When modes includes fixed_rate, require an inline template with oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). In mixed-mode requests it specifies the fixed-rate alternative; each answer option carries its own template. This is the order rateOverride, not recipe additionalData."
-         },
-         "modes": {
-          "items": {
-           "enum": [
-            "liquidity_only",
-            "liquidity_impairment",
-            "fixed_rate"
-           ],
-           "type": "string"
-          },
-          "maxItems": 3,
-          "minItems": 1,
-          "type": "array"
-         },
-         "notional_assets": {
-          "pattern": "^[1-9][0-9]*$",
-          "type": "string"
-         },
-         "package_ids": {
-          "items": {
-           "maxLength": 64,
-           "minLength": 1,
-           "type": "string"
-          },
-          "maxItems": 8,
-          "minItems": 1,
-          "type": "array"
-         },
-         "reference_asset": {
-          "pattern": "^0x[a-fA-F0-9]{40}$",
-          "type": "string"
-         },
-         "request_id": {
-          "maxLength": 128,
-          "minLength": 8,
-          "type": "string"
-         },
-         "requester": {
-          "pattern": "^0x[a-fA-F0-9]{40}$",
-          "type": "string"
-         },
-         "schema_version": {
-          "enum": [
-           "1"
-          ],
-          "type": "string"
-         },
-         "signature": {
-          "default": "",
-          "pattern": "^(|0x|0x[a-fA-F0-9]+)$",
-          "type": "string"
-         },
-         "valid_until": {
-          "exclusiveMinimum": true,
-          "maximum": 9007199254740991,
-          "type": "integer"
-         }
-        },
-        "required": [
-         "schema_version",
-         "request_id",
-         "requester",
-         "chain_id",
-         "reference_asset",
-         "collateral_asset",
-         "modes",
-         "package_ids",
-         "expiry_window",
-         "notional_assets",
-         "valid_until"
-        ],
-        "type": "object"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "rfq_id": {
-           "type": "string"
-          },
-          "state": {
-           "enum": [
-            "open",
-            "expired"
-           ],
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "rfq_id",
-          "state"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "201": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "rfq_id": {
-           "type": "string"
-          },
-          "state": {
-           "enum": [
-            "open",
-            "expired"
-           ],
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "rfq_id",
-          "state"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "400": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "409": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     }
-    },
-    "tags": [
-     "RFQ"
-    ]
-   }
-  },
-  "/rfqs/v1/{rfq_id}": {
-   "get": {
-    "parameters": [
-     {
-      "in": "query",
-      "name": "view",
-      "required": false,
-      "schema": {
-       "default": "full",
-       "enum": [
-        "full",
-        "current"
-       ],
-       "type": "string"
-      }
-     },
-     {
-      "in": "path",
-      "name": "rfq_id",
-      "required": true,
-      "schema": {
-       "maxLength": 128,
-       "minLength": 1,
-       "type": "string"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "answer_count": {
-           "maximum": 9007199254740991,
-           "minimum": -9007199254740991,
-           "type": "integer"
-          },
-          "answers": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "answer": {
-              "additionalProperties": {},
-              "type": "object"
-             },
-             "answer_id": {
-              "type": "string"
-             },
-             "received_at": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             },
-             "revisions": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             },
-             "underwriter": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "answer_id",
-             "received_at",
-             "answer"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          },
-          "counter": {
-           "additionalProperties": false,
-           "nullable": true,
-           "properties": {
-            "counter": {
-             "additionalProperties": {},
-             "type": "object"
-            },
-            "counter_id": {
-             "type": "string"
-            },
-            "received_at": {
-             "maximum": 9007199254740991,
-             "minimum": -9007199254740991,
-             "type": "integer"
-            }
-           },
-           "required": [
-            "counter_id",
-            "received_at",
-            "counter"
-           ],
-           "type": "object"
-          },
-          "counter_count": {
-           "maximum": 9007199254740991,
-           "minimum": -9007199254740991,
-           "type": "integer"
-          },
-          "counters": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "counter": {
-              "additionalProperties": {},
-              "type": "object"
-             },
-             "counter_id": {
-              "type": "string"
-             },
-             "received_at": {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
-             }
-            },
-            "required": [
-             "counter_id",
-             "received_at",
-             "counter"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          },
-          "counters_truncated": {
-           "type": "boolean"
-          },
-          "received_at": {
-           "maximum": 9007199254740991,
-           "minimum": -9007199254740991,
-           "type": "integer"
-          },
-          "request": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "rfq_id": {
-           "type": "string"
-          },
-          "state": {
-           "enum": [
-            "open",
-            "expired"
-           ],
-           "type": "string"
-          },
-          "truncated": {
-           "type": "boolean"
-          },
-          "version": {
-           "maximum": 9007199254740991,
-           "minimum": -9007199254740991,
-           "type": "integer"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "rfq_id",
-          "state",
-          "received_at",
-          "version",
-          "request",
-          "answers",
-          "answer_count",
-          "truncated",
-          "counter",
-          "counters",
-          "counter_count",
-          "counters_truncated"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "404": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     }
-    },
-    "tags": [
-     "RFQ"
-    ]
-   }
-  },
-  "/rfqs/v1/{rfq_id}/answers": {
-   "post": {
-    "parameters": [
-     {
-      "in": "path",
-      "name": "rfq_id",
-      "required": true,
-      "schema": {
-       "maxLength": 128,
-       "minLength": 1,
-       "type": "string"
-      }
-     }
-    ],
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "additionalProperties": false,
-        "properties": {
-         "options": {
-          "items": {
-           "additionalProperties": false,
-           "properties": {
-            "chain_id": {
-             "exclusiveMinimum": true,
-             "maximum": 9007199254740991,
-             "type": "integer"
-            },
-            "collateral_asset": {
-             "pattern": "^0x[a-fA-F0-9]{40}$",
-             "type": "string"
-            },
-            "expiry": {
-             "exclusiveMinimum": true,
-             "maximum": 9007199254740991,
-             "type": "integer"
-            },
-            "fresh_until": {
-             "exclusiveMinimum": true,
-             "maximum": 9007199254740991,
-             "type": "integer"
-            },
-            "market_template": {
-             "anyOf": [
-              {
-               "additionalProperties": false,
-               "properties": {
-                "market_template_id": {
-                 "pattern": "^0x[a-fA-F0-9]{64}$",
-                 "type": "string"
-                }
-               },
-               "required": [
-                "market_template_id"
-               ],
-               "type": "object"
-              },
-              {
-               "additionalProperties": false,
-               "properties": {
-                "inline": {
-                 "additionalProperties": false,
-                 "properties": {
-                  "nav_source_id": {
-                   "maxLength": 128,
-                   "minLength": 1,
-                   "type": "string"
-                  },
-                  "oracle_params": {
-                   "additionalProperties": {
-                    "anyOf": [
-                     {
-                      "maxLength": 256,
-                      "type": "string"
-                     },
-                     {
-                      "type": "number"
-                     },
-                     {
-                      "type": "boolean"
-                     },
-                     {
-                      "enum": [
-                       null
-                      ],
-                      "nullable": true,
-                      "type": "string"
-                     }
-                    ]
-                   },
-                   "type": "object"
-                  },
-                  "oracle_recipe": {
-                   "pattern": "^0x[a-fA-F0-9]{40}$",
-                   "type": "string"
-                  },
-                  "price_source_id": {
-                   "maxLength": 128,
-                   "minLength": 1,
-                   "type": "string"
-                  },
-                  "rate_band_id": {
-                   "maxLength": 128,
-                   "minLength": 1,
-                   "type": "string"
-                  }
-                 },
-                 "required": [
-                  "oracle_recipe",
-                  "oracle_params"
-                 ],
-                 "type": "object"
-                }
-               },
-               "required": [
-                "inline"
-               ],
-               "type": "object"
-              }
-             ],
-             "description": "For fixed_rate, require inline.oracle_params.rate_override: a positive decimal uint256 string, absolute WAD (1e18 = 1.0). Map it to the order rateOverride, with empty recipe additionalData. Each option declares its own proposed rate; answers remain non-committal counter-proposals."
-            },
-            "mode": {
-             "enum": [
-              "liquidity_only",
-              "liquidity_impairment",
-              "fixed_rate"
-             ],
-             "type": "string"
-            },
-            "notional_max_assets": {
-             "pattern": "^[1-9][0-9]*$",
-             "type": "string"
-            },
-            "option_id": {
-             "maxLength": 64,
-             "minLength": 1,
-             "type": "string"
-            },
-            "package_id": {
-             "maxLength": 64,
-             "minLength": 1,
-             "type": "string"
-            },
-            "premium_annualized": {
-             "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
-             "pattern": "^(0|0\\.[0-9]{1,18})$",
-             "type": "string"
-            },
-            "reference_asset": {
-             "pattern": "^0x[a-fA-F0-9]{40}$",
-             "type": "string"
-            }
-           },
-           "required": [
-            "option_id",
-            "chain_id",
-            "collateral_asset",
-            "reference_asset",
-            "mode",
-            "package_id",
-            "expiry",
-            "market_template",
-            "premium_annualized",
-            "notional_max_assets",
-            "fresh_until"
-           ],
-           "type": "object"
-          },
-          "maxItems": 16,
-          "minItems": 1,
-          "type": "array"
-         },
-         "reason_code": {
-          "enum": [
-           "NO_CAPACITY",
-           "PAIR_UNSUPPORTED",
-           "TENOR_NOT_QUOTED",
-           "PASS"
-          ],
-          "type": "string"
-         },
-         "request_id": {
-          "maxLength": 128,
-          "minLength": 8,
-          "type": "string"
-         },
-         "schema_version": {
-          "enum": [
-           "1"
-          ],
-          "type": "string"
-         },
-         "signature": {
-          "default": "",
-          "pattern": "^(|0x|0x[a-fA-F0-9]+)$",
-          "type": "string"
-         },
-         "status": {
-          "enum": [
-           "quoted",
-           "pass"
-          ],
-          "type": "string"
-         },
-         "supersedes": {
-          "maxLength": 128,
-          "minLength": 1,
-          "type": "string"
-         },
-         "underwriter": {
-          "pattern": "^0x[a-fA-F0-9]{40}$",
-          "type": "string"
-         }
-        },
-        "required": [
-         "schema_version",
-         "request_id",
-         "underwriter",
-         "status"
-        ],
-        "type": "object"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "answer_id": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "answer_id"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "201": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "answer_id": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "answer_id"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "400": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "404": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "409": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "410": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     }
-    },
-    "tags": [
-     "RFQ"
-    ]
-   }
-  },
-  "/rfqs/v1/{rfq_id}/counters": {
-   "post": {
-    "parameters": [
-     {
-      "in": "path",
-      "name": "rfq_id",
-      "required": true,
-      "schema": {
-       "maxLength": 128,
-       "minLength": 1,
-       "type": "string"
-      }
-     }
-    ],
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "additionalProperties": false,
-        "properties": {
-         "fresh_until": {
-          "exclusiveMinimum": true,
-          "maximum": 9007199254740991,
-          "type": "integer"
-         },
-         "option_ref": {
-          "additionalProperties": false,
-          "properties": {
-           "answer_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-           },
-           "option_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "type": "string"
-           }
-          },
-          "required": [
-           "answer_id",
-           "option_id"
-          ],
-          "type": "object"
-         },
-         "premium_annualized": {
-          "description": "Unit: annualized decimal fraction string, \"0.041\" = 4.1%. The server additionally rejects values >= 0.5 as a pilot-posture scale tripwire; the fraction unit is contract, the bound is policy and may relax.",
-          "pattern": "^(0|0\\.[0-9]{1,18})$",
-          "type": "string"
-         },
-         "request_id": {
-          "maxLength": 128,
-          "minLength": 8,
-          "type": "string"
-         },
-         "requester": {
-          "pattern": "^0x[a-fA-F0-9]{40}$",
-          "type": "string"
-         },
-         "schema_version": {
-          "enum": [
-           "1"
-          ],
-          "type": "string"
-         },
-         "signature": {
-          "default": "",
-          "pattern": "^(|0x|0x[a-fA-F0-9]+)$",
-          "type": "string"
-         }
-        },
-        "required": [
-         "schema_version",
-         "request_id",
-         "requester",
-         "premium_annualized"
-        ],
-        "type": "object"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "counter_id": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "counter_id"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "201": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "counter_id": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "counter_id"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "400": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "403": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "404": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "409": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "410": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": false,
-         "properties": {
-          "details": {
-           "additionalProperties": {},
-           "type": "object"
-          },
-          "error": {
-           "type": "string"
-          },
-          "message": {
-           "type": "string"
-          },
-          "warnings": {
-           "items": {
-            "additionalProperties": false,
-            "properties": {
-             "code": {
-              "type": "string"
-             },
-             "deprecates": {
-              "type": "string"
-             },
-             "effectiveAt": {
-              "type": "string"
-             },
-             "link": {
-              "type": "string"
-             },
-             "message": {
-              "type": "string"
-             }
-            },
-            "required": [
-             "code",
-             "message"
-            ],
-            "type": "object"
-           },
-           "type": "array"
-          }
-         },
-         "required": [
-          "error",
-          "message"
-         ],
-         "type": "object"
-        }
-       }
-      },
-      "description": "Default Response"
-     }
-    },
-    "tags": [
-     "RFQ"
-    ]
-   }
-  },
   "/rfqs/v2/": {
    "get": {
     "parameters": [
@@ -18017,6 +15955,14 @@
            },
            "requester": {
             "pattern": "^0x[a-fA-F0-9]{40}$",
+            "type": "string"
+           },
+           "requester_role": {
+            "description": "Rollover requester side: cst means the cited answer underwriter signs the order; cpt means the requester signs. Omitted preserves legacy cpt semantics and the original signed body (no default is inserted).",
+            "enum": [
+             "cst",
+             "cpt"
+            ],
             "type": "string"
            },
            "schema_version": {
@@ -21361,6 +19307,45 @@
       }
      },
      {
+      "description": "Optional read-time status filter. Repeat the query key for multiple statuses. Intersects with stored lifecycle status before pagination.",
+      "in": "query",
+      "name": "effectiveStatus",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "PENDING",
+          "OPENED",
+          "PARTIALLY_FILLED",
+          "AWAITING_PREMIUM",
+          "SETTLED",
+          "CLOSING",
+          "CANCELLED",
+          "EXPIRED"
+         ],
+         "type": "string"
+        },
+        {
+         "items": {
+          "enum": [
+           "PENDING",
+           "OPENED",
+           "PARTIALLY_FILLED",
+           "AWAITING_PREMIUM",
+           "SETTLED",
+           "CLOSING",
+           "CANCELLED",
+           "EXPIRED"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        }
+       ]
+      }
+     },
+     {
       "in": "query",
       "name": "source",
       "required": false,
@@ -21479,6 +19464,20 @@
              "dstCstToken": {},
              "dstPoolId": {
               "nullable": true
+             },
+             "effectiveStatus": {
+              "description": "Read-time status: stored PENDING becomes EXPIRED when fillDeadline is at or before the request Unix-second instant; all other lifecycle states are unchanged. status remains stored and expiredAt remains event-derived.",
+              "enum": [
+               "PENDING",
+               "OPENED",
+               "PARTIALLY_FILLED",
+               "AWAITING_PREMIUM",
+               "SETTLED",
+               "CLOSING",
+               "CANCELLED",
+               "EXPIRED"
+              ],
+              "type": "string"
              },
              "exclusiveFiller": {
               "nullable": true
@@ -21634,6 +19633,7 @@
              "premiumPaymentMode",
              "rolloverIntentHash",
              "status",
+             "effectiveStatus",
              "source",
              "cumulativeRolled",
              "remainingSize",
@@ -22680,6 +20680,20 @@
             "dstPoolId": {
              "nullable": true
             },
+            "effectiveStatus": {
+             "description": "Read-time status: stored PENDING becomes EXPIRED when fillDeadline is at or before the request Unix-second instant; all other lifecycle states are unchanged. status remains stored and expiredAt remains event-derived.",
+             "enum": [
+              "PENDING",
+              "OPENED",
+              "PARTIALLY_FILLED",
+              "AWAITING_PREMIUM",
+              "SETTLED",
+              "CLOSING",
+              "CANCELLED",
+              "EXPIRED"
+             ],
+             "type": "string"
+            },
             "exclusiveFiller": {
              "nullable": true
             },
@@ -22834,6 +20848,7 @@
             "premiumPaymentMode",
             "rolloverIntentHash",
             "status",
+            "effectiveStatus",
             "source",
             "cumulativeRolled",
             "remainingSize",
