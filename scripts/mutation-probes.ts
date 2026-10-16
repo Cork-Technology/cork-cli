@@ -158,7 +158,7 @@ const T = {
 
 const CATALOG: Mutant[] = [
 {"id":"compatible-api-confidence-unchecked","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(CONFIDENCE_VALUES.includes(row.confidence), \"unsupported native checkpoint confidence; never finality or execution permission\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
-{"id":"compatible-api-api-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(supportedApiRevisions.includes(evidence.apiRevision), \"deployment identity must match an exact reviewed native API source revision\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
+{"id":"compatible-api-api-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(isReviewedApiRevision(evidence.apiRevision), \"deployment identity must identify exactly one reviewed native API source revision\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-infra-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-index-digest-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.indexMigrationSha256, INDEX_SHA256);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-endpoint-evidence-excess","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.endpoints.length, endpoints.length, \"evidence must cover exactly every shipped default endpoint\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiComponent, supportedApiRevisions } from "../datasources/native-api-contract.mjs";
+import { apiComponent, isReviewedApiRevision } from "../datasources/native-api-contract.mjs";
 import { venueBaseUrl } from "../datasources/venue.ts";
 import { fetchWithTimeout } from "../fetch-timeout.ts";
 import type { HandlerContext } from "./shared.ts";
@@ -35,7 +35,7 @@ export async function readNativeApiCapability(ctx: HandlerContext): Promise<Nati
     const parsed = Metadata.safeParse(body);
     if (!parsed.success) return { supported: false, code: "native_api_unavailable", reason: "API capability metadata is malformed" };
     const metadata = parsed.data;
-    if (metadata.component !== apiComponent || metadata.status !== "active" || metadata.commit === null || !supportedApiRevisions.includes(metadata.commit)) {
+    if (metadata.component !== apiComponent || metadata.status !== "active" || !isReviewedApiRevision(metadata.commit)) {
       return { supported: false, code: "native_api_unavailable", reason: "the configured API does not declare an active reviewed native-history revision" };
     }
     return { supported: true, revision: metadata.commit };

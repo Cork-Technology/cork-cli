@@ -10,7 +10,7 @@ const hash = (digit: string) => "0x" + digit.repeat(64);
 const maker = "0x" + "11".repeat(20);
 const evidence = () => ({
   apiRevision: REQUIRED_API_REVISION,
-  infraRevision: "499f6411a10b9733dcac4c6a465f888663c302e8",
+  infraRevision: "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f",
   indexMigrationSha256: "879ea3d9d5d42989c1e43ea50c379ed7c4a623d22074af6d79dff30467b18110",
   deployedAt: "2026-10-07T10:00:00Z", // fixture declaration, not an observed deployment
   endpoints: [{ url: base, chainId: 1, maker, activeOrderHash: hash("1"), inactiveOrderHash: hash("2"), blockedSiblingOrderHash: hash("3") }],
@@ -27,7 +27,7 @@ function venue(confidence: unknown = "unknown", opts: { status?: number; hasMore
     const url = new URL(String(input));
     requests.push(url);
     if (opts.status) return Response.json({ error: "metadata unavailable" }, { status: opts.status });
-    if (url.pathname === "/meta/v1") return Response.json(opts.metadata === undefined ? { component: apiComponent, version: "0.4.6", status: "active", commit: REQUIRED_API_REVISION } : opts.metadata);
+    if (url.pathname === "/meta/v1") return Response.json(opts.metadata === undefined ? { component: apiComponent, version: "0.5.0", status: "active", commit: REQUIRED_API_REVISION } : opts.metadata);
     const q = url.searchParams;
     const statuses = opts.firstStatusOnly ? q.getAll("status").slice(0, 1) : q.getAll("status");
     const selected = rows.filter(row => Number(q.get("chainId")) === row.chainId
@@ -63,8 +63,24 @@ describe("compatible default API release gate", () => {
     expect(fixture.requests).toHaveLength(7);
   });
 
+  it.each(["72010c8", "72010c88a2d5"])("accepts a reviewed served abbreviation %s with exact matching evidence", async apiRevision => {
+    const fixture = venue("unknown", { metadata: { component: apiComponent, version: "0.5.0", status: "active", commit: apiRevision } });
+    const result = await verifyCompatibleApi({ ...evidence(), apiRevision }, fixture);
+    expect(result).toMatchObject({ status: "PASS", endpoints: [{ apiRevision }] });
+  });
+
+  it("rejects a different served abbreviation even when both identify reviewed sources", async () => {
+    const fixture = venue("unknown", { metadata: { component: apiComponent, version: "0.5.0", status: "active", commit: "6c459d5" } });
+    await expect(verifyCompatibleApi(evidence(), fixture)).rejects.toBeInstanceOf(AssertionError);
+    expect(fixture.requests).toHaveLength(1);
+  });
+
   it.each([
     ["stale API runtime", { apiRevision: "d5e0757d90640023c31008bc73b06e1ab7aa9cef" }],
+    ["six-character API abbreviation", { apiRevision: "72010c" }],
+    ["non-hex API abbreviation", { apiRevision: "72010cg" }],
+    ["uppercase API abbreviation", { apiRevision: "72010C8" }],
+    ["unreviewed API abbreviation", { apiRevision: "72010c9" }],
     ["stale Infra runtime despite identical index bytes", { infraRevision: "2955cdb84b41a16c68ecc4dae3bb8bda8c5ef5c8" }],
     ["different migration artifact", { indexMigrationSha256: "0".repeat(64) }],
   ])("refuses %s before HTTP", async (_name, invalid) => {

@@ -2,13 +2,13 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import venueDefaults from "../packages/core/src/datasources/venue-defaults.mjs";
-import { apiComponent, requiredApiRevision, supportedApiRevisions } from "../packages/core/src/datasources/native-api-contract.mjs";
+import { apiComponent, requiredApiRevision, isReviewedApiRevision } from "../packages/core/src/datasources/native-api-contract.mjs";
 const DEFAULT_ENDPOINTS = [venueDefaults.venueUrl];
 
-// Actual merged API110 contract pin; separately supplied deployment identity remains required.
+// Reviewed native-history contract; separately supplied deployment identity remains required.
 // A merge or successful workflow is not evidence of default endpoint readiness.
 export const REQUIRED_API_REVISION = requiredApiRevision;
-export const REQUIRED_INFRA_REVISION = "499f6411a10b9733dcac4c6a465f888663c302e8";
+export const REQUIRED_INFRA_REVISION = "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f";
 const INDEX_SHA256 = "879ea3d9d5d42989c1e43ea50c379ed7c4a623d22074af6d79dff30467b18110";
 const CONFIDENCE_VALUES = ["unknown", "provisional", "confirmed"];
 const hash32 = (value) => typeof value === "string" && /^0x[0-9a-f]{64}$/i.test(value);
@@ -24,7 +24,7 @@ const requiredRow = (rows, hash) => {
 
 export async function verifyCompatibleApi(evidence, { endpoints = DEFAULT_ENDPOINTS, fetchImpl = fetch } = {}) {
   assert.ok(evidence && typeof evidence === "object", "CORK_NATIVE_API_RELEASE_EVIDENCE is required; a merged API PR is not deployment evidence");
-  assert.ok(supportedApiRevisions.includes(evidence.apiRevision), "deployment identity must match an exact reviewed native API source revision");
+  assert.ok(isReviewedApiRevision(evidence.apiRevision), "deployment identity must identify exactly one reviewed native API source revision");
   assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);
   assert.equal(evidence.indexMigrationSha256, INDEX_SHA256);
   assert.ok(Number.isFinite(Date.parse(evidence.deployedAt)), "actual deployment timestamp required");

@@ -10,7 +10,10 @@ const profiles = [
   { name: "ordinary legacy 200/empty", response: () => Response.json({ items: [], hasMore: false }) },
   { name: "null commit", response: () => Response.json({ ...nativeApiMetadataFixture, commit: null }) },
   { name: "unknown future commit", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "f".repeat(40) }) },
-  { name: "short reviewed prefix", response: () => Response.json({ ...nativeApiMetadataFixture, commit: nativeApiMetadataFixture.commit.slice(0, 7) }) },
+  { name: "six-character reviewed prefix", response: () => Response.json({ ...nativeApiMetadataFixture, commit: nativeApiMetadataFixture.commit.slice(0, 6) }) },
+  { name: "non-hex revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010cg" }) },
+  { name: "uppercase revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010C8" }) },
+  { name: "unreviewed revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010c9" }) },
   { name: "paused component", response: () => Response.json({ ...nativeApiMetadataFixture, status: "paused" }) },
   { name: "different component", response: () => Response.json({ ...nativeApiMetadataFixture, component: "another-api" }) },
   { name: "malformed metadata", response: () => Response.json({ ...nativeApiMetadataFixture, commit: 110 }) },
@@ -21,6 +24,19 @@ const profiles = [
 ];
 
 for (const surface of ["CLI", "MCP"] as const) describe(surface + " native history capability", () => {
+  it.each(["72010c8", "72010c88a2d5"])("admits reviewed abbreviation %s before reading exact history", async commit => {
+    const row = await signedRow(capture.unknown, "reviewed-abbreviation");
+    await withSurface(surface, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async url =>
+      new URL(url).pathname === "/meta/v1"
+        ? Response.json({ ...nativeApiMetadataFixture, version: "0.5.0", commit })
+        : Response.json({ items: [row], hasMore: false }),
+    }, async call => {
+      const result = await call("cork_query", { resource: "orderbook", chainId: 8453, filters: { orderHash: row.orderHash } });
+      expect(result.failed).toBe(false);
+      expect(result.envelope).toMatchObject({ state: "ok", data: { items: [row] } });
+    });
+  });
+
   it.each(profiles)("$name cannot turn an empty book into admitted history", async profile => {
     const requests: string[] = [];
     await withSurface(surface, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async url => {

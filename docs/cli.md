@@ -158,11 +158,11 @@ captures are not repinned to these reviewed sources.
   response is `invalid_service_response`, never proof of history or absence. An empty exact
   venue result is not proof of on-chain absence.
 
-These native fields target merged [API #110](https://github.com/Cork-Technology/cork-indexing-api/pull/110):
-merge `6c459d5dd403a73455f4172f533040fd7a0957ee` and published candidate
-`b5c3405d15867f2bbbf383bb7729651c88ef18b6` share tree `1aebab014fcbe248c27e4c1c6917ce0dc3f28660`.
-That source association is not served capability, index readiness or deployment/rollout proof.
-Default-endpoint capability and rollout remain unverified. CLI and MCP regression coverage exercises every confidence label, unavailable
+These native fields are supported by the reviewed native-history contract in API `0.5.0`.
+Metadata may declare a lowercase hexadecimal Git abbreviation of 7–40 characters, but it must
+identify exactly one reviewed source revision. Unknown, malformed or ambiguous declarations
+remain unavailable. Source association is not index readiness or deployment/rollout proof.
+CLI and MCP regression coverage exercises every confidence label, unavailable
 active residuals, metadata failures and bounded cursor resumption. Cursors stay opaque, including
 saved two-part orderbook cursors and chain-qualified tokens; explicit chain inputs remain supported.
 Metadata failures are unavailability, never empty history or absence. On a live cited order,
@@ -170,9 +170,9 @@ RFQ v2 refresh also returns `requote`: post the superseding answer carrying the 
 order before resting it. Known native unavailability refuses the refresh before that work.
 RFQ v1 and v2 history are not bridged by this integration.
 
-[Infra #76](https://github.com/Cork-Technology/cork-indexing-infra/pull/76) is merged into `dev`;
-the current dependency snapshot is `499f6411a10b9733dcac4c6a465f888663c302e8`. Verify the
-availability-aware readers **before producer activation**: sibling retirement commits in
+The reviewed infrastructure revision is `a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f`.
+Reader compatibility, index readiness and producer deployment require separate verification:
+sibling retirement commits in
 128-row batches. Native CANCELLED can mean spent-bit retirement, not explicit maker cancellation;
 positive mathematical remainder can remain. Replay/checkpoint observations do not establish
 finality, automatic orphan deletion or historical repair. There is no canonical-stack revival
@@ -700,14 +700,16 @@ runs `node scripts/verify-compatible-api.mjs`. `CORK_NATIVE_API_RELEASE_EVIDENCE
 repository variable containing `apiRevision`, `infraRevision`, `indexMigrationSha256`,
 `deployedAt` and an `endpoints` array. Each entry supplies `url`, `chainId`, `maker`,
 `activeOrderHash`, `inactiveOrderHash` and `blockedSiblingOrderHash` from an actual deployment.
-The canonical compatibility policy recognizes exact reviewed API revisions `6c459d5dd403a73455f4172f533040fd7a0957ee`
-and `b5c3405d15867f2bbbf383bb7729651c88ef18b6`; the required merged revision export remains
-an alias. Infra remains pinned to `499f6411a10b9733dcac4c6a465f888663c302e8`. Source association
-is not deployment proof: served metadata must match the separately supplied actual deployment
-identity. Identical migration bytes do not substitute for runtime revision binding.
-`venue-defaults.mjs` provides the one URL authority shared by the SDK and raw-Node guard.
-Missing evidence/endpoint, unsupported revision, failed HTTP, deprecated shim or inconclusive
-pagination blocks the job. An arbitrary nonempty, shortened or future commit is not admitted.
+The canonical compatibility policy retains full reviewed source pins in `native-api-contract.mjs`.
+The evidence `apiRevision` must equal the revision actually served by metadata, including its
+short form (currently `72010c8`). Both runtime admission and release evidence require a lowercase
+7–40-character hexadecimal revision that identifies exactly one reviewed source; neither
+arbitrary prefixes nor ambiguous abbreviations are admitted. Infrastructure is pinned to
+`a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f`; the required index artifact digest is unchanged.
+Source association is not deployment proof. Identical migration bytes do not substitute for
+runtime revision binding. `venue-defaults.mjs` provides the URL authority shared by the SDK
+and raw-Node guard. Missing evidence/endpoint, unsupported revision, failed HTTP, deprecated
+shim or inconclusive pagination blocks the job.
 
 Per endpoint the gate makes seven GETs: one metadata read and six existing orderbook probes,
 each read bounded to ten seconds; each book probe requires one exhausted 2000-row page.
