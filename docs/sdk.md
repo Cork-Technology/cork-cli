@@ -140,9 +140,10 @@ See [the native history contract](cli.md#native-limit-order-history) for field s
 ### Require a compatible deployed API
 
 Native history requires the configured endpoint to pass the reviewed metadata/capability gate.
-A successful response alone is not proof of support. The release workflow additionally requires
-deployed native API compatibility evidence; local package checks do not satisfy that gate.
-Configure the evidence with:
+A successful response alone is not proof of support. Stable publication and hosted deployment
+additionally require [deployed native API compatibility evidence](cli.md#compatible-api-activation-gate);
+local package checks do not satisfy that gate. RC publication skips this production-data
+acceptance step, but the runtime capability gate still applies. Configure the evidence with:
 
 ```text
 CORK_NATIVE_API_RELEASE_EVIDENCE

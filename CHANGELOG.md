@@ -32,6 +32,7 @@ Human-readable text and log formats are not covered.
 - The released literal type is preserved at SDK root and `/venue` through one authoritative `venue-defaults.mjs` module and bounded `allowJs` inference. Existing readers use plain ECMAScript modules (ESM); default URL and explicit/environment overrides are unchanged. Emitted/packed and strict installed-consumer proof is separate from API readiness.
 #### Other fixes
 
+- RC publication no longer requires production lifecycle probe rows. Candidate release and APK/OCI workflows retain version, build, smoke, signing and config checks; stable publication and hosted deployment still require deployed API evidence. Runtime native-history admission and regression coverage are unchanged.
 - Admit API `0.5.0` metadata using its served short Git revision, validated against exactly one reviewed source pin. The release gate binds evidence to the same served value and the reviewed infrastructure rollout; malformed, unreviewed and ambiguous revisions remain blocked. API deployment workflows, bundled addresses and config publication semantics are unchanged.
 - Refresh the production OpenAPI capture for API `0.5.0`: retired RFQ v1 routes and the native-history, rollover-role and effective-status additions already supported by this candidate. The live contract-drift check remains enabled; runtime behavior and bundled configuration are unchanged.
 - Re-aimed the native orderbook cursor-restart mutation probe at the management-aware query: it retains `view` while dropping only the opaque cursor. Existing CLI/MCP cursor-continuation assertions catch the defect; runtime behavior is unchanged.
@@ -40,7 +41,7 @@ Human-readable text and log formats are not covered.
 - Added opt-in exact mutation-report receipts at the existing read-before-unlink boundary (`CORK_MUTATION_RECEIPTS_DIR`), including baseline/probe labels, selected files, child exit, byte length and SHA-256. Retention errors are separate evidence failures, not changes to test verdicts; the default runner behavior is unchanged.
 - Updated five mutation anchors for exact reviewed API admission, repeated-status cursor transport, capability-aware history completeness, maker-scoped retirement and canonical orderbook routing. Focused probes detect each defect; runtime code, test assertions and catalogue selection are unchanged.
 
-**Release remains gated on deployed RFQ v2 and availability-aware native readers.** Local integration does not establish served API identity or index readiness. The release gate requires compatible-API deployment evidence.
+**Stable publication and hosted deployment remain gated on deployed RFQ v2 and availability-aware native readers.** RC publication does not attest production compatibility. Local integration does not establish served API identity or index readiness.
 
 These are draft integration checks, not rollover-return safety or release readiness. The reviewed conservative floor/fail-closed attester and hook preflight fix and separately authorized governance-delay action remain required; preflight is TOCTOU-prone.
 

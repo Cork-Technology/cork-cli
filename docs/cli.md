@@ -695,8 +695,12 @@ their new name.
 
 ### Compatible API activation gate
 
-Every `v*` tag (including RCs), reusable/manual APK publication and hosted deployment
-runs `node scripts/verify-compatible-api.mjs`. `CORK_NATIVE_API_RELEASE_EVIDENCE` is a JSON
+Stable `vX.Y.Z` tags, stable reusable/manual APK publication and every hosted deployment
+run `node scripts/verify-compatible-api.mjs`. Release candidates (`vX.Y.Z-rc.N`) skip this
+production-data acceptance step in the release and APK workflows; version, build, smoke,
+signing and config checks still apply. Publishing an RC is not proof of production lifecycle
+compatibility, and runtime native-history admission is unchanged.
+`CORK_NATIVE_API_RELEASE_EVIDENCE` is a JSON
 repository variable containing `apiRevision`, `infraRevision`, `indexMigrationSha256`,
 `deployedAt` and an `endpoints` array. Each entry supplies `url`, `chainId`, `maker`,
 `activeOrderHash`, `inactiveOrderHash` and `blockedSiblingOrderHash` from an actual deployment.

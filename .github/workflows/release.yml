@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Require compatible deployed default API behavior
+        if: ${{ !contains(github.ref_name, '-rc.') }}
         env:
           CORK_NATIVE_API_RELEASE_EVIDENCE: ${{ vars.CORK_NATIVE_API_RELEASE_EVIDENCE }}
         run: node scripts/verify-compatible-api.mjs
