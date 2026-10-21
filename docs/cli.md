@@ -332,6 +332,18 @@ emits a direct call to your ForSelf adapter instead of a bundle.
 
 ### Orders
 
+RFQ proofs bind the canonical selected venue origin in `domain.salt`
+(`keccak256(UTF-8(new URL(selectedVenue).origin))`). Keep the same trusted
+`venueUrl` / `CORK_VENUE_URL` for prepare and submit and sign the complete
+returned domain, including salt. One logical venue per origin; routing prefixes
+and unconfigured aliases are not separate identities. The matching API requires
+operator-set `RFQ_VENUE_ORIGIN` before boot, never a request header/body.
+Pause signed writers for API/Factory/CLI/MCP cutover and re-prepare/re-sign pending
+proofs: old/new signature client-server pairs reject new writes. Stored no-op
+retries, API keys and LOP/settler domains are unchanged. Released `v0.8.0-rc.1`
+remains affected until separately released. SDK `rfqWriteTypedData` now requires
+`venueOrigin`; `planRfqWrite` requires `venueUrl`. No unbound fallback.
+
 ```sh
 ch prepare order maker-order --chain-id <id> --account <0x…> --client-request-id <id> --pool-id <0x…> \
   --side SELL --maker-asset <0x…> --taker-asset <0x…> --making-amount <amt> --taking-amount <amt> \

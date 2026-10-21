@@ -14,6 +14,7 @@ schemas, examples) changes.
 | Teaching errors: typo → "did you mean …?", remediation example itself validates | `packages/schemas/test/examples.test.ts` |
 | Maturity map covers all 9 tools; `specified` variants carry a reason code | `packages/schemas/test/examples.test.ts` |
 | Actual MCP handshake and description token budget < 3000 (approx) | `packages/mcp/test/surface-drift.test.ts` |
+| Prepared RFQ domain survives MCP projection and wallet signing; other-venue and legacy proofs fail verification | `packages/mcp/test/rfq-domain-replay.test.ts` |
 
 Descriptions and source wording are not snapshot-pinned. Contract changes require meaningful
 consumer behavior checks and, when authorized, agent task evaluation (formerly Layer B). The historical

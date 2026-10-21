@@ -229,6 +229,10 @@ rfq-write (the venue's \`Cork RFQ\` domain). The result carries the full \`typed
 - **Rollover intents** go straight to \`cork_submit\` rollover-order.
 - **RFQ writes** go to \`cork_submit\` rfq-open / rfq-answer / rfq-counter with
   \`auth {method:'signature', signature}\` and the same \`clientRequestId\`.
+  Keep the SAME configured venue for prepare and submit and sign the full domain,
+  including \`salt = keccak256(UTF-8(canonical selected venue origin))\`. Never
+  omit the salt or reuse a proof on another venue. Upgrading requires a matching
+  salt-bound API and client; old pending proofs must be re-prepared and re-signed.
 - **answer-rfq** signs twice, in order: the maker order, then the rfq-write of the answer that
   carries it. Its \`data.execution.then\` lists every step.
 - \`cork_submit\` relays only — it recomputes every commitment locally before relaying and

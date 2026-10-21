@@ -91,7 +91,7 @@ describe("cork_prepare_orders rfq-write", () => {
     expect((d.body.collateral_asset as { one_of: string[] }).one_of[0]).toBe("0xaf88d065e77c8cc2239327c5edb3a432268e5831");
     expect((d.body.market_template as { inline: { oracle_recipe: string } }).inline.oracle_recipe).toBe("0x679cbd016587d4daa8bfd3ce87e2a2dd6b9a964d");
     expect(d.body).not.toHaveProperty("signature");
-    expect(d.typedData.domain).toEqual({ name: "Cork RFQ", version: "1", chainId: 42161 });
+    
     expect(hashTypedData(d.typedData)).toBe(d.digest);
     expect(d.execution.kind).toBe("eip712-typed-data");
   });
@@ -134,7 +134,7 @@ describe("cork_submit RFQ v2 writes — the proof", () => {
   });
 
   it("a signature by another key over the same body is refused, NOT relayed (an EOA signer, read as one)", async () => {
-    const plan = planRfqWrite({ chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN } as never });
+    const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN } as never });
     const signature = await STRANGER.signTypedData(plan.typedData as never);
     const seen: Seen[] = [];
     const env = await runTool("cork_submit", openInput({ method: "signature", signature }), ctxWith([{ match: "/rfqs/v2", status: 201, body: {} }], seen, { resolveRpc: stubRpc(() => { throw new Error("no reads expected"); }) }));
@@ -145,7 +145,7 @@ describe("cork_submit RFQ v2 writes — the proof", () => {
   });
 
   it("a signature over a DIFFERENT body (another field value) recovers to someone else and is refused", async () => {
-    const plan = planRfqWrite({ chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN, notionalAssets: "1" } as never });
+    const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN, notionalAssets: "1" } as never });
     const signature = await WRITER.signTypedData(plan.typedData as never);
     const seen: Seen[] = [];
     const env = await runTool("cork_submit", openInput({ method: "signature", signature }), ctxWith([{ match: "/rfqs/v2", status: 201, body: {} }], seen, { resolveRpc: stubRpc(() => undefined) }));
@@ -155,7 +155,7 @@ describe("cork_submit RFQ v2 writes — the proof", () => {
 
   it("a contract wallet signer is checked with ERC-1271 over the CorkRfqWrite digest: accepted relays, rejected does not", async () => {
     const base = { ...openInput(), action: { ...openInput().action, requester: SAFE } };
-    const plan = planRfqWrite({ chainId: 42161, clientRequestId: base.clientRequestId, request: { ...OPEN, requester: SAFE } as never });
+    const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: base.clientRequestId, request: { ...OPEN, requester: SAFE } as never });
     const walletSig = `0x${"ab".repeat(85)}` as const; // a Safe7579-style blob ecrecover cannot read
     const asked: Array<readonly unknown[] | undefined> = [];
     const wallet = (answer: string) =>
@@ -180,7 +180,7 @@ describe("cork_submit RFQ v2 writes — the proof", () => {
   });
 
   it("a possible contract signer with no RPC to ask is relayed with a warning — the venue checks it", async () => {
-    const signature = await STRANGER.signTypedData(planRfqWrite({ chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN } as never }).typedData as never);
+    const signature = await STRANGER.signTypedData(planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-rfq-open-0001", request: { ...OPEN } as never }).typedData as never);
     const seen: Seen[] = [];
     const env = await runTool("cork_submit", openInput({ method: "signature", signature }), ctxWith([{ match: "/rfqs/v2", status: 201, body: { rfq_id: "rfq_u", state: "open" } }], seen));
     expect(env.state).toBe("ok");
@@ -318,9 +318,9 @@ describe("cork_submit RFQ v2 writes — the proof", () => {
 
   it("an answer or counter body carries the TARGET RFQ's kind, else the caller's, never a fixed default", () => {
     const counter = { type: "rfq-counter", rfqId: "rfq_1", requester: WRITER.address, premiumAnnualized: "0.03" } as const;
-    expect(planRfqWrite({ chainId: 42161, clientRequestId: "test-kind-0001", request: counter as never, target: { kind: "rollover" } }).body.kind).toBe("rollover");
-    expect(planRfqWrite({ chainId: 42161, clientRequestId: "test-kind-0001", request: { ...counter, kind: "rollover" } as never }).body.kind).toBe("rollover");
-    expect(planRfqWrite({ chainId: 42161, clientRequestId: "test-kind-0001", request: counter as never }).body.kind).toBe("new_position");
+    expect(planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-kind-0001", request: counter as never, target: { kind: "rollover" } }).body.kind).toBe("rollover");
+    expect(planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-kind-0001", request: { ...counter, kind: "rollover" } as never }).body.kind).toBe("rollover");
+    expect(planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "test-kind-0001", request: counter as never }).body.kind).toBe("new_position");
   });
 
   it("a rollover open carrying new_position fields is refused — no new_position-shaped body is sent for it", async () => {

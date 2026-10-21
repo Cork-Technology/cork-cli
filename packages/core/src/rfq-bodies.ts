@@ -158,7 +158,7 @@ export interface RfqWritePlan {
   digest: Hex;
 }
 
-export function planRfqWrite(a: { chainId: number; clientRequestId: string; request: RfqWriteRequest; target?: { kind: RfqKind } }): RfqWritePlan {
+export function planRfqWrite(a: { chainId: number; clientRequestId: string; request: RfqWriteRequest; venueUrl: string; target?: { kind: RfqKind } }): RfqWritePlan {
   const r = a.request;
   let operation: RfqOperation;
   let ref: string;
@@ -183,6 +183,6 @@ export function planRfqWrite(a: { chainId: number; clientRequestId: string; requ
     }
   }
   const bodyHash = rfqWriteBodyHash(operation, body);
-  const typedData = rfqWriteTypedData({ operation, ref, chainId: a.chainId, bodyHash });
+  const typedData = rfqWriteTypedData({ operation, ref, chainId: a.chainId, bodyHash, venueOrigin: new URL(a.venueUrl).origin });
   return { operation, ref, chainId: a.chainId, signer: signer.toLowerCase() as `0x${string}`, body, bodyHash, typedData, digest: hashTypedData(typedData) };
 }

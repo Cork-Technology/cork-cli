@@ -6,7 +6,7 @@
 // bytes32 value (a `market_template_id` and the `oracle_params` values keep their case). A
 // caller must hash, and send, the body in that form.
 
-import { sha256, stringToBytes, type Hex } from "viem";
+import { keccak256, sha256, stringToBytes, type Hex } from "viem";
 
 export const RFQ_OPERATIONS = ["open", "answer", "counter"] as const;
 export type RfqOperation = (typeof RFQ_OPERATIONS)[number];
@@ -55,11 +55,21 @@ export function rfqWriteBodyHash(operation: RfqOperation, body: object): Hex {
   return sha256(stringToBytes(canonicalJson(unsignedBody(operation, body))));
 }
 
+/** One logical venue per canonical origin; never take this identity from a proof. */
+function rfqVenueSalt(origin: string): Hex {
+  const url = new URL(origin);
+  if (!/^https?:\/\/[^\s/?#\\]+\/?$/i.test(origin) || url.username || url.password ||
+      url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("RFQ venue must be an HTTP(S) origin without credentials, path, query or fragment.");
+  }
+  return keccak256(stringToBytes(url.origin));
+}
+
 /** The EIP-712 typed data for one write. `ref` is the body's `request_id` on open and the
  *  target `rfq_id` on answer and counter; `chainId` is the RFQ's chain. */
-export function rfqWriteTypedData(params: { operation: RfqOperation; ref: string; chainId: number; bodyHash: Hex }) {
+export function rfqWriteTypedData(params: { operation: RfqOperation; ref: string; chainId: number; bodyHash: Hex; venueOrigin: string }) {
   return {
-    domain: { name: RFQ_WRITE_DOMAIN_NAME, version: RFQ_WRITE_DOMAIN_VERSION, chainId: params.chainId },
+    domain: { name: RFQ_WRITE_DOMAIN_NAME, version: RFQ_WRITE_DOMAIN_VERSION, chainId: params.chainId, salt: rfqVenueSalt(params.venueOrigin) },
     types: RFQ_WRITE_TYPES,
     primaryType: "CorkRfqWrite" as const,
     message: { operation: params.operation, ref: params.ref, bodyHash: params.bodyHash },

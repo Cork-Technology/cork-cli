@@ -78,6 +78,7 @@ export function describeTypedData(td: TypedDataDefinition): string[] {
     `  chain         ${short(d.chainId)}`,
     `  contract      ${d.verifyingContract === undefined ? "(none — the domain names no contract)" : short(d.verifyingContract)}`,
   ];
+  if (d.salt !== undefined) lines.push(`  domain salt   ${short(d.salt)}`);
   const message = (td.message ?? {}) as Record<string, unknown>;
   for (const [k, v] of Object.entries(message)) lines.push(`  ${k.padEnd(13)} ${short(v)}`);
   if (td.primaryType === "CorkRfqWrite") lines.push("  This proves an RFQ write to the Cork venue: its bodyHash commits to every field of the request.");

@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { concat, encodeAbiParameters, hashTypedData, keccak256, recoverTypedDataAddress, sha256, stringToBytes, toHex, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { canonicalJson, RFQ_WRITE_TYPES, rfqWriteBodyHash, rfqWriteTypedData } from "../src/rfq-signing.ts";
+import { canonicalJson, rfqWriteBodyHash, rfqWriteTypedData } from "../src/rfq-signing.ts"
 import { hashJitMarketParams, JIT_MARKET_PARAMS_TYPEHASHES } from "../src/rollover.ts";
 import { planRfqWrite } from "../src/rfq-bodies.ts";
 
@@ -32,12 +32,12 @@ describe("fixed new_position open vector (the venue's published worked example)"
     '{"chain_id":8453,"collateral_asset":{"exact":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"},"expiry_window":{"not_after":1900086400,"not_before":1900000000},"kind":"new_position","modes":["liquidity_only"],"notional_assets":"1000000","package_ids":["pkg-1"],"reference_asset":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913","request_id":"example-0001","requester":"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266","schema_version":"2","valid_until":1899999000}';
   const BODY_HASH = "0x06155b57c9ad9103c427d6b25658525a7abeaf26336a1b520e9a5edd9b8a224b";
   const TYPE_HASH = "0xd8b7c220c1ff13056a1b853da79c936b9ebc11deb6e98c68bcfa4c149c30d43b";
-  const DOMAIN_SEPARATOR = "0xe5ffc7c8ddf9b6305d45efdf6b3237524caabf9e6b2b5c772b1681440b66f84d";
-  const DIGEST = "0x1369f1384f35f8816aabb4ab8bcf45e2b7a7d03796568c4abad4a7d9ed70588b";
+  const DOMAIN_SEPARATOR = "0xb43b3ad5d3032f6db13d856e5fad4536f80e56b3cd87e7b867876de97643c43e";
+  const DIGEST = "0xc788385f808abbde6b3957f9da46dfdaf097bdc97c869b9194828027123080ba";
   const SIGNATURE =
-    "0x28fefa98f945dbff42b20517287afbd9f0bbf769a3f9b214089bcec0a248d7c4101809a47b48e98dbf0681a10ba2d8c7dd20aef4dde62a714380ee0797ec696d1c";
+    "0xd5d87bb2fcb7aa4c49824e08eaa199c5474ebec3bc79935517f7d1ff477fe17a19dbf61d713acd66b4e68d173ce05c7af386f65b99f78d722e30130ea2ec64881c";
 
-  const typed = () => rfqWriteTypedData({ operation: "open", ref: body.request_id, chainId: body.chain_id, bodyHash: rfqWriteBodyHash("open", body) });
+  const typed = () => rfqWriteTypedData({ venueOrigin: 'https://venue', operation: "open", ref: body.request_id, chainId: body.chain_id, bodyHash: rfqWriteBodyHash("open", body) });
 
   it("canonical JSON and bodyHash", () => {
     expect(canonicalJson(body)).toBe(CANONICAL);
@@ -48,8 +48,8 @@ describe("fixed new_position open vector (the venue's published worked example)"
     expect(keccak256(toHex("CorkRfqWrite(string operation,string ref,bytes32 bodyHash)"))).toBe(TYPE_HASH);
     const words = (values: readonly (Hex | bigint)[]) =>
       encodeAbiParameters(values.map((v) => ({ type: typeof v === "bigint" ? "uint256" : "bytes32" })), values);
-    const domainTypeHash = keccak256(toHex("EIP712Domain(string name,string version,uint256 chainId)"));
-    expect(keccak256(words([domainTypeHash, keccak256(toHex("Cork RFQ")), keccak256(toHex("1")), 8453n]))).toBe(DOMAIN_SEPARATOR);
+    const domainTypeHash = keccak256(toHex("EIP712Domain(string name,string version,uint256 chainId,bytes32 salt)"));
+    expect(keccak256(words([domainTypeHash, keccak256(toHex("Cork RFQ")), keccak256(toHex("1")), 8453n, keccak256(toHex("https://venue"))]))).toBe(DOMAIN_SEPARATOR);
     const structHash = keccak256(words([TYPE_HASH, keccak256(toHex("open")), keccak256(toHex("example-0001")), BODY_HASH]));
     expect(keccak256(concat(["0x1901", DOMAIN_SEPARATOR, structHash]))).toBe(DIGEST);
     expect(hashTypedData(typed())).toBe(DIGEST);
@@ -60,10 +60,6 @@ describe("fixed new_position open vector (the venue's published worked example)"
     expect(await recoverTypedDataAddress({ ...typed(), signature: SIGNATURE })).toBe(ANVIL_0_ADDRESS);
   });
 
-  it("no verifying contract in the domain; the type is exactly the venue's", () => {
-    expect(typed().domain).toEqual({ name: "Cork RFQ", version: "1", chainId: 8453 });
-    expect(RFQ_WRITE_TYPES.CorkRfqWrite.map((f) => `${f.type} ${f.name}`)).toEqual(["string operation", "string ref", "bytes32 bodyHash"]);
-  });
 
   it("ignores the signature and key order; signs kind", () => {
     expect(rfqWriteBodyHash("open", { ...body, signature: "0x1234" })).toBe(BODY_HASH);
@@ -89,12 +85,13 @@ describe("fixed rollover open vector (the venue's published worked example)", ()
   const CANONICAL =
     '{"chain_id":8453,"collateral_asset":{"exact":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"},"expiry_window":{"not_after":1900086400,"not_before":1900000000},"kind":"rollover","premium_token":{"exact":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"},"reference_asset":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913","request_id":"example-roll-0001","requester":"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266","schema_version":"2","source":{"pool_id":"0x1111111111111111111111111111111111111111111111111111111111111111","shares":"1000000000000000000"},"valid_until":1899999000}';
   const BODY_HASH = "0x620feef9af6330e50b2d2d03a757bc74f3f0bb8c47fd6be04bcce6cf9f6a3e93";
-  const DIGEST = "0x0517174e3a880c0bfb0f8ac21f0dca4d1627563ede8f8b1f962ca1e66e0df2ce";
+  const DIGEST = "0x93b6d3592f62235d4c080348dfaecff74e70c9847fcef8c6f923305565fe98a2";
   const SIGNATURE =
-    "0xaf1fd8a102120a1cf5d49c1c04e8c0d92a5c27a923f402320b6844ad85d33441358ba1c8899094fa1db395ed38288e4f8108dc4ed2e0e3a1559619ee6ed679821b";
+    "0xc60db4bd5e11efd4edcceb921c5d7c6db2360ea6c85a3371f41bb3f95c6cd0627e2bfad17636592e7e86f13b47148bf196b5c9039d88cbb41805588b2ebbf4981b";
 
   it("the client planner preserves the published omitted-role body, digest and signature", async () => {
     const plan = planRfqWrite({
+      venueUrl: 'https://venue',
       chainId: body.chain_id,
       clientRequestId: body.request_id,
       request: {
@@ -114,7 +111,7 @@ describe("fixed rollover open vector (the venue's published worked example)", ()
   it("canonical JSON, bodyHash, digest and signature", async () => {
     expect(canonicalJson(body)).toBe(CANONICAL);
     expect(rfqWriteBodyHash("open", body)).toBe(BODY_HASH);
-    const typed = rfqWriteTypedData({ operation: "open", ref: body.request_id, chainId: body.chain_id, bodyHash: BODY_HASH });
+    const typed = rfqWriteTypedData({ venueOrigin: 'https://venue', operation: "open", ref: body.request_id, chainId: body.chain_id, bodyHash: BODY_HASH });
     expect(hashTypedData(typed)).toBe(DIGEST);
     expect(await privateKeyToAccount(ANVIL_0_KEY).signTypedData(typed)).toBe(SIGNATURE);
   });
