@@ -751,7 +751,7 @@ export const WATCH_WATERMARK = encodeBookWatermark({ v: 1, account: DEMO_ACCOUNT
 const RFQ_WRITER = privateKeyToAccount(`0x${"0d".repeat(32)}`);
 export const RFQ_WRITER_ADDRESS = RFQ_WRITER.address;
 async function signedRfqAction(clientRequestId: string, action: Record<string, unknown>, kind?: "new_position" | "rollover"): Promise<Record<string, unknown>> {
-  const plan = planRfqWrite({ chainId: 42161, clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
+  const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
   return { ...action, auth: { method: "signature", signature: await RFQ_WRITER.signTypedData(plan.typedData as never) } };
 }
 /** submit-rfq-open: a liquidity request on the stub pair. */

@@ -8,7 +8,7 @@ import { readRfqCover } from "../cover.ts";
 import { fixedRateOverrideViolation, inlineOfTemplate, oracleParamsOf } from "../orders-answer.ts";
 import { classifyInlineRecipe, coverChainReadings, singleCollateral } from "./cover-reading.ts";
 import { activeSettlersTeaching, checkRolloverOrderTerms, classifyRolloverSettler, computeOrderDigest, intentStructHash, ORDER_DATA_TYPEHASH, retiredSettlerTeaching, ZERO_JIT_MARKET_HASH, type OrderDataStruct, type RolloverIntentStruct } from "../rollover.ts";
-import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, type VenuePostResult } from "../datasources/venue.ts";
+import { getRfq, postLopOrder, postRfq, postRfqAnswer, postRfqCounter, postRolloverOrder, venueBaseUrl, type VenuePostResult } from "../datasources/venue.ts";
 import { planRfqWrite } from "../rfq-bodies.ts";
 import { parseQuotedOrder } from "../rfq-quotes.ts";
 import { answerOptionOrderViolation, checkQuotedOptions, proveRfqWrite, readRfqTarget, resolveRfqAuth, rfqKindFieldsViolation, signatureRefused } from "./rfq-write.ts";
@@ -670,7 +670,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
       if (action.kind === "rollover") {
         // A rollover open names a position, not cover: no modes, packages or cover reading —
         // its source pool must be live (the venue asks its index; this asks the chain).
-        const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action });
+        const plan = planRfqWrite({ venueUrl: venueBaseUrl(ctx.venueUrl), chainId, clientRequestId: input.clientRequestId, request: action });
         const proof = await proveRfqWrite(ctx, plan, auth.auth);
         if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
         const checked = await checkRolloverWrite(ctx, chainId, action, undefined);
@@ -688,7 +688,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
         if (fixedViolation) return unavailable(chainId, "invalid_order_terms", `modes names fixed_rate, and ${fixedViolation}. The venue refuses the request without it (cork-api 0.4.4). ${UNITS_TOPIC_REFERENCE}`, ctx);
       }
       // ── the proof (before any chain read): the signature must be the requester's, over exactly this body ──
-      const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action });
+      const plan = planRfqWrite({ venueUrl: venueBaseUrl(ctx.venueUrl), chainId, clientRequestId: input.clientRequestId, request: action });
       const proof = await proveRfqWrite(ctx, plan, auth.auth);
       if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
       // ── which cover the request buys ──
@@ -758,7 +758,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
           return unavailable(chainId, "invalid_order_terms", `optionRef option '${action.optionRef.optionId}' not found in answer '${action.optionRef.answerId}' of RFQ '${action.rfqId}' — a counter's optionRef must cite an option of an answer on this RFQ (the venue would 400 this on relay); drop optionRef to counter the envelope at large`, ctx);
         }
       }
-      const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
+      const plan = planRfqWrite({ venueUrl: venueBaseUrl(ctx.venueUrl), chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
       const proof = await proveRfqWrite(ctx, plan, auth.auth);
       if (!proof.ok) return signatureRefused(chainId, plan, proof.message, ctx);
       const res = await postRfqCounter(deps, action.rfqId, { ...plan.body, ...proof.bodyExtra }, proof.venueAuth);
@@ -815,7 +815,7 @@ export async function handleSubmit(input: SubmitInput, ctx: HandlerContext): Pro
     // Each option's LABEL against the cover its template's recipe gives, and against the covers
     // the request asks for — from identities, never the label (cork-cli#6). Relayed either way.
     const coverWarnings = action.status === "quoted" && target.kind !== "rollover" ? await answerOptionsCoverWarnings(chainId, target.rfq, action.options ?? []) : [];
-    const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
+    const plan = planRfqWrite({ venueUrl: venueBaseUrl(ctx.venueUrl), chainId, clientRequestId: input.clientRequestId, request: action, ...(target.kind ? { target: { kind: target.kind } } : {}) });
     // This top-level signature covers the option terms the order signatures do not. The venue
     // verifies it on quoted answers in builds carrying the full-answer proof fix (production
     // cork-api 0.4.6 does); older 0.4.5 builds did not.

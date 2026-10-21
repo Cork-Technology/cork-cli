@@ -848,7 +848,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
         A("rfq-counter", RfqCounterFields).describe(RFQ_COUNTER_DESCRIPTION),
       ])
       .describe("the RFQ write to prove — the SAME fields cork_submit rfq-open / rfq-answer / rfq-counter takes, without `auth`; this call's clientRequestId becomes the write's request_id, so reuse it on the submit"),
-  }).describe("the CorkRfqWrite typed data an RFQ v2 write is signed with (venue domain 'Cork RFQ', version 1, the RFQ's chain): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign it, then cork_submit the same request with auth {method:'signature', signature} and the same clientRequestId. Never signs"),
+  }).describe("the CorkRfqWrite typed data an RFQ v2 write is signed with (domain 'Cork RFQ', version 1, the RFQ's chain, salt = keccak256(UTF-8 canonical configured venue origin)): the exact body the venue will hash — addresses lowercased as the venue stores them — its bodyHash, and the address that must sign (the requester for open and counter, the underwriter for answer; must be `account`). Answer and counter read the RFQ first: its chain and kind are authoritative. Sign the complete returned domain including salt, then cork_submit to the SAME configured venue with the same request, auth {method:'signature', signature} and clientRequestId. Never signs"),
 ]);
 export const PrepareOrdersInput = z.object({
   chainId: ChainId,

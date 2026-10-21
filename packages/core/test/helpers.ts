@@ -136,7 +136,7 @@ export async function proveRfqWrite<T extends { chainId: number; clientRequestId
   else action.requester = signer.address;
   let signature: `0x${string}` = "0x00";
   try {
-    const plan = planRfqWrite({ chainId: input.chainId, clientRequestId: input.clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
+    const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: input.chainId, clientRequestId: input.clientRequestId, request: action as never, ...(kind ? { target: { kind } } : {}) });
     signature = await signer.signTypedData(plan.typedData as never);
   } catch {
     // An input the tool must refuse in words (a bigint where a string belongs) cannot be

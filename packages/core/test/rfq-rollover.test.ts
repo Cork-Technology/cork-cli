@@ -106,7 +106,7 @@ const LIVE = NOW + 86_400n * 30n;
 
 async function signed(input: { chainId: number; clientRequestId: string; action: Record<string, unknown> }, target?: { kind: "rollover" }): Promise<typeof input> {
   const { auth: _a, ...request } = input.action;
-  const plan = planRfqWrite({ chainId: input.chainId, clientRequestId: input.clientRequestId, request: request as never, ...(target ? { target } : {}) });
+  const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: input.chainId, clientRequestId: input.clientRequestId, request: request as never, ...(target ? { target } : {}) });
   const signer = plan.signer === REQUESTER.address.toLowerCase() ? REQUESTER : UNDERWRITER;
   const signature = await signer.signTypedData(plan.typedData as never);
   return { ...input, action: { ...input.action, auth: { method: "signature", signature } } };
@@ -243,7 +243,7 @@ describe("rollover RFQ writes (cork_prepare_orders rfq-write → cork_submit)", 
 
   it("surfaces an older API's explicit-role rejection without stripping or retrying the signed role", async () => {
     const request = { ...OPEN, premiumToken: { one_of: [...OPEN.premiumToken.one_of] }, requesterRole: "cst" as const };
-    const plan = planRfqWrite({ chainId: 42161, clientRequestId: openInput.clientRequestId, request });
+    const plan = planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: openInput.clientRequestId, request });
     const signature = await REQUESTER.signTypedData(plan.typedData);
     const seen: Seen[] = [];
     const result = await runTool("cork_submit", {
@@ -259,7 +259,7 @@ describe("rollover RFQ writes (cork_prepare_orders rfq-write → cork_submit)", 
   it("rejects requesterRole on new-position writes rather than dropping it in the SDK builder", async () => {
     const request = { ...OPEN, kind: "new_position" as const, source: undefined, premiumToken: undefined,
       requesterRole: "cst" as const, modes: ["liquidity_only" as const], packageIds: ["package"], notionalAssets: "100" };
-    expect(() => planRfqWrite({ chainId: 42161, clientRequestId: "role-wrong-kind-0001", request })).toThrow();
+    expect(() => planRfqWrite({ venueUrl: 'https://api-phoenix.cork.tech', chainId: 42161, clientRequestId: "role-wrong-kind-0001", request })).toThrow();
     const seen: Seen[] = [];
     const prepared = await runTool("cork_prepare_orders", {
       chainId: 42161, account: REQUESTER.address, clientRequestId: "role-wrong-kind-0001",

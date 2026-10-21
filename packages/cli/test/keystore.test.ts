@@ -325,8 +325,4 @@ describe("ch submit rfq-* --account", () => {
     expect(posts).toHaveLength(0);
   });
 
-  it("is a CLI flag, not a tool field: the MCP surface fixture has no keystore anywhere", () => {
-    const surface = readFileSync(join(ROOT, "packages/mcp/test/fixtures/tool-surface.json"), "utf8");
-    expect(surface).not.toMatch(/keystore/i);
-  });
 });

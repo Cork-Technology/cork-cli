@@ -7,6 +7,10 @@ Human-readable text and log formats are not covered.
 
 ## [Unreleased]
 
+### Security
+
+- RFQ write signatures now bind the canonical configured venue origin with standard EIP-712 `domain.salt = keccak256(UTF-8(origin))`. Prepare and submit use the same trusted endpoint selection; wallet and MCP projections retain the full salted domain. Low-level SDK `rfqWriteTypedData` requires `venueOrigin` and `planRfqWrite` requires `venueUrl`. No legacy-unbound fallback. Coordinate with the salt-bound API (`RFQ_VENUE_ORIGIN` required before boot) and Factory; pause signed writers during cutover and re-sign pending proofs. History, proof-independent stored-body retries, API-key semantics and LOP/settler domains are unchanged. Released `v0.8.0-rc.1` remains affected until separately released; no release/deployment is implied.
+
 ## [0.8.0-rc.1] — Prepared (unreleased)
 
 ### Breaking

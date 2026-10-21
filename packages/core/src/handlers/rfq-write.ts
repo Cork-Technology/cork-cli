@@ -296,7 +296,7 @@ export async function handleRfqWrite(input: PrepareOrdersInput, action: Extract<
       quotedCheck = await checkQuotedOptions(ctx, chainId, target.rfq, request.underwriter, request.options ?? []);
       if (!quotedCheck.ok) return quotedCheck.envelope;
     }
-    const plan = planRfqWrite({ chainId, clientRequestId: input.clientRequestId, request, ...(target.kind ? { target: { kind: target.kind } } : {}) });
+    const plan = planRfqWrite({ venueUrl: venueBaseUrl(ctx.venueUrl), chainId, clientRequestId: input.clientRequestId, request, ...(target.kind ? { target: { kind: target.kind } } : {}) });
     if (!isAddressEqual(plan.signer, input.account)) {
       const role = plan.operation === "answer" ? "underwriter" : "requester";
       return unavailable(chainId, "invalid_order_terms", `the ${role} (${plan.signer}) must sign this ${plan.operation}, but account is ${input.account} — set account to the ${role}`, ctx);
