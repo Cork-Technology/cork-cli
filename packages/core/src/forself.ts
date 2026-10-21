@@ -31,10 +31,14 @@ export const forSelfBindingAbi = parseAbi([
   "function CORK() view returns (address)",
   "function LOP() view returns (address)",
   "function WHITELIST() view returns (address)",
+  "function EXACT_SETTLER() view returns (address)",
+  "function PARTIAL_SETTLER() view returns (address)",
 ]);
 
 // One human-readable declaration per entrypoint, byte-identical to the Solidity structs.
 export const forSelfAbi = parseAbi([
+  "struct RolloverCall { address target; uint256 value; bytes callData; bool allowFailure; bool isDelegateCall; }",
+  "struct RolloverIntent { address rolloverContract; bytes32 orderDigest; uint64 deadline; uint64 nonce; RolloverCall[] preRolloverHooks; RolloverCall[] midRolloverHooks; RolloverCall[] postRolloverHooks; RolloverCall[] premiumHooks; }",
   // pool surface (13) — receiver/owner are structurally the caller and DO NOT appear
   "function depositForSelf((bytes32 poolId, uint256 collateralAssetsIn, uint256 minCptAndCstSharesOut, uint256 deadline) params) returns (uint256 cptAndCstSharesOut)",
   "function mintForSelf((bytes32 poolId, uint256 cptAndCstSharesOut, uint256 maxCollateralAssetsIn, uint256 deadline) params) returns (uint256 collateralAssetsIn)",
@@ -51,6 +55,8 @@ export const forSelfAbi = parseAbi([
   "function withdrawOtherForSelf((bytes32 poolId, uint256 referenceAssetsOut, uint256 maxCptSharesIn, uint256 deadline) params) returns (uint256 cptSharesIn, uint256 actualCollateralAssetsOut, uint256 actualReferenceAssetsOut)",
   // LOP fill surface (1)
   "function fillOrderForSelf((bytes32 poolId, (uint256 salt, uint256 maker, uint256 receiver, uint256 makerAsset, uint256 takerAsset, uint256 makingAmount, uint256 takingAmount, uint256 makerTraits) order, bytes signature, uint256 amount, uint256 takerTraits, bytes extension, uint256 deadline) params) returns (uint256 makingAmount, uint256 takingAmount, bytes32 orderHash)",
+  // Rollover surface — all caller identities are derived on-chain, never parameters.
+  "function rolloverForSelf((bytes32 orderDigest, bytes originData, bytes userSig, RolloverIntent intent, uint256 fillerSrcCst, uint256 premiumCap, uint256 minDstPerSrc, bytes fillerAuthSig, uint256 deadline) params)",
 ]);
 
 export type ForSelfPoolActionType = Exclude<PhoenixAction["type"], "authority-onboard" | "authority-revoke">;

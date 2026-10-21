@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import safeArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/Safe.sol/Safe.json";
 import proxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json";
 import multiSendArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/libraries/MultiSendCallOnly.sol/MultiSendCallOnly.json";
-import { decodeAbiParameters, encodeFunctionData, getAddress, hashTypedData, parseAbi, type Hex, keccak256, encodeAbiParameters, toHex, zeroAddress, zeroHash } from "viem";
+import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, getAddress, hashTypedData, pad, parseAbi, type Hex, keccak256, encodeAbiParameters, toHex, zeroAddress, zeroHash } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   buildRolloverIntent,
@@ -29,6 +29,7 @@ import {
 } from "@cork/core";
 import { stubRpc, type StubCall } from "./helpers.ts";
 import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
+import { forSelfAbi } from "../src/forself.ts";
 import { chainStatusName } from "../src/rollover-verify.ts";
 
 // The public Anvil #1 key — a well-known test vector, never a secret: the EXCLUSIVE filler.
@@ -40,6 +41,7 @@ const CHAIN = 8453;
 const holder = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
 const FILLER = getAddress("0x00000000000000000000000000000000000000f1");
 const CLONE = getAddress("0x0000000000000000000000000000000000000c10");
+const FOR_SELF = getAddress("0x0000000000000000000000000000000000000f50");
 const SRC_CST = getAddress("0x00000000000000000000000000000000000000c1");
 const DST_CST = getAddress("0x00000000000000000000000000000000000000c2");
 const PREMIUM = getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
@@ -96,7 +98,7 @@ const PREDICTED_ELSEWHERE = getAddress("0x0000000000000000000000000000000000000b
  *  the unwind is paused or the pool expired), previewDeposit(c) = c × 10^(18 − d) (0 while
  *  deposits are paused or the pool expired). depositHaircutBps models a pool manager whose
  *  deposit mints fewer shares (a future protocol fee), to show the floor follows the chain. */
-interface PoolSpec { pm: string; cpt: string; cst: string; collateral: string; depositPaused?: boolean; unwindPaused?: boolean; expired?: boolean; depositHaircutBps?: bigint }
+interface PoolSpec { pm: string; cpt: string; cst: string; collateral: string; reference?: string; depositPaused?: boolean; unwindPaused?: boolean; expired?: boolean; depositHaircutBps?: bigint }
 /** ERC-7484 attestations: module → attester → the module types it attests. */
 type Attestations = Record<string, Record<string, bigint[]>>;
 interface PoolWorld {
@@ -114,10 +116,10 @@ interface PoolWorld {
   checkError?: Error;
   /** Every pool manager's shares() throws: no manager answered, which is not an absent pool. */
   sharesError?: Error;
-  /** A PartialSettler's accounting for every order: the src cST consumed so far, and the filler
-   *  slots already used, keyed by the filler account (the settler keys them on (BaseFiller,
-   *  bytes32(account))). error: the views revert or fail. */
-  partial?: { consumed?: bigint; filled?: string[]; settled?: string[]; error?: Error };
+  /** Per-helper slots: the existing BaseFiller shorthand remains scoped to BaseFiller,
+   *  never inherited by the new ForSelf helper. */
+  partial?: { consumed?: bigint; filled?: string[]; settled?: string[]; filledByHelper?: Record<string, string[]>; error?: Error };
+  forSelf?: { cork?: string; whitelist?: string; exact?: string; partial?: string; error?: Error };
 }
 const lc = (a: string) => a.toLowerCase();
 const execReverted = (why: string) => new Error(`execution reverted: ${why}`);
@@ -129,6 +131,7 @@ const FLOOR_GIVEN = "1000000000000000000";
 const PRIMARY_LABEL = rollover.generations!.find((g) => g.primary)!.label;
 const pmOf = async (label: string) => (await resolveGenerations(CHAIN)).generations.find((g) => g.label === label)!.phoenix!.poolManager as string;
 const PRIMARY_PM = await pmOf(PRIMARY_LABEL);
+const PRIMARY_WHITELIST = (await resolveGenerations(CHAIN)).generations.find((g) => g.label === PRIMARY_LABEL)!.phoenix!.whitelistManager!;
 const PREVIOUS_PM = await pmOf(PREVIOUS.label);
 const OWNER_PULL = getAddress(rollover.modules!.ownerTokenPull!);
 const DST_CPT_TRANSFER = getAddress(rollover.modules!.postRolloverDstCptTransfer!);
@@ -162,6 +165,19 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
   for (const [m, by] of Object.entries(o.attestations ?? {})) for (const [a, types] of Object.entries(by)) ((attestations[lc(m)] ??= {})[lc(a)] ??= []).push(...types);
   return stubRpc((c: StubCall) => {
     switch (c.functionName) {
+      case "CORK":
+      case "WHITELIST":
+      case "EXACT_SETTLER":
+      case "PARTIAL_SETTLER": {
+        if (lc(c.address) !== lc(FOR_SELF)) throw execReverted("not the ForSelf adapter");
+        if (o.forSelf?.error) throw o.forSelf.error;
+        return c.functionName === "CORK" ? o.forSelf?.cork ?? PRIMARY_PM
+          : c.functionName === "WHITELIST" ? o.forSelf?.whitelist ?? PRIMARY_WHITELIST
+          : c.functionName === "EXACT_SETTLER" ? o.forSelf?.exact ?? EXACT : o.forSelf?.partial ?? PARTIAL;
+      }
+      case "CORK_POOL_MANAGER":
+        if (![EXACT, PARTIAL].map(lc).includes(lc(c.address))) throw execReverted("not the selected settler");
+        return PRIMARY_PM;
       case "orderStatus": return BigInt(o.status ?? 1);
       case "isDeployedRolloverContract": factoryOnly(c); return [...clones.values()].some((v) => v.toLowerCase() === String(c.args?.[0]).toLowerCase());
       case "rolloverContractOf": factoryOnly(c); return clones.get(String(c.args?.[0]).toLowerCase()) ?? zeroAddress;
@@ -172,7 +188,7 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
         return getAddress(owner);
       }
       case "shares": { if (o.sharesError) throw o.sharesError; const spec = poolAt(c); return spec ? [spec.cpt, spec.cst] : [zeroAddress, zeroAddress]; }
-      case "market": { const spec = poolAt(c); if (!spec) throw execReverted("NotInitialized()"); return { collateralAsset: getAddress(spec.collateral) }; }
+      case "market": { const spec = poolAt(c); if (!spec) throw execReverted("NotInitialized()"); return { collateralAsset: getAddress(spec.collateral), referenceAsset: getAddress(spec.reference ?? PREMIUM) }; }
       case "decimals": { const d = TOKEN_DECIMALS[lc(c.address)]; if (d === undefined) throw execReverted(`${c.address} is no stubbed token`); return d; }
       case "previewUnwindMint": {
         if (o.previewError) throw o.previewError;
@@ -223,10 +239,11 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
         if (c.functionName === "rolloverAccountingOf") return { participantSlotCount: o.partial?.filled?.length ?? 0, dstCstEscrowed: 0n, srcCstConsumed: o.partial?.consumed ?? 0n };
         const [, fillerArg, subFiller] = c.args as [string, string, string];
         const baseFillers = [BASE_FILLER, PREVIOUS.baseFiller as string].map(lc);
-        if (!baseFillers.includes(lc(fillerArg))) throw new Error(`the slot must be keyed on the BaseFiller (the settler's caller), got ${fillerArg}`);
+        if (![...baseFillers, lc(FOR_SELF)].includes(lc(fillerArg))) throw new Error(`unknown helper in partial-slot read: ${fillerArg}`);
         const account = lc(`0x${subFiller.slice(-40)}`);
-        const filled = o.partial?.filled?.some((a) => lc(a) === account) ?? false;
-        const settled = o.partial?.settled?.some((a) => lc(a) === account) ?? false;
+        const ownFilled = o.partial?.filledByHelper?.[lc(fillerArg)] ?? (baseFillers.includes(lc(fillerArg)) ? o.partial?.filled : undefined);
+        const filled = ownFilled?.some((a) => lc(a) === account) ?? false;
+        const settled = baseFillers.includes(lc(fillerArg)) && (o.partial?.settled?.some((a) => lc(a) === account) ?? false);
         return { rollover: { dstCstProduced: filled ? 10n ** 18n : 0n, srcCstProvided: filled ? 10n ** 18n : 0n, filledAt: filled ? NOW - 60n : 0n, premiumFired: filled }, settlementDestination: filled ? getAddress(account) : zeroAddress, settled };
       }
       case "isValidSignature":
@@ -236,7 +253,7 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
         return o.isValidSignature ?? "0x1626ba7e";
       default: throw new Error(`no stub for ${c.functionName}`);
     }
-  }, { code: o.code ?? {} });
+  }, { code: { [lc(FOR_SELF)]: "0x6000", ...(o.code ?? {}) } });
 }
 function venue(routes: Array<{ match: string; status?: number; body: unknown }>, seen: Seen[] = []) {
   return async (url: string, init?: RequestInit): Promise<Response> => {
@@ -253,6 +270,126 @@ const codes = (env: { warnings: Array<{ code: string }> }) => env.warnings.map((
 const job = (env: { data: unknown }) => (decodeBaseFillerCall((env.data as { calldata: Hex }).calldata).args[0] as unknown as { minDstPerSrc: bigint }).minDstPerSrc;
 type Data = Record<string, unknown> & { calldata: Hex; approvals: Array<{ token: string; spender: string; amount: string; kind: string; satisfied?: boolean }> };
 
+describe("rollover-fill ForSelf account-CALL route", () => {
+  const forSelf = { adapter: FOR_SELF, deadline: (NOW + 300n).toString() };
+
+  it("preserves default BaseFiller, but explicit ForSelf funds only its caller and emits no owner wrapper or receiver parameter", async () => {
+    const order = await signedOrder();
+    const direct = await fill({ orderDigest: order.digest, signedOrder: order.payload });
+    expect(direct.data).toMatchObject({ to: BASE_FILLER, from: FILLER, fillFunction: "execute" });
+    const selected = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf, premiumCap: "100", fillerSrcCst: "1000000000000000000", minDstPerSrc: FLOOR_GIVEN });
+    expect(selected.state).toBe("ok");
+    const d = selected.data as Data;
+    expect(d).toMatchObject({ to: FOR_SELF, from: FILLER, fillFunction: "rolloverForSelf", destination: FILLER, forSelf: { bindingsChecked: true, sourceIdentityVerified: false, partialSlot: { filler: FOR_SELF, subFiller: pad(FILLER) } } });
+    expect(d).not.toHaveProperty("batch");
+    expect(d.execution).toMatchObject({ kind: "account-call", sign: "wallet-session" });
+    expect(direct.data).toMatchObject({ execution: { kind: "eth-transaction", sign: "eth_signTransaction" } });
+    expect(d.approvals.map((a) => [a.spender, a.amount, a.kind])).toEqual([[FOR_SELF, "1000000000000000000", "exact"], [FOR_SELF, "100", "cap"]]);
+    const decoded = decodeFunctionData({ abi: forSelfAbi, data: d.calldata });
+    expect(decoded.functionName).toBe("rolloverForSelf");
+    const p = decoded.args[0] as Record<string, unknown>;
+    expect(p).toMatchObject({ orderDigest: order.digest, originData: encodeOriginData(gaslessOrderOf(order.built.order)), userSig: order.payload.signature, fillerSrcCst: 10n ** 18n, premiumCap: 100n, minDstPerSrc: 10n ** 18n, deadline: NOW + 300n });
+    expect(p).not.toHaveProperty("receiver");
+    expect(p).not.toHaveProperty("subFiller");
+    expect(p).not.toHaveProperty("settler");
+  });
+
+  it("refuses missing, disabled, old-ABI, mismatched or unreadable deployment bindings without an allowance artifact", async () => {
+    const order = await signedOrder();
+    for (const world of [
+      { code: { [lc(FOR_SELF)]: "0x" } },
+      { forSelf: { exact: zeroAddress, partial: zeroAddress } },
+      { forSelf: { cork: PREVIOUS_PM } },
+      { forSelf: { whitelist: zeroAddress } },
+      { forSelf: { exact: PARTIAL, partial: EXACT } },
+      { forSelf: { error: execReverted("UnknownSelector()") } },
+      { forSelf: { error: NOT_A_REVERT } },
+    ]) {
+      const env = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf }, { resolveRpc: chain(world) });
+      expect(["conflict", "unavailable"]).toContain(env.state);
+      expect(env.data).toBeNull();
+    }
+    const offline = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf, minDstPerSrc: FLOOR_GIVEN }, { resolveRpc: async () => null });
+    expect(offline.state).toBe("unavailable");
+    expect(codes(offline)).toContain("funding_needs_rpc");
+    expect(offline.data).toBeNull();
+  });
+
+  it("refuses JIT before target/spender/slot fallback, preserving direct Safe→BaseFiller creation as a separate operation", async () => {
+    const order = await signedOrder({ jitMarketHash: `0x${"ab".repeat(32)}` });
+    const env = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf });
+    expect(env.state).toBe("unavailable");
+    expect(codes(env)).toContain("for_self_market_creation_unsupported");
+    expect(env.data).toBeNull();
+  });
+
+  it("refuses expired/beyond-order deadlines, zero floor, old wire and the owner-signed bounded mode", async () => {
+    const order = await signedOrder();
+    for (const extra of [
+      { forSelf: { ...forSelf, deadline: NOW.toString() } },
+      { forSelf: { ...forSelf, deadline: (NOW + 1201n).toString() } },
+      { forSelf, minDstPerSrc: "0" },
+      { forSelf, bounded: { fundingModule: SRC_CPT, unwindModule: DST_CPT, outputModule: FOR_SELF } },
+    ]) {
+      const env = await fill({ orderDigest: order.digest, signedOrder: order.payload, ...extra });
+      expect(env.state).toBe("unavailable");
+      expect(env.data).toBeNull();
+    }
+    const old = await signedOrder({ settler: PREVIOUS.exactSettler as Hex });
+    const env = await fill({ orderDigest: old.digest, signedOrder: old.payload, forSelf });
+    expect(env.state).toBe("unavailable");
+    expect(codes(env)).toContain("unsupported_for_self_route");
+  });
+
+  it("keeps helper-specific partial slots independent, rejects a reused ForSelf slot, and refuses unknown accounting", async () => {
+    const order = await signedOrder({ settler: PARTIAL, allowPartialFills: true });
+    const args = { orderDigest: order.digest, signedOrder: order.payload, forSelf, fillerSrcCst: "400000000000000000" };
+    const previousHelperUsed = await fill(args, { resolveRpc: chain({ partial: { filledByHelper: { [lc(BASE_FILLER)]: [FILLER] } } }) });
+    expect(previousHelperUsed.state).toBe("ok");
+    const used = await fill(args, { resolveRpc: chain({ partial: { filledByHelper: { [lc(FOR_SELF)]: [FILLER] } } }) });
+    expect(used.state).toBe("unavailable");
+    expect(used.data).toBeNull();
+    const unavailable = await fill(args, { resolveRpc: chain({ partial: { error: NOT_A_REVERT } }) });
+    expect(unavailable.state).toBe("unavailable");
+    expect(unavailable.data).toBeNull();
+  });
+
+  it("does not inherit BaseFiller direct reservations and verifies authorization for the actual caller", async () => {
+    const directReservation = await signedOrder({ exclusiveFiller: BASE_FILLER });
+    const refused = await fill({ orderDigest: directReservation.digest, signedOrder: directReservation.payload, forSelf });
+    expect(refused.state).toBe("unavailable");
+    expect(codes(refused)).toContain("private_order");
+    const order = await signedOrder({ exclusiveFiller: exclusive.address });
+    const otherAuth = await exclusive.signTypedData(fillerAuthTypedData({ chainId: CHAIN, settler: EXACT, orderDigest: order.digest, account: holder.address }));
+    const replay = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf, fillerAuthSig: otherAuth });
+    expect(replay.state).toBe("conflict");
+    const auth = await exclusive.signTypedData(fillerAuthTypedData({ chainId: CHAIN, settler: EXACT, orderDigest: order.digest, account: FILLER }));
+    const accepted = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf, fillerAuthSig: auth });
+    expect(accepted.state).toBe("ok");
+    expect(accepted.data).toMatchObject({ fillerAuth: "eoa-verified", destination: FILLER });
+  });
+
+  it("does not waive authorization for an order reserved to the shared ForSelf adapter", async () => {
+    const order = await signedOrder({ exclusiveFiller: FOR_SELF });
+    const env = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf });
+    expect(env.state).toBe("unavailable");
+    expect(codes(env)).toContain("shared_adapter_reservation");
+    expect(env.data).toBeNull();
+  });
+
+  it("rejects unrelated premium funding but permits a signed destination cash premium", async () => {
+    const order = await signedOrder({ premiumToken: OTHER_COLLATERAL });
+    const args = { orderDigest: order.digest, signedOrder: order.payload, forSelf, minDstPerSrc: FLOOR_GIVEN };
+    const refused = await fill(args);
+    expect(refused.state).toBe("unavailable");
+    expect(codes(refused)).toContain("for_self_premium_not_in_markets");
+    expect(refused.data).toBeNull();
+    const destinationQuote = await fill(args, { resolveRpc: chain({ pools: { [DST_POOL]: { reference: OTHER_COLLATERAL } } }) });
+    expect(destinationQuote.state).toBe("ok");
+    expect((destinationQuote.data as Data).approvals).toContainEqual(expect.objectContaining({ token: OTHER_COLLATERAL, spender: FOR_SELF }));
+  });
+});
+
 describe("rollover-fill bounded Safe batch", () => {
   const modules = { fundingModule: "0x00000000000000000000000000000000000000a1", unwindModule: "0x00000000000000000000000000000000000000a2", outputModule: "0x00000000000000000000000000000000000000a3" } as const;
   const srcCpt = "0x00000000000000000000000000000000000000b1" as const;
@@ -264,6 +401,16 @@ describe("rollover-fill bounded Safe batch", () => {
     midRolloverHooks: [{ target: modules.unwindModule, value: 0n, isDelegateCall: true, allowFailure: false, callData: encodeFunctionData({ abi: guardAbi, functionName: "execute", args: [numerator, denominator] }) }],
     postRolloverHooks: [{ target: modules.outputModule, value: 0n, isDelegateCall: true, allowFailure: false, callData: encodeFunctionData({ abi: guardAbi, functionName: "execute", args: [9n, 10n] }) }],
     premiumHooks: [],
+  });
+  it("refuses signed staged funding on ForSelf even when the bounded option is omitted", async () => {
+    const order = await signedOrder({ settler: PARTIAL, allowPartialFills: true, hooks: hooks() });
+    const env = await fill({
+      orderDigest: order.digest, signedOrder: order.payload,
+      forSelf: { adapter: FOR_SELF, deadline: (NOW + 300n).toString() },
+    });
+    expect(env.state).toBe("unavailable");
+    expect(codes(env)).toContain("unsupported_for_self_route");
+    expect(env.data).toBeNull();
   });
   function supportedChain(rolled: bigint, allowance: bigint) {
     const singleton = "0x00000000000000000000000000000000000005a1";
@@ -449,7 +596,9 @@ describe("rollover-fill — the filler's BaseFiller.execute from the signed payl
     const selfRefused = await fill({ orderDigest: self.digest, signedOrder: self.payload });
     expect(selfRefused.state).toBe("unavailable");
     expect(codes(selfRefused)).toEqual(["private_order"]);
-    expect(selfRefused.warnings[0]!.message).toMatch(/YOUR OWN signature/u);
+    const selfData = selfRefused.data as { fillerAuthTypedData: { domain: { chainId: number; verifyingContract: string }; message: Record<string, unknown> } };
+    expect(selfData.fillerAuthTypedData.domain).toMatchObject({ chainId: CHAIN, verifyingContract: EXACT });
+    expect(selfData.fillerAuthTypedData.message).toEqual({ orderDigest: self.digest, destination: FILLER, subFiller: pad(FILLER) });
     // A reservation for BaseFiller itself is the one direct pass through this path.
     const forBaseFiller = await signedOrder({ exclusiveFiller: BASE_FILLER as `0x${string}` });
     const direct = await fill({ orderDigest: forBaseFiller.digest, signedOrder: forBaseFiller.payload });
@@ -737,7 +886,7 @@ describe("rollover-fill — the sizes the settler admits (data.fillRange)", () =
     for (const partial of [{ filled: [FILLER] }, { settled: [FILLER] }]) {
       const again = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "100000000000000000" }, { resolveRpc: chain({ partial }) });
       expect(again.state).toBe("unavailable");
-      expect(again.warnings[0]!.message).toMatch(/already filled a leg of this order: the PartialSettler keeps one leg per filler slot \(BaseFiller, bytes32\(.*\)\), so a second fill reverts Settler__AlreadyFilled/u);
+      expect(again.data).toBeNull();
     }
     // Another account's used slot does not block this one.
     const other = await fill({ orderDigest: o.digest, signedOrder: o.payload, fillerSrcCst: "100000000000000000" }, { resolveRpc: chain({ partial: { filled: [PREDICTED_ELSEWHERE] } }) });

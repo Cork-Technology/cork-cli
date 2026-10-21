@@ -6,6 +6,11 @@ output, tool names, input schemas, exit codes, and the released public SDK contr
 Human-readable text and log formats are not covered.
 
 ## [Unreleased]
+### Added
+
+- Explicit `rollover-fill.forSelf` prepares an existing-market `CorkForSelfAdapter.rolloverForSelf` account CALL for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. Default BaseFiller execution is unchanged. Premium funding is limited to signed-market cash assets; shared-adapter reservations, JIT creation and owner-bounded combinations refuse without fallback.
+- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access: use the separately admitted account/session wallet SDK, not an EOA transaction from the Safe. No deployed adapter default or RC3 availability is implied; deployment/configuration and tracking integration remain separate release gates.
+
 
 ## [0.8.0-rc.2] — preparation, not yet published
 

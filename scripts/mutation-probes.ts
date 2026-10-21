@@ -4280,7 +4280,7 @@ const CATALOG: Mutant[] = [
     // no FillerAuth, and the settler reverts Settler__UnauthorizedFiller (msg.sender is BaseFiller).
     id: "rollover-fill-exclusive-caller-is-account",
     file: "packages/core/src/handlers/prepare-rollover-fill.ts",
-    find: "!isAddressEqual(order.exclusiveFiller, baseFiller);",
+    find: "!isAddressEqual(order.exclusiveFiller, fillHelper);",
     replace: "!isAddressEqual(order.exclusiveFiller, account);",
     tests: [T.rolloverFill],
   },

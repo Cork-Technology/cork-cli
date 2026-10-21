@@ -89,6 +89,9 @@ function describeLeg(leg: DecodedLeg, o: SummaryOptions): string {
       const p = leg.params as Record<string, unknown> | undefined;
       const pool = p && typeof p.poolId === "string" ? ` for pool ${short(p.poolId)}` : "";
       const deadline = p && typeof p.deadline === "bigint" ? `, deadline ${p.deadline}` : "";
+      if (leg.action === "rolloverForSelf" && p) {
+        return `run 'rolloverForSelf' on the ForSelf adapter ${who(leg.to, o)}${deadline} — source cST ${p.fillerSrcCst}, premium cap ${p.premiumCap}, destination/source floor ${p.minDstPerSrc} (1e18 = 1); funding, fresh cST and refunds are the CALLER, with no receiver/subFiller parameter. Execute via the admitted Safe/Guard CALL path; client caps/floors are not session-policy limits. Verify the improved deployment and fixed settlers`;
+      }
       return `run '${leg.action}' on the ForSelf adapter ${who(leg.to, o)}${pool}${deadline} — inputs are pulled from the caller, every output goes back to the CALLER (no receiver parameter exists); verify the adapter address is your integrator's deployment`;
     }
     case "lop": {

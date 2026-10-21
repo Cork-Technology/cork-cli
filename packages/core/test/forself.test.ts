@@ -42,6 +42,8 @@ const FORGE_SELECTORS: Record<string, string> = {
   withdrawForSelf: "0x38fe92e0",
   withdrawOtherForSelf: "0x5fd35a1a",
   fillOrderForSelf: "0xa9aa7877",
+  // Actual production-solc0.8.30 compiled rollover ABI, not a client self-encoding fixture.
+  rolloverForSelf: "0x2f5e9865",
 };
 
 describe("forself: selector parity with the compiled example adapters", () => {
@@ -51,8 +53,8 @@ describe("forself: selector parity with the compiled example adapters", () => {
       expect(ours[name], name).toBe(expected);
     }
   });
-  it("every entrypoint in the ABI is covered by the fixture (no unpinned additions)", () => {
-    const names = forSelfAbi.filter((f) => f.type === "function" && !["CORK", "LOP"].includes(f.name)).map((f) => (f as { name: string }).name);
+  it("rejects ABI entrypoints with no independently compiled selector oracle", () => {
+    const names = forSelfAbi.filter((entry) => entry.type === "function").map((entry) => entry.name);
     expect(names.sort()).toEqual(Object.keys(FORGE_SELECTORS).sort());
   });
 });
