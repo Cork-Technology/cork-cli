@@ -16,6 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, expect } from "vitest";
 
+// No test run ever sends analytics, even with a Cork project key and the opt-in in the shell:
+// DO_NOT_TRACK wins over every other analytics setting (packages/mcp/src/lib/analytics.ts), and
+// every process a test spawns inherits it. Tests that exercise the config resolver pass their
+// own env object and never read this one.
+process.env["DO_NOT_TRACK"] = "1";
+
 beforeAll(() => {
   const file = expect.getState().testPath ?? "unknown";
   const tag = createHash("sha256").update(file).digest("hex").slice(0, 12);

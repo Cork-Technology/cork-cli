@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiComponent, isReviewedApiRevision } from "../datasources/native-api-contract.mjs";
 import { venueBaseUrl } from "../datasources/venue.ts";
 import { fetchWithTimeout } from "../fetch-timeout.ts";
+import { corkClientHeaders } from "../cork-client.ts";
 import type { HandlerContext } from "./shared.ts";
 
 const Metadata = z.object({
@@ -24,7 +25,7 @@ export async function readNativeApiCapability(ctx: HandlerContext): Promise<Nati
       return { supported: false, code: "native_api_unavailable", reason: "the configured API URL cannot be admitted for metadata reads" };
     }
     let body: unknown;
-    const response = await fetchWithTimeout(url.href, { method: "GET", redirect: "error", ...(ctx.signal ? { signal: ctx.signal } : {}) }, 10_000, async (input, init) => {
+    const response = await fetchWithTimeout(url.href, { method: "GET", redirect: "error", headers: corkClientHeaders(ctx.corkClient), ...(ctx.signal ? { signal: ctx.signal } : {}) }, 10_000, async (input, init) => {
       const response = await (ctx.venueFetch ?? fetch)(input, init);
       // Keep the deadline and composed cancellation signal alive while the body is read.
       if (response.ok && !response.redirected) body = await response.json();

@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
-const env = { ...process.env, CORK_CONFIG_NO_FETCH: "1", CORK_NO_UPDATE_NOTIFIER: "1" };
+const env = { ...process.env, CORK_CONFIG_NO_FETCH: "1", CORK_NO_UPDATE_NOTIFIER: "1", DO_NOT_TRACK: "1" };
 
 /** Start `ch mcp …`, send SIGTERM once its readiness line appears, and report how it exited. */
 function exitAfterSignal(args: string[], readyMarker: string): Promise<{ code: number | null; signal: string | null; stderr: string; stopMs: number }> {

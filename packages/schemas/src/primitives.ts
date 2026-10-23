@@ -52,6 +52,10 @@ export const UintStr = z
   .describe("unsigned integer, decimal string")
   .meta({ id: "UintStr" });
 
+/** A non-negative decimal-fraction string ("0.041"): the shape of every `premiumAnnualized`.
+ *  Scale and caps are the handlers' (venue policy); this is the structure only. */
+export const DECIMAL_FRACTION_PATTERN = /^[0-9]+(\.[0-9]+)?$/;
+
 /** Token amount: same wire shape as UintStr, but the description teaches the unit/scale — the
  *  measured top parameter-failure class for DeFi tool servers is exactly wrong-scale amounts
  *  (MCP-Atlas: up to 45% syntax/format errors on financial servers). Rides every amount field

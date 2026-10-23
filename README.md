@@ -283,6 +283,7 @@ always stay client-side (see `cork_capabilities topic:"signing"`).
 | `CORK_CONFIG_FILE` / `CORK_CONFIG_NO_OVERRIDE` | A local `config.json` that adds or replaces whole deployment sets, moves a chain's primary, or restricts the visible sets (`only`). `=1` on the second turns the layer off. Each result that the override shaped warns `config_override_active`. |
 | `CORK_PROBE_BUDGET` | Default eth_call budget of the offers probe walk, per side (integer 1..25; default 6; a per-call `probeBudget` input wins). Values outside the range are ignored. |
 | `CORK_DEFAULTS_URL` / `CORK_CONFIG_CACHE_FILE` / `CORK_RPC_CACHE_FILE` | Fetch and cache settings for the address config. The config is `cork-defaults.v2.json` (schema 2: per chain `{ primary, sets }` of generations, each block with its wire). |
+| `CORK_MCP_ANALYTICS` / `POSTHOG_KEY` / `POSTHOG_HOST` / `CORK_ENV` | Analytics for Cork's hosted deployment; off unless Cork's deployment config enables it (`CORK_MCP_ANALYTICS=1` and a Cork project key). `DO_NOT_TRACK=1` or `CORK_TELEMETRY=0` turn it off. |
 
 `GET /docs/signing` serves the sign-and-broadcast guide as markdown. One constant backs it,
 `cork_capabilities topic:"signing"` and the server's `initialize` instructions, so the three
@@ -508,6 +509,48 @@ endpoint must serve `eth_getLogs` over at least 1,000 blocks. An explicit endpoi
 back, so a refusal there fails loudly and names the host.
 With an Envio token (`ENVIO_HYPERSYNC_TOKEN`), the event scans use HyperSync and never call
 `eth_getLogs` on your endpoint.
+
+## What this sends to Cork
+
+**The CLI and the local MCP server collect nothing.** There is no analytics SDK, no telemetry,
+and no crash reporting in `ch` or in `ch mcp` (stdio). The only thing they add is a client name
+on their own requests to Cork's API (`api-phoenix.cork.tech`, or whatever `CORK_VENUE_URL`
+names):
+
+| Surface | `X-Cork-Client` | `User-Agent` |
+|---|---|---|
+| `ch <command>` | `cork-cli/<version>` | `cork-cli/<version> Bun/<bun version>` |
+| `ch mcp` (stdio, on your machine) | `cork-cli-mcp/<version>` | `cork-cli-mcp/<version> (surface=mcp; client=<your MCP client>) Bun/<bun version>` |
+| the SDK (`@cork/core`) | `cork-sdk/<version>` | `cork-sdk/<version> <runtime>/<version>` |
+
+Any `User-Agent` already on such a request is kept, after these tokens. In a
+browser, the SDK's `X-Cork-Client` header makes each request to Cork's API a CORS-preflighted one
+(the API allows the header).
+
+`<your MCP client>` is a name from a fixed list (`claude-code`, `claude-ai`, `cursor`, `vscode`,
+`codex`, `chatgpt`, …) or `other` — never the raw name your client reports. The headers let Cork
+count requests per client and version. It carries no account, wallet, key,
+machine or session identifier, and the server never uses it for authorization. The API server
+sees your IP address and request, like any HTTP server; the header adds only the line above.
+RPC endpoints, HyperSync and GitHub get no Cork header.
+
+**Cork's hosted MCP server** (`mcp.cork.tech`) records server-side usage in PostHog (EU):
+
+- one event per tool call: tool name, your MCP client's name and version and its `User-Agent`
+  product names (from fixed lists, else `other`), latency, and success or error code;
+- the tool's arguments, kept only where the tool's schema declares a safe shape: amounts,
+  chain and pool IDs, enum values, list counts. Addresses and order or transaction hashes are
+  kept only for tools that prepare or submit something a wallet signs, never for reads;
+- request logs and server errors (with secrets, URLs, IPs and e-mails removed).
+
+A write that names its acting wallet is recorded under that wallet address; wallets are
+never merged, and calls in one MCP session share a random session id. Everything else is
+anonymous. On-chain data is public; what is never recorded is anything that links a wallet
+to you: no IP address or location, no device or browser identifier, no free text,
+signatures or tool responses.
+
+Analytics is on only in Cork's own deployment (`packaging/phala-compose.yml`). A server you
+run yourself with `ch mcp --http` sends nothing.
 
 ## Design invariants
 

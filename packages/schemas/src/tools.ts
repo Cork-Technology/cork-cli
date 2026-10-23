@@ -4,6 +4,7 @@ import {
   Address,
   Bytes32,
   ChainId,
+  DECIMAL_FRACTION_PATTERN,
   ClientRequestId,
   DataMode,
   Format,
@@ -62,6 +63,58 @@ const GenerationWire = z.string().optional().describe(GENERATION_DESCRIPTION);
 // ────────────────────────────────────────────────────────────────────────────
 // 1. cork_query
 // ────────────────────────────────────────────────────────────────────────────
+// The known cork_query filter keys and their wire shapes, ADVERTISED as JSON-schema `properties`
+// on the filters record (meta only). Validation is NOT done here and stays exactly the
+// handler's: `filters` remains an open record, so key order, unknown-key teaching (did-you-mean)
+// and every per-key refusal and error code are unchanged (core handlers/filters.ts
+// parseQueryFilters / assertFiltersApplicable). The declared shapes let clients see the keys
+// and let the hosted analytics' fail-closed shape filter keep the safe ones (enums, booleans,
+// digit strings; pool ids via the registry's keepHashes; addresses and other hashes are dropped
+// on reads). A test pins these keys to core's KNOWN_FILTER_KEYS.
+const ADDRESS_WIRE = { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" } as const;
+const HASH_WIRE = { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" } as const;
+const DIGITS_WIRE = { type: "string", pattern: "^[0-9]+$" } as const;
+const BOOL_WIRE = { type: "boolean" } as const;
+const TEXT_WIRE = { type: "string" } as const;
+const oneOf = (...values: string[]) => ({ type: "string", enum: values }) as const;
+export const QUERY_FILTER_PROPERTIES = {
+  poolId: HASH_WIRE,
+  account: ADDRESS_WIRE,
+  kind: oneOf("orders", "fills", "contracts"),
+  side: oneOf("BUY", "SELL"),
+  status: TEXT_WIRE,
+  orderDigest: HASH_WIRE,
+  orderHash: HASH_WIRE,
+  filler: ADDRESS_WIRE,
+  address: ADDRESS_WIRE,
+  factory: ADDRESS_WIRE,
+  settler: ADDRESS_WIRE,
+  fillable: BOOL_WIRE,
+  source: oneOf("API", "CHAIN"),
+  collateralAsset: ADDRESS_WIRE,
+  referenceAsset: ADDRESS_WIRE,
+  mode: oneOf("price", "nav"),
+  expiry: DIGITS_WIRE,
+  rfqId: TEXT_WIRE,
+  rfqKind: oneOf("new_position", "rollover"),
+  state: oneOf("open", "expired"),
+  withAnswers: BOOL_WIRE,
+  view: oneOf("full", "current", "discovery", "management"),
+  excludeRequestPrefix: TEXT_WIRE,
+  underwriter: ADDRESS_WIRE,
+  recipe: ADDRESS_WIRE,
+  args: { type: "string", pattern: "^0x[0-9a-fA-F]*$" },
+  rate: DIGITS_WIRE,
+  rateOracle: ADDRESS_WIRE,
+  label: TEXT_WIRE,
+  base: ADDRESS_WIRE,
+  quote: ADDRESS_WIRE,
+  legacy: BOOL_WIRE,
+  oracleSalt: HASH_WIRE,
+  swapFeePercentage: DIGITS_WIRE,
+  unwindSwapFeePercentage: DIGITS_WIRE,
+} as const;
+
 export const QueryInput = z.object({
   resource: z
     .enum([
@@ -96,6 +149,7 @@ export const QueryInput = z.object({
   mode: DataMode.optional(),
   filters: z
     .record(z.string(), z.unknown())
+    .meta({ properties: QUERY_FILTER_PROPERTIES })
     .optional()
     .describe(
       "Orderbook filters.view: discovery (default) or management (include unavailable active rows for inspection; still not execution permission). Maker/status do not imply management. Exact orderHash needs the selected served API110 capability and includes lifecycle history in either view; released APIs may ignore orderHash. RFQ view remains full or current. " +
@@ -487,7 +541,7 @@ const RfqAnswerFields = {
 const RfqCounterFields = {
   rfqId: z.string().min(1),
   requester: Address,
-  premiumAnnualized: z.string().min(1).optional().describe("new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by the versioning rule (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)").meta({ "x-units": X_UNITS.percent }),
+  premiumAnnualized: z.string().min(1).optional().describe("new_position counters only, required there: the counter-bid premium, decimal-fraction STRING (\"0.041\" = 4.1% annualized) — same scale as answer-option premiums, NOT the percent number the book listing uses. The fraction SHAPE is structure, pinned by the versioning rule (a unit never changes in place); the < 0.5 cap is venue POLICY (pilot posture, relaxable)").meta({ "x-units": X_UNITS.percent, pattern: DECIMAL_FRACTION_PATTERN.source }),
   optionRef: z.strictObject({ answerId: z.string().min(1), optionId: z.string().min(1) }).optional().describe("optional: point the bid at a specific quoted option on THIS RFQ when it is about those terms rather than the envelope at large (venue-validated, 400 otherwise; pre-flighted here when an RPC-free venue read succeeds)"),
   freshUntil: z.number().int().nonnegative().max(UNIX_SECONDS_MAX_NUMBER).optional().describe("advisory freshness clock, absolute unix SECONDS (not ms; bounded to year 2100) — same semantics as on answer options"),
   premiumPerShare: PremiumPerShareRate.optional().describe("rollover counters only, required there: the bid in a rollover answer's unit — raw premium-token units per 1e18 destination shares (the rollover order's minPremiumPerShare)"),
@@ -514,9 +568,13 @@ const ListingPremiumFields = {
   premium: z.number().optional()
     .describe("REMOVED by the venue on 2026-08-17 — this was the listing's PERCENT number (4.1 meant 4.1%); any value here is refused before relay with teaching. Send premiumAnnualized instead")
     .meta({ "x-units": X_UNITS.percent }),
+  // Every premiumAnnualized ADVERTISES DECIMAL_FRACTION_PATTERN (a JSON-schema `pattern` in meta,
+  // for clients and the hosted analytics' shape filter) without validating it here: the handlers
+  // keep their own refusals and error codes (bookPremiumAnnualizedViolation in core
+  // handlers/submit.ts, premiumFraction in orders-answer.ts), pinned by venue-premium.test.ts.
   premiumAnnualized: z.string().min(1).optional()
     .describe('the listing premium: an annualized decimal-fraction STRING ("0.041" = 4.1%), same name and convention as the RFQ surface — required at relay (the shape is the published spec pattern; values above 100, the legacy 10000% ceiling, are refused as venue policy). The percent-number premium field was removed 2026-08-17')
-    .meta({ "x-units": X_UNITS.percent }),
+    .meta({ "x-units": X_UNITS.percent, pattern: DECIMAL_FRACTION_PATTERN.source }),
 };
 
 // The exact `data` object cork_prepare_orders maker-order returns, handed back verbatim to
@@ -822,7 +880,7 @@ export const OrdersAction = z.discriminatedUnion("type", [
     answerOptionId: z.string().min(1).max(64).optional().describe("the option_id the new answer option carries; default: the re-quoted option's id, else one derived from clientRequestId"),
     mode: z.enum(RFQ_MODES).optional().describe("the option's cover mode; default: the mode that names the recipe's cover (liquidity_only, liquidity_impairment, fixed_rate), else the RFQ's only mode. A mode the RFQ did not ask for is a visible counter-proposal (warned, built)"),
     packageId: z.string().min(1).max(64).optional().describe("the option's package_id; default: the RFQ's only package id — required when the RFQ names several"),
-    premiumAnnualized: z.string().min(1).optional().describe("UNCITED answer: the annualized premium as a decimal-fraction STRING (\"0.041\" = 4.1%) when no posted option is cited — this tool never chooses a premium, it computes amounts from yours. Mutually exclusive with answerId/optionId"),
+    premiumAnnualized: z.string().min(1).optional().describe("UNCITED answer: the annualized premium as a decimal-fraction STRING (\"0.041\" = 4.1%) when no posted option is cited — this tool never chooses a premium, it computes amounts from yours. Mutually exclusive with answerId/optionId").meta({ pattern: DECIMAL_FRACTION_PATTERN.source }),
     expiryTimestamp: UnixSeconds.optional().describe("UNCITED answer: the pool expiry the cover runs to (unix seconds; the order's tenor is expiry − now). A cited option supplies its own. Outside the RFQ's expiry_window it is a visible counter-proposal (warned, built)"),
     notionalAssets: TokenAmount.optional().describe("cover size in the COLLATERAL asset's base units; default = the RFQ's notional_assets"),
     collateralAsset: Address.optional().describe("required only when the RFQ lists several acceptable collateral tokens (collateral_asset.one_of) — pick one; an `exact` RFQ needs nothing"),

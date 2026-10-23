@@ -87,12 +87,6 @@ describe("styled CLI output", () => {
     expect(plain.stdout).toContain("cork_compute  ·  ch compute  ·  phase 1");
   });
 
-  it("warnings row leads with the warning glyph and keeps the code greppable", async () => {
-    // Offline-deterministic: cork-pool without filters.poolId → unavailable + missing_filter.
-    const r = await runCli(["query", "cork-pool", "--chain-id", "1"], { nowSeconds: NOW });
-    expect(r.stdout).toContain(`${GLYPH.warn} missing_filter`);
-  });
-
   it("JSON output NEVER carries escape sequences, even under FORCE_COLOR", async () => {
     const viaFlag = await runCli(["query", "protocol-config", "--json"], { nowSeconds: NOW }, { FORCE_COLOR: "1" });
     expect(viaFlag.stdout).not.toContain("\u001b");

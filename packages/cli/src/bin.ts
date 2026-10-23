@@ -2,6 +2,8 @@
 // The one static import in this deliberately lazy-loading entrypoint: a single string constant
 // (the HTTP route list) shared with the commander description — negligible load cost.
 import { MCP_HTTP_ROUTES } from "./mcp-usage.ts";
+// And the shutdown helpers: dependency-free (no analytics import), a few lines.
+import { boundedFatal, fatalStop, gracefulStop } from "../../mcp/src/lib/shutdown.ts";
 
 const argv = process.argv.slice(2);
 
@@ -10,13 +12,23 @@ const argv = process.argv.slice(2);
 // stdio client sees the process die and resets; the container's `restart: unless-stopped` brings
 // the HTTP server back with clean state, whereas surviving an unknown exception would keep
 // serving from a process whose invariants can no longer be trusted.
+// One exception to "exit at once": the hosted HTTP server with analytics on registers `onFatal`
+// to stop its listener and capture the crash to PostHog first — bounded at FATAL_FLUSH_MS (2 s),
+// so a dead PostHog cannot hold a dying process (lib/shutdown.ts). Unset everywhere else (the
+// CLI, stdio MCP, HTTP without the analytics opt-in).
+let onFatal: ((err: unknown) => Promise<void>) | undefined;
+const die = (err: unknown): void => {
+  if (!onFatal) process.exit(1);
+  const fatal = onFatal;
+  void boundedFatal(() => fatal(err)).finally(() => process.exit(1));
+};
 process.on("uncaughtException", (err) => {
   process.stderr.write(`ch: fatal uncaught exception: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
-  process.exit(1);
+  die(err);
 });
 process.on("unhandledRejection", (err) => {
   process.stderr.write(`ch: fatal unhandled rejection: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
-  process.exit(1);
+  die(err);
 });
 
 const ctx = {
@@ -106,7 +118,17 @@ if (argv[0] === "mcp") {
     // open. Never logged, like the MCP token.
     const diagnosticsToken = process.env["CORK_MCP_DIAGNOSTICS_TOKEN"];
     const trustForwardedFor = argv.includes("--trust-forwarded-for") || process.env["CORK_MCP_TRUST_FORWARDED_FOR"] === "1";
+    // Server-side analytics for the HOSTED deployment only (packages/mcp/src/lib/mcp-analytics.ts,
+    // over the analytics core in lib/analytics.ts):
+    // on only with the explicit opt-in CORK_MCP_ANALYTICS=1 plus a Cork project key and its
+    // CORK_ENV (packaging/phala-compose.yml sets all three), off otherwise; DO_NOT_TRACK=1 or
+    // CORK_TELEMETRY=0 turn it off. This branch is the only place in the binary that loads it.
+    const { analyticsFromEnv } = await import("../../mcp/src/lib/mcp-analytics.ts");
+    const { analytics, status: analyticsStatus } = analyticsFromEnv(process.env, { warn: (m) => process.stderr.write(`cork-mcp: ${m}\n`) });
+    let listening: { stop: (closeActive?: boolean) => Promise<void> } | undefined;
+    if (analytics) onFatal = (err) => fatalStop(listening, analytics, err);
     const server = startHttpServer(port, {
+      ...(analytics ? { analytics } : {}),
       ctx,
       ...(host !== undefined ? { host } : {}),
       ...(trustForwardedFor ? { trustForwardedFor } : {}),
@@ -116,8 +138,9 @@ if (argv[0] === "mcp") {
     // Register BEFORE announcing readiness: an orchestrator may stop the container the moment
     // it sees the ready line, and a signal that lands before the handler exists takes the
     // default action (found by the spawn test under load).
-    exitOnSignal(() => server.stop());
-    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}; /readyz full view ${token || diagnosticsToken ? `by bearer (${[token ? "CORK_MCP_TOKEN" : "", diagnosticsToken ? "CORK_MCP_DIAGNOSTICS_TOKEN" : ""].filter(Boolean).join(", ")})` : "summary only (set CORK_MCP_DIAGNOSTICS_TOKEN)"}\n`);
+    listening = server;
+    exitOnSignal(() => gracefulStop(server, analytics));
+    process.stderr.write(`cork-mcp: Streamable HTTP on ${server.hostname}:${server.port} — ${MCP_HTTP_ROUTES}; auth ${token ? "bearer (CORK_MCP_TOKEN)" : "open (ingress owns auth)"}; /readyz full view ${token || diagnosticsToken ? `by bearer (${[token ? "CORK_MCP_TOKEN" : "", diagnosticsToken ? "CORK_MCP_DIAGNOSTICS_TOKEN" : ""].filter(Boolean).join(", ")})` : "summary only (set CORK_MCP_DIAGNOSTICS_TOKEN)"}; analytics ${analyticsStatus}\n`);
     // Bun.serve keeps the process alive until stopped.
   } else {
     const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

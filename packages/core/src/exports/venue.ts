@@ -5,3 +5,5 @@
 export * from "../datasources/venue.ts";
 export * from "../rfq-signing.ts";
 export * from "../rfq-bodies.ts";
+// The client attribution headers (User-Agent + X-Cork-Client) every venue call carries.
+export { corkClientHeaders, formatCorkClient, formatCorkUserAgent, mcpClientLabel, withMcpClient, type CorkClientIdentity, type CorkClientName, type McpClientLabel } from "../cork-client.ts";

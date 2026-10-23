@@ -257,18 +257,27 @@ describe("R4: one synonym resolver across every input path (2026-08-10)", () => 
     expect(r.stdout).not.toContain("cptAndCstSharesOut"); // a sibling variant's field — parent contract would list it
   });
 
-  it("the positional field rides as a flag too: `--resource` works on query (was: unknown option, 'did you mean --source?')", async () => {
-    const r = await runCli(["query", "--resource", "pool", "--chain-id", "1", "--json"], { nowSeconds: NOW });
-    // cork-pool without filters.poolId is the offline-deterministic outcome — proving the flag
-    // fed the resource slot AND the alias table applied on the flag path.
-    expect(r.code).toBe(EXIT.unavailable);
-    expect(JSON.parse(r.stdout).warnings[0].code).toBe("missing_filter");
-  });
-
-  it("resource aliases are case-insensitive, like chain names always were", async () => {
-    const r = await runCli(["query", "Pool", "--chain-id", "1", "--json"], { nowSeconds: NOW });
-    expect(r.code).toBe(EXIT.unavailable);
-    expect(JSON.parse(r.stdout).warnings[0].code).toBe("missing_filter");
+  it.each([
+    ["resource flag", ["query", "--resource", "pool"]],
+    ["mixed-case positional", ["query", "Pool"]],
+  ] as const)("%s reads the same pool as the canonical resource", async (_name, command) => {
+    const flags = ["--chain-id", "42161", "--pool-id", MIGRATION_OLD_POOL, "--json"];
+    const canonical = await runCli(["query", "cork-pool", ...flags], stubContext());
+    expect(canonical.code, canonical.stderr).toBe(EXIT.ok);
+    const expected = JSON.parse(canonical.stdout);
+    expect(expected.state).toBe("ok");
+    expect(expected.data).toMatchObject({
+      resource: "cork-pool",
+      chainId: 42161,
+      poolId: MIGRATION_OLD_POOL,
+      wire: "8-field",
+      swapRate: "800000000000000000",
+    });
+    const aliased = await runCli([...command, ...flags], stubContext());
+    expect(aliased.code, aliased.stderr).toBe(EXIT.ok);
+    const actual = JSON.parse(aliased.stdout);
+    expect(actual.state).toBe("ok");
+    expect(actual.data).toEqual(expected.data);
   });
 
   it("top-level verbs accept the chainId positional their long form accepts: `ch exercise 1`", async () => {

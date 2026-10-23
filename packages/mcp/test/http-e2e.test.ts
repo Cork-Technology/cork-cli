@@ -14,7 +14,7 @@ const children: ChildProcess[] = [];
  *  so a broken server fails the test instead of hanging it. */
 function startServer(env: Record<string, string> = {}, extraArgs: string[] = []): Promise<{ host: string; port: number; child: ChildProcess }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("bun", [BIN, "mcp", "--http", "--port", "0", ...extraArgs], { env: { ...process.env, ...env }, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn("bun", [BIN, "mcp", "--http", "--port", "0", ...extraArgs], { env: { ...process.env, DO_NOT_TRACK: "1", ...env }, stdio: ["ignore", "ignore", "pipe"] });
     children.push(child);
     const deadline = setTimeout(() => reject(new Error(`server never printed its readiness line: ${stderr}`)), 15_000);
     let stderr = "";

@@ -7,6 +7,10 @@ Human-readable text and log formats are not covered.
 
 ## [Unreleased]
 
+### Added
+
+- Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
+
 ## [0.8.0-rc.2] — preparation, not yet published
 
 ### Changed

@@ -17,6 +17,7 @@ import { z } from "zod";
 import { fetchFollowingSameOrigin } from "../fetch-timeout.ts";
 import { breakerOnFailure, breakerOnSuccess, breakerOpen, breakerRemainingMs, type BreakerEntry, type BreakerPolicy } from "../breaker.ts";
 import { hostOf } from "../chain/rpc.ts";
+import { type CorkClientIdentity, withCorkClientHeaders } from "../cork-client.ts";
 import type { LopOrder } from "../orders.ts";
 
 
@@ -104,6 +105,9 @@ export interface VenueDeps {
    *  response nobody will read. An abort is the CALLER's decision, never a venue failure: it
    *  does not feed the breaker and surfaces as VenueAborted, not VenueUnreachable. */
   signal?: AbortSignal;
+  /** Who is calling (cork-client.ts): sent as `User-Agent` + `X-Cork-Client` on EVERY venue
+   *  request, injected fetch included. Absent = `cork-sdk/<version>`. Attribution only. */
+  client?: CorkClientIdentity;
 }
 
 // Same shape as the RPC endpoint breaker (3 consecutive transport failures → open 30 s). The
@@ -238,7 +242,9 @@ async function rawFetch(deps: VenueDeps, path: string, init?: RequestInit): Prom
     // timeout, so whichever fires first ends the fetch.
     const res = await fetchFollowingSameOrigin(
       `${venueBaseUrl(deps.baseUrl)}${path}`,
-      { ...(init ?? {}), ...(deps.signal ? { signal: deps.signal } : {}) },
+      // The attribution headers (cork-client.ts) ride every attempt, GET and relay alike; the
+      // call site's own headers (content-type, x-cork-api-key) are kept beside them.
+      { ...(init ?? {}), headers: withCorkClientHeaders(init?.headers, deps.client), ...(deps.signal ? { signal: deps.signal } : {}) },
       deps.timeoutMs ?? 10_000,
       method === "GET" || method === "HEAD" ? "follow-get" : "preserve-write",
       f,
