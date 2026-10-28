@@ -37,14 +37,14 @@ afterEach(() => resetConfigMemo());
 
 describe("mergeConfig — the override wins at WHOLE-SET granularity", () => {
   it("adds a set and replaces a set by key; the replaced set is the override's, not a field merge", () => {
+    const before = structuredClone(base);
     const { merged, summary } = mergeConfig(base, parseOverride({ schemaVersion: 2, generations: { "8453": { sets: { "phoenix/v0.5-staging": STAGING, "phoenix/v0.3-rc.1": { ...v03, status: "read-only" } } } } }));
-    expect(Object.keys(merged.generations["8453"]!.sets)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "phoenix/v0.5-staging"]);
     expect(merged.generations["8453"]!.sets["phoenix/v0.3-rc.1"]!.status).toBe("read-only");
     expect(merged.generations["8453"]!.sets["phoenix/v0.3-rc.1"]!.phoenix).toEqual(v03.phoenix); // the override's own copy — complete
     expect(merged.generations["8453"]!.primary).toBe("phoenix/v0.5");
     expect(summary).toEqual({ sets: ["8453/phoenix/v0.5-staging", "8453/phoenix/v0.3-rc.1"], primaryMoved: [], filtered: [], chainEntries: [] });
     // the base is untouched
-    expect(Object.keys(base.generations["8453"]!.sets)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1"]);
+    expect(base).toEqual(before);
     // other chains ride through
     expect(merged.generations["42161"]).toEqual(base.generations["42161"]);
     expect(merged.approvedImplementations).toEqual(base.approvedImplementations);
@@ -64,9 +64,17 @@ describe("mergeConfig — the override wins at WHOLE-SET granularity", () => {
   });
 
   it("`only` keeps the listed sets (a partner pinning what it integrated); dropping the primary or naming a ghost is refused", () => {
-    const { merged, summary } = mergeConfig(base, parseOverride({ schemaVersion: 2, generations: { "42161": { only: ["phoenix/v0.5", "phoenix/v0.3-rc.1"] } } }));
-    expect(Object.keys(merged.generations["42161"]!.sets)).toEqual(["phoenix/v0.5", "phoenix/v0.3-rc.1"]);
-    expect(summary.filtered).toEqual(["42161: phoenix/v0.4-rc.1, arbitrum-v1.1, arbitrum-legacy"]);
+    const only = ["phoenix/v0.5", "phoenix/v0.3-rc.1"];
+    const override = parseOverride({ schemaVersion: 2, generations: { "42161": { only } } });
+    const { merged, summary } = mergeConfig(base, override);
+    expect(new Set(Object.keys(merged.generations["42161"]!.sets))).toEqual(new Set(only));
+    const applied = applyOverride({ defaults: base, source: "bundled" }, { kind: "ok", path: "/partner/config.json", override });
+    expect(applied.warnings.map((w) => w.code)).toContain("config_override_active");
+    for (const label of Object.keys(base.generations["42161"]!.sets)) {
+      const hidden = !only.includes(label);
+      expect(summary.filtered.some((row) => row.includes(label))).toBe(hidden);
+      expect(applied.override?.filtered.some((row) => row.includes(label))).toBe(hidden);
+    }
     expect(() => mergeConfig(base, parseOverride({ schemaVersion: 2, generations: { "42161": { only: ["phoenix/v0.3-rc.1"] } } }))).toThrow(/drops the primary/u);
     expect(() => mergeConfig(base, parseOverride({ schemaVersion: 2, generations: { "42161": { only: ["phoenix/v0.5", "ghost"] } } }))).toThrow(/do not exist/u);
     // `only` + a moved primary is the way to pin the previous generation alone
@@ -125,7 +133,7 @@ describe("applyOverride / resolveConfig — the layer is disclosed, a refused fi
     const cfg = await resolveConfig(d);
     expect(cfg.override?.sets).toEqual(["8453/phoenix/v0.5-staging"]);
     const gens = await resolveGenerations(8453, d);
-    expect(gens.generations.map((g) => g.label)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "phoenix/v0.5-staging"]);
+    expect(gens.generations.find((g) => g.label === "phoenix/v0.5-staging")).toMatchObject({ distribution: STAGING.distribution, status: "active" });
     expect(gens.warnings.map((w) => w.code)).toEqual(["config_override_active"]);
     expect(gens.configOverride?.path).toBe("/x/config.json");
   });

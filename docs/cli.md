@@ -395,6 +395,27 @@ Approval preparation is not an approval transaction or proof of effective permis
 adapter's actual deployment address; no deployed default is assumed. This is the periphery
 ForSelf path, not Phoenix CorkAdapter/Bundler3.
 
+For the recorded v0.3.0-rc.1 deployment on Base (`8453`) or Arbitrum One (`42161`), use
+`--for-self '{"adapter":"0xe64F5deCEC381cd8C705f20B41BB24213b8a3507","deadline":"<unix-seconds>"}'`
+for rollover-fill. Its `data.settlerGeneration` comes from the signed order's settler,
+not `--generation`; the shared 0.2 settlers still report `phoenix/v0.5`.
+Pool/LOP requests may select `--generation phoenix/v0.7-rc.1` to name the new set.
+Pool actions use the same explicit adapter with no `deadline` member in `forSelf`
+(their ordinary `--deadline-at` controls expiry); LOP fills also require `poolId`.
+This additive set preserves older references, including the pool/LOP-only v0.2.0-rc.1
+adapter. Primary v0.5 and ordinary Bundler3/raw LOP/BaseFiller routes do not change.
+Selecting a generation alone never selects ForSelf; caller-supplied vetted adapters remain supported.
+`ch query protocol-config --chain-id <id>` reports the effective source under `data.config`
+and sets under `data.generations`. Pool/LOP requests naming an unpublished set can refuse
+`generation_unknown`; rollover-fill does not validate that request label.
+Do not replace historical records or use a failed binding check to choose another route.
+
+The chain/generation/constructor mapping is retained in the
+[immutable Distribution manifest](https://github.com/Cork-Technology/distribution/blob/a9e2b6444def883a8795ba0a407fe21d01f123ce/distributions/phoenix/v0.7-rc.1.json)
+and [periphery component record](https://github.com/Cork-Technology/distribution/blob/a9e2b6444def883a8795ba0a407fe21d01f123ce/components/cork-periphery/0.3.0-rc.1.json).
+Their earlier runtime correspondence is not a fresh deployment attestation, completed
+independent security review, or approval of this account's session/Guard or economic limits.
+
 The funding Safe must CALL the adapter through its admitted Guard/session path. Source
 funding, destination, refunds and `subFiller` are that Safe; approvals name the adapter.
 The result is `execution.kind: "account-call"` with `sign: "wallet-session"` (a wallet-SDK

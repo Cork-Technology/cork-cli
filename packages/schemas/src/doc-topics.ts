@@ -632,6 +632,15 @@ they speak:
   \`rc.2\` | \`0.2\`.
 - \`forSelf\` — the reference CorkForSelfAdapter of that set.
 
+The opt-in \`phoenix/v0.7-rc.1\` set on Base and Arbitrum records periphery
+\`v0.3.0-rc.1\`: 13 pool methods, LOP fill and the two rollover methods.
+Read its \`forSelf.adapter\` from the effective config and pass it explicitly;
+the generation reference is classification data, not an automatic route or adapter default.
+The primary stays \`phoenix/v0.5\`, and older references are preserved. ForSelf rollover
+requires the new surface, not an older pool/LOP-only adapter. A reference match names the
+adapter's own set even when it shares the primary's pool manager; getter agreement alone
+does not prove runtime identity or session/economic-policy acceptance.
+
 The config (\`cork-defaults.v2.json\`, schema 2) DECLARES each block's wire; the code IMPLEMENTS the
 wires it knows and refuses a declared wire it does not (\`phase_gated\`) — it never guesses a layout
 from bytes. A block can be absent (mainnet has only a phoenix block).
@@ -1135,6 +1144,14 @@ A session-key policy that allows only the call (BaseFiller, execute) routes the 
 \`rollover-fill.forSelf\` takes the improved adapter's actual \`adapter\` address and a
 decimal-string \`deadline\`. It prepares an \`account-call\` for the funding Safe's admitted
 Guard/session path, not an owner-signed BaseFiller wrapper or Phoenix Bundler3 bundle.
+Choose the recorded adapter from \`phoenix/v0.7-rc.1\` on Base or Arbitrum, or your
+vetted compatible deployment, and pass \`forSelf.adapter\` explicitly. Rollover-fill
+derives \`data.settlerGeneration\` from the signed order's settler, not the request's
+\`generation\`: the shared 0.2 settlers still report \`phoenix/v0.5\`. Only the explicit
+adapter selects ForSelf. The new set does not change primary or ordinary routes;
+older pool/LOP-only references are not rollover defaults. Pool/LOP requests that name
+a generation require that set in effective config; adapter verification classifies
+the adapter's own configured reference instead of selecting a route.
 The Safe is source funder, destination, refund recipient and partial-slot subFiller.
 Approvals go to the adapter; partial slots are \`(digest, adapter, bytes32(Safe))\`.
 Third-party FillerAuth binds that destination Safe; a reservation to the shared adapter

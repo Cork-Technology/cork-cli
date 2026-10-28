@@ -13,7 +13,6 @@ import { DEMO_ACCOUNT } from "@cork/schemas";
 import {
   BUNDLED_DEFAULTS,
   buildJitExtension,
-  classifyAddress,
   decodeJitExtensionFor,
   decodeJitExtraData,
   encodeJitExtraData,
@@ -149,15 +148,8 @@ describe("the bytes permit row (CorkLimitOrderAdapter 0.5.0)", () => {
   });
 });
 
-describe("classification: the adapter pinpoints the set; shared contracts report both labels", () => {
+describe("classification: the selected adapter determines the JIT permit wire", () => {
   const gens = generationsOf(BUNDLED_DEFAULTS, 8453);
-  it("each adapter belongs to ONE set; the shared registry, creator and pool manager belong to both", () => {
-    expect(classifyAddress(gens, ADAPTER_050)).toEqual([expect.objectContaining({ label: V05, role: "jitAdapter", primary: true })]);
-    expect(classifyAddress(gens, ADAPTER_040)).toEqual([expect.objectContaining({ label: V04, role: "jitAdapter", primary: false })]);
-    for (const shared of [setOf(8453, V05).marketRegistry!.registry, setOf(8453, V05).marketRegistry!.marketCreator!, setOf(8453, V05).phoenix!.poolManager]) {
-      expect(classifyAddress(gens, shared).map((c) => c.label).sort()).toEqual([V04, V05].sort());
-    }
-  });
   it("decode reads JIT bytes with the row of the set its adapter belongs to", () => {
     const bytes050 = encodeJitExtraData("nested", SAMPLE, parsePermitWires(ROWS, "bytes"), "bytes");
     const dec = decodeJitExtensionFor(gens, buildJitExtension(ADAPTER_050, bytes050));

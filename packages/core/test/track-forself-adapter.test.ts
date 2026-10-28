@@ -45,6 +45,15 @@ describe("cork_track verify forSelfAdapter — classified by its own bindings", 
     expect(env.warnings[0]!.message).toMatch(/REFERENCE ForSelf adapter of the phoenix\/v0\.5 generation/u);
   });
 
+  it("a newer reference keeps its own generation when it shares the primary pool manager", async () => {
+    const next = BASE.find((g) => g.label === "phoenix/v0.7-rc.1")!;
+    const adapter = next.forSelf!.adapter as `0x${string}`;
+    const env = await verify(adapter, rpc(adapter, { CORK: next.phoenix!.poolManager, LOP, WHITELIST: next.phoenix!.whitelistManager! }));
+    expect(env.state).toBe("ok");
+    expect(env.data as Data).toMatchObject({ verified: true, reference: true, generation: { label: next.label } });
+    expect(env.provenance.generation).toMatchObject({ label: next.label });
+  });
+
   it("an integrator's adapter bound to the primary: verified, reference:false, the message says whose code it is", async () => {
     const env = await verify(INTEGRATOR, rpc(INTEGRATOR, { CORK: PRIMARY.phoenix!.poolManager, LOP, WHITELIST: PRIMARY.phoenix!.whitelistManager! }));
     expect(env.state).toBe("ok");

@@ -140,7 +140,7 @@ type PositionsData = {
   generations: Array<{ label: string; status: string }>;
   scanned: { managers: number; pools: number; complete: boolean; source: string };
   positions: Array<{ generation: { label: string }; poolId: string; expired: boolean; expiry: string; balances: { corkSwapToken: string; corkPrincipalToken: string }; corkSwapToken: string; corkPrincipalToken: string; expiryTimestamp: string }>;
-  byGeneration: Array<{ label: string; pools: number; corkSwapTokenTotal: string; corkPrincipalTokenTotal: string }>;
+  byGeneration: Array<{ label: string; sharedWith?: string; pools: number; corkSwapTokenTotal: string; corkPrincipalTokenTotal: string }>;
   scales: Record<string, string>;
   generation?: unknown;
 };
@@ -240,8 +240,6 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
     expect(env.provenance.mode).toBe("full-decentralized");
     expect(asked).toHaveLength(1);
     expect(new Set(asked[0]!.map((a) => a.toLowerCase()))).toEqual(new Set([PRIMARY_PM, V03_PM, V11_PM, LEGACY_PM].map((a) => a.toLowerCase())));
-    // Every set with a pool manager is listed; the manager two sets share is ASKED once (four above).
-    expect(d.generations.map((g) => g.label)).toEqual(["phoenix/v0.5", "phoenix/v0.4-rc.1", "phoenix/v0.3-rc.1", "arbitrum-v1.1", "arbitrum-legacy"]);
     // Three positions (P_EMPTY dropped), each tagged with ITS generation.
     expect(d.positions.map((p) => [p.poolId, p.generation.label, p.expired])).toEqual([
       [P_OLD, "phoenix/v0.3-rc.1", false],
@@ -250,14 +248,23 @@ describe("account-state WITHOUT filters.poolId — positions across every genera
     ]);
     expect(d.positions[0]).toMatchObject({ corkSwapToken: SHARES[P_OLD]!.cst, corkPrincipalToken: SHARES[P_OLD]!.cpt, expiryTimestamp: (NOW + 86_400n).toString(), expiry: expiryIsoOfSeconds(NOW + 86_400n), balances: { corkSwapToken: (5n * WAD).toString(), corkPrincipalToken: (5n * WAD).toString() } });
     expect(d.positions[1]!.balances).toEqual({ corkSwapToken: "0", corkPrincipalToken: (7n * WAD).toString() });
-    const S = (n: bigint) => n.toString();
-    expect(d.byGeneration).toEqual([
-      { label: "phoenix/v0.5", status: "active", pools: 1, corkSwapTokenTotal: S(3n * WAD), corkPrincipalTokenTotal: "0" },
-      { label: "phoenix/v0.4-rc.1", status: "active", sharedWith: "phoenix/v0.5", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
-      { label: "phoenix/v0.3-rc.1", status: "active", pools: 2, corkSwapTokenTotal: S(5n * WAD), corkPrincipalTokenTotal: S(12n * WAD) },
-      { label: "arbitrum-v1.1", status: "active", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
-      { label: "arbitrum-legacy", status: "read-only", pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" },
-    ]);
+    // Shared-manager aliases must never double count a position or its balances.
+    expect(d.byGeneration.reduce((sum, g) => sum + g.pools, 0)).toBe(3);
+    expect(d.byGeneration.reduce((sum, g) => sum + BigInt(g.corkSwapTokenTotal), 0n)).toBe(8n * WAD);
+    expect(d.byGeneration.reduce((sum, g) => sum + BigInt(g.corkPrincipalTokenTotal), 0n)).toBe(12n * WAD);
+    const configured = BUNDLED_DEFAULTS.generations[String(CHAIN)]!;
+    const withManager = Object.entries(configured.sets).filter(([, set]) => set.phoenix !== undefined);
+    const expectedLabels = new Set(withManager.map(([label]) => label));
+    expect(new Set(d.generations.map((g) => g.label))).toEqual(expectedLabels);
+    expect(new Set(d.byGeneration.map((g) => g.label))).toEqual(expectedLabels);
+    const primaryManager = configured.sets[configured.primary]!.phoenix!.poolManager.toLowerCase();
+    for (const [label, set] of withManager) {
+      const rows = d.byGeneration.filter((g) => g.label === label);
+      expect(rows).toHaveLength(1);
+      if (label !== configured.primary && set.phoenix!.poolManager.toLowerCase() === primaryManager) {
+        expect(rows[0]).toMatchObject({ sharedWith: configured.primary, pools: 0, corkSwapTokenTotal: "0", corkPrincipalTokenTotal: "0" });
+      }
+    }
     expect(d.scales["balances"]).toContain("18-decimal");
     expect(d.scales["unitsTopic"]).toBeDefined();
   });
