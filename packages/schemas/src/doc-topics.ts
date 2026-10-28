@@ -1130,7 +1130,7 @@ The holder's two slippage floors, \`minCaReceived\` and \`minSharesOut\`, are ch
 
 A session-key policy that allows only the call (BaseFiller, execute) routes the value safely, but it cannot enforce the floor. The wallet must set or keep \`minDstPerSrc\`.
 
-## Explicit ForSelf existing-market fill
+## Explicit ForSelf existing-market and signed-JIT fill
 
 \`rollover-fill.forSelf\` takes the improved adapter's actual \`adapter\` address and a
 decimal-string \`deadline\`. It prepares an \`account-call\` for the funding Safe's admitted
@@ -1140,14 +1140,18 @@ Approvals go to the adapter; partial slots are \`(digest, adapter, bytes32(Safe)
 Third-party FillerAuth binds that destination Safe; a reservation to the shared adapter
 itself is refused. Premium must be collateral/reference cash of either signed market.
 
-Only existing markets and 0.2 settlers are supported, with a positive destination floor.
-\`bounded\`, explicit JIT instructions and signed JIT commitments refuse without fallback.
-Creation stays a separately admitted direct Safe CALL to existing
-\`BaseFiller.executeWithMarket\`; the default BaseFiller route is unchanged.
+The route supports exact/partial 0.2 settlers with a positive destination floor.
+For existing markets it prepares \`rolloverForSelf\`. With a signed JIT commitment, pass
+the matching \`jitMarket\`: \`rolloverForSelfWithMarket\` resolves/creates the destination
+through the adapter's immutable \`MARKET_CREATOR\` using ordinary CALL, then fills the
+settler directly. There is no BaseFiller dependency, delegatecall or creator role on
+the adapter. A zero, absent, unreadable or differently bound creator refuses without
+fallback. Decoding preserves the complete signed market instruction.
+\`bounded\` remains a separate owner route and cannot be combined with ForSelf.
 Binding getters are not runtime identity or session-policy proof. Verify the actual
 deployment and complete Guard/account execution before client-side signing. Client
 caps/floors are not policy amount enforcement. Source support does not claim deployment
-or RC3 readiness; tracking and actual improved deployment/configuration remain separate gates.
+or release readiness; the default BaseFiller route is unchanged.
 The single-call consumer rejects signed staged-funding pre-hooks with the
 \`execute(address,address,address)\` ABI even when \`bounded\` was omitted. Standard owner-pull
 hooks need the holder's grant to its clone; unused-cPT refunds do not restore allowance,

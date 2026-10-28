@@ -44,10 +44,57 @@
 // config only, and broadcasting is always client-side (cork_capabilities topic:"signing").
 import { timingSafeEqual } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { DOC_TOPICS, findDocTopic } from "@cork/schemas";
-import { BUILD_VERSION, configDiagnostics, rpcDiagnostics, venueDiagnostics, type HandlerContext } from "@cork/core";
+import { DOC_TOPICS, findDocTopic, REGISTRY } from "@cork/schemas";
+import { BUILD_VERSION, configDiagnostics, type CorkClientIdentity, mcpClientLabel, rpcDiagnostics, venueDiagnostics, type HandlerContext } from "@cork/core";
 import { createCorkServer } from "./server.ts";
 import { AdmissionController, type DeadlineScheduler, MCP_HTTP_LIMITS, principalOf } from "./admission.ts";
+import { decodeSessionToken, encodeSessionToken, type McpAnalytics, newSessionId, productTokens, type RequestMeta, type SessionInfo, token as cleanToken, vendorClient as vendorToken, versionToken } from "./lib/mcp-analytics.ts";
+
+/** This server's identity to Cork servers: X-Cork-Client `cork-mcp/<v>`, User-Agent
+ *  `cork-mcp/<v> (client=<allowlisted mcp client>) Bun/<v>` (cork-client.ts). */
+const HOSTED_MCP_CLIENT: CorkClientIdentity = Object.freeze({ client: "cork-mcp" });
+const KNOWN_TOOLS: ReadonlySet<string> = new Set(REGISTRY.map((t) => t.name));
+/** JSON-RPC methods named as-is in request logs; anything else is "other" (never a caller string). */
+const LOGGED_RPC_METHODS: ReadonlySet<string> = new Set(["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "prompts/list", "notifications/cancelled"]);
+
+/** What one /mcp request says about itself, for analytics and logs. Every value is validated
+ *  (closed sets or closed charsets); the body itself never leaves this function. */
+function describeRpc(body: unknown): { rpcMethod?: string; tool?: string; initialize?: { clientName?: string; clientVersion?: string; protocolVersion?: string } } {
+  const messages = Array.isArray(body) ? body : [body];
+  const first = messages[0] as { method?: unknown; params?: { name?: unknown } } | undefined;
+  const methodOf = (m: unknown): string | undefined => (typeof m === "string" ? (LOGGED_RPC_METHODS.has(m) ? m : "other") : undefined);
+  const rpcMethod = messages.length > 1 ? "batch" : methodOf(first?.method);
+  const tool = messages.length === 1 && first?.method === "tools/call" && typeof first.params?.name === "string" ? (KNOWN_TOOLS.has(first.params.name) ? first.params.name : "unknown_tool") : undefined;
+  const init = messages.find((m) => (m as { method?: unknown } | null)?.method === "initialize") as { params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown } } } | undefined;
+  const clientName = mcpClientLabel(init?.params?.clientInfo?.name);
+  const clientVersion = versionToken(init?.params?.clientInfo?.version);
+  const protocolVersion = cleanToken(init?.params?.protocolVersion, 32);
+  return {
+    ...(rpcMethod ? { rpcMethod } : {}),
+    ...(tool ? { tool } : {}),
+    ...(init ? { initialize: { ...(clientName ? { clientName } : {}), ...(clientVersion ? { clientVersion } : {}), ...(protocolVersion ? { protocolVersion } : {}) } } : {}),
+  };
+}
+
+/** The route TEMPLATE for a request log (never the raw path: /docs/<anything> is one route). */
+function routeTemplate(pathname: string): string {
+  if (pathname === "/mcp" || pathname === "/healthz" || pathname === "/readyz") return pathname;
+  if (pathname.startsWith("/docs/")) return "/docs/:topic";
+  return "not_found";
+}
+
+/** Did this initialize succeed? Only then does the client get a session token. The JSON
+ *  response is read from a CLONE (the client still gets the untouched body). */
+async function initializeSucceeded(res: Response): Promise<boolean> {
+  if (!res.ok || !(res.headers.get("content-type") ?? "").includes("application/json")) return false;
+  try {
+    const body = (await res.clone().json()) as unknown;
+    const messages = Array.isArray(body) ? body : [body];
+    return messages.some((m) => typeof (m as { result?: { protocolVersion?: unknown } } | null)?.result?.protocolVersion === "string");
+  } catch {
+    return false;
+  }
+}
 
 export interface CorkHttpOptions {
   ctx?: HandlerContext;
@@ -72,6 +119,12 @@ export interface CorkHttpOptions {
   deadlineMs?: number;
   /** Deterministic deadline scheduler seam for tests. */
   scheduleDeadline?: DeadlineScheduler;
+  /** Server-side analytics (lib/mcp-analytics.ts over the analytics core in lib/):
+   *  `$mcp_tool_call` events, request logs and
+   *  exception capture. Absent = off — nothing is sent (session tokens are still minted: they
+   *  are protocol behaviour and venue attribution, not analytics). Only `ch mcp --http`
+   *  constructs one, on the explicit opt-in (CORK_MCP_ANALYTICS=1 + a Cork project key). */
+  analytics?: McpAnalytics;
 }
 
 /** Constant-time bearer check — a plain === would leak prefix length via timing. */
@@ -178,7 +231,10 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
   const trustForwardedFor = opts.trustForwardedFor ?? false;
   // ONE controller per handler: the counters are the server's, not the request's.
   const admission = new AdmissionController(opts.deadlineMs, opts.scheduleDeadline);
-  const route = async (req: Request, peerAddress?: string): Promise<Response> => {
+  const analytics = opts.analytics;
+  // Per-request facts the outer wrapper logs once the response exists.
+  interface RequestFacts { meta: RequestMeta; rpcMethod?: string; tool?: string }
+  const route = async (req: Request, peerAddress: string | undefined, facts: RequestFacts): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === "/healthz") {
       return new Response(`ok ${BUILD_VERSION}\n`, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -222,6 +278,11 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
       // deployment). The SDK transport would happily open one (verified empirically), so GET and
       // DELETE (session teardown — no sessions exist) are refused HERE with the spec's own
       // escape hatch: "the server MAY respond 405 Method Not Allowed".
+      // Clients that hold an Mcp-Session-Id (minted at initialize, below) handle the 405 as the
+      // spec says: the TypeScript SDK treats a 405 on the standalone GET as "no stream" and stops;
+      // the python-sdk tries the GET stream twice (1 s apart) and gives up, and logs a DELETE 405
+      // at close as "server does not allow session termination" — a few cheap refusals per
+      // session, no error surfaced to the user.
       if (req.method !== "POST") {
         return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: `${req.method} is not served: this deployment is stateless (no server-initiated streams, no sessions) — POST JSON-RPC messages to this endpoint` }, id: null }), {
           status: 405,
@@ -231,23 +292,78 @@ export function createHttpHandler(opts: CorkHttpOptions = {}): (req: Request, pe
       // Admission: bound the body/shape, take a per-client concurrency slot, and parse ONCE —
       // the parsed body is handed to the transport so untrusted input is not read twice.
       return admission.handle(req, principalOf(req, { trustForwardedFor, peerAddress }), async (parsedBody, signal) => {
+        // Who is calling, as far as attribution goes: the initialize handshake in THIS body, else
+        // the session token the client replays (minted below at its initialize). Untrusted and
+        // re-validated (lib/mcp-analytics.ts); it names a client, it never authorizes anything.
+        // An initialize opens a NEW session whatever token it carries (a stale one from an
+        // earlier session): the handshake's own client name and version win.
+        // The token is minted with or without analytics: Mcp-Session-Id is then uniform protocol
+        // behaviour, and the tools/calls it identifies name their MCP client to the venue.
+        const rpc = describeRpc(parsedBody);
+        const session: SessionInfo | undefined = rpc.initialize
+          ? { sessionId: newSessionId(), ...(rpc.initialize.clientName ? { clientName: rpc.initialize.clientName } : {}), ...(rpc.initialize.clientVersion ? { clientVersion: rpc.initialize.clientVersion } : {}) }
+          : decodeSessionToken(req.headers.get("mcp-session-id"));
+        const protocolVersion = rpc.initialize?.protocolVersion ?? cleanToken(req.headers.get("mcp-protocol-version"), 32);
+        // Product tokens only (comments dropped, ≤ 3, known names, version-shaped versions) and the
+        // vendor header from its allowlist; anything else is "other".
+        const userAgent = productTokens(req.headers.get("user-agent"));
+        const vendorClient = vendorToken(req.headers.get("x-anthropic-client"));
+        facts.meta = { ...(session ? { session } : {}), ...(protocolVersion ? { protocolVersion } : {}), ...(userAgent ? { userAgent } : {}), ...(vendorClient ? { vendorClient } : {}) };
+        if (rpc.rpcMethod) facts.rpcMethod = rpc.rpcMethod;
+        if (rpc.tool) facts.tool = rpc.tool;
+        const meta = facts.meta;
         // Stateless mode: a fresh server + transport per request. tools/list and every handler are
         // pure projections of the compiled registry, so per-request construction is cheap and the
         // transport never accumulates session state. The deadline signal rides in the context, so
         // a request that outlives its budget stops its own in-flight upstream work.
-        const server = createCorkServer({ ...(opts.ctx ?? {}), signal, apiKeys: "refuse" });
+        const server = createCorkServer(
+          { ...(opts.ctx ?? {}), corkClient: opts.ctx?.corkClient ?? HOSTED_MCP_CLIENT, signal, apiKeys: "refuse" },
+          {
+            clientName: () => session?.clientName,
+            ...(analytics ? { onToolCall: (call, args) => analytics.toolCall(call, meta, args) } : {}),
+          },
+        );
         // sessionIdGenerator undefined = stateless (the SDK types the field optional-but-not-
         // undefined under exactOptionalPropertyTypes; spreading nothing expresses the same).
         const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
         await server.connect(transport);
-        return transport.handleRequest(req, { parsedBody });
+        const res = await transport.handleRequest(req, { parsedBody });
+        if (!rpc.initialize || session === undefined || !(await initializeSucceeded(res))) return res;
+        // Hand the client its session token (JSON mode builds headers after the handler ran,
+        // so this is the response the client reads it from) and record the handshake.
+        analytics?.initialize(meta);
+        const headers = new Headers(res.headers);
+        headers.set("mcp-session-id", encodeSessionToken(session));
+        return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
       });
     }
     return new Response("not found — routes: /mcp (MCP Streamable HTTP), /healthz, /readyz, /docs/<topic>\n", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   };
   // ONE seam for the posture: every route's response, the transport's and the admission
   // refusals included, passes through here.
-  return async (req, peerAddress) => withSecurityHeaders(await route(req, peerAddress));
+  // Analytics rides the same seam: one request log per /mcp or /docs request (health probes are
+  // not logged — they would be most of the volume and say nothing), and an exception escaping a
+  // route is captured before it propagates exactly as it did without analytics.
+  return async (req, peerAddress) => {
+    const facts: RequestFacts = { meta: {} };
+    const serve = async (): Promise<Response> => withSecurityHeaders(await route(req, peerAddress, facts));
+    if (!analytics) return serve();
+    const started = performance.now();
+    const template = routeTemplate(new URL(req.url).pathname);
+    let status = 500;
+    try {
+      const res = await serve();
+      status = res.status;
+      return res;
+    } catch (err) {
+      analytics.captureException(err, facts.meta);
+      throw err;
+    } finally {
+      if (template !== "/healthz" && template !== "/readyz") {
+        analytics.requestLog({ route: template, method: req.method, status, latencyMs: Math.round(performance.now() - started), ...(facts.rpcMethod ? { rpcMethod: facts.rpcMethod } : {}), ...(facts.tool ? { tool: facts.tool } : {}), meta: facts.meta });
+      }
+    }
+  };
 }
 
 // Minimal ambient Bun.serve surface — the repo compiles with plain TS (no bun-types); the
@@ -258,15 +374,16 @@ declare const Bun: {
     hostname: string;
     maxRequestBodySize: number;
     fetch: (req: Request, server: { requestIP?: (req: Request) => { address: string } | null }) => Promise<Response>;
-  }): { port: number; hostname?: string; stop(): Promise<void> };
+  }): { port: number; hostname?: string; stop(closeActiveConnections?: boolean): Promise<void> };
 };
 
 /** Serve the handler with Bun.serve. Returns the Bun server (has .port, .hostname and .stop()).
  * `stop()` stops accepting and resolves once in-flight requests have finished (Bun 1.3.14,
- * verified) — the drain a graceful shutdown awaits. Binds loopback unless opts.host widens it —
+ * verified) — the drain a graceful shutdown awaits; `stop(true)` also closes the open
+ * connections at once (the crash path: nothing more is served by a process that is dying). Binds loopback unless opts.host widens it —
  * Bun's own default is 0.0.0.0, which must never be the accidental outcome of a bare
  * `ch mcp --http`. */
-export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: () => Promise<void> } {
+export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { port: number; hostname: string; stop: (closeActive?: boolean) => Promise<void> } {
   const hostname = opts.host ?? "127.0.0.1";
   const handler = createHttpHandler({ ...opts, host: hostname });
   const server = Bun.serve({
@@ -277,5 +394,5 @@ export function startHttpServer(port: number, opts: CorkHttpOptions = {}): { por
     maxRequestBodySize: MCP_HTTP_LIMITS.bodyBytes,
     fetch: (req, srv) => handler(req, srv.requestIP?.(req)?.address),
   });
-  return { port: server.port ?? port, hostname: server.hostname ?? hostname, stop: () => server.stop() };
+  return { port: server.port ?? port, hostname: server.hostname ?? hostname, stop: (closeActive = false) => server.stop(closeActive) };
 }

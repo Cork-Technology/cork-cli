@@ -42,6 +42,7 @@ const holder = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cb
 const FILLER = getAddress("0x00000000000000000000000000000000000000f1");
 const CLONE = getAddress("0x0000000000000000000000000000000000000c10");
 const FOR_SELF = getAddress("0x0000000000000000000000000000000000000f50");
+const FOR_SELF_CREATOR = getAddress("0x0000000000000000000000000000000000000f51");
 const SRC_CST = getAddress("0x00000000000000000000000000000000000000c1");
 const DST_CST = getAddress("0x00000000000000000000000000000000000000c2");
 const PREMIUM = getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
@@ -119,7 +120,7 @@ interface PoolWorld {
   /** Per-helper slots: the existing BaseFiller shorthand remains scoped to BaseFiller,
    *  never inherited by the new ForSelf helper. */
   partial?: { consumed?: bigint; filled?: string[]; settled?: string[]; filledByHelper?: Record<string, string[]>; error?: Error };
-  forSelf?: { cork?: string; whitelist?: string; exact?: string; partial?: string; error?: Error };
+  forSelf?: { cork?: string; whitelist?: string; exact?: string; partial?: string; creator?: string; creatorPool?: string; error?: Error };
 }
 const lc = (a: string) => a.toLowerCase();
 const execReverted = (why: string) => new Error(`execution reverted: ${why}`);
@@ -165,6 +166,12 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
   for (const [m, by] of Object.entries(o.attestations ?? {})) for (const [a, types] of Object.entries(by)) ((attestations[lc(m)] ??= {})[lc(a)] ??= []).push(...types);
   return stubRpc((c: StubCall) => {
     switch (c.functionName) {
+      case "MARKET_CREATOR":
+        if (o.forSelf?.error) throw o.forSelf.error;
+        return o.forSelf?.creator ?? FOR_SELF_CREATOR;
+      case "POOL_MANAGER":
+        if (lc(c.address) !== lc(FOR_SELF_CREATOR)) throw execReverted("not the fixed creator");
+        return o.forSelf?.creatorPool ?? PRIMARY_PM;
       case "CORK":
       case "WHITELIST":
       case "EXACT_SETTLER":
@@ -253,7 +260,7 @@ function chain(o: PoolWorld & { status?: number; clones?: Record<string, string>
         return o.isValidSignature ?? "0x1626ba7e";
       default: throw new Error(`no stub for ${c.functionName}`);
     }
-  }, { code: { [lc(FOR_SELF)]: "0x6000", ...(o.code ?? {}) } });
+  }, { code: { [lc(FOR_SELF)]: "0x6000", [lc(FOR_SELF_CREATOR)]: "0x6000", ...(o.code ?? {}) } });
 }
 function venue(routes: Array<{ match: string; status?: number; body: unknown }>, seen: Seen[] = []) {
   return async (url: string, init?: RequestInit): Promise<Response> => {
@@ -315,12 +322,35 @@ describe("rollover-fill ForSelf account-CALL route", () => {
     expect(offline.data).toBeNull();
   });
 
-  it("refuses JIT before target/spender/slot fallback, preserving direct Safe→BaseFiller creation as a separate operation", async () => {
-    const order = await signedOrder({ jitMarketHash: `0x${"ab".repeat(32)}` });
-    const env = await fill({ orderDigest: order.digest, signedOrder: order.payload, forSelf });
-    expect(env.state).toBe("unavailable");
-    expect(codes(env)).toContain("for_self_market_creation_unsupported");
-    expect(env.data).toBeNull();
+  it("prepares signed JIT through the fixed ForSelf creator for exact and partial fills, without changing spender or caller slots", async () => {
+    const jit = { collateralAsset: COLLATERAL, referenceAsset: PREMIUM, expiryTimestamp: NOW + 864000n, recipe: getAddress("0x00000000000000000000000000000000000000ec"), rateOverride: 5n, rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 3n, rateChangeCapacityMax: 4n, additionalData: "0x1234" as Hex, oracleSalt: toHex(8n, { size: 32 }), swapFeePercentage: 6n, unwindSwapFeePercentage: 7n };
+    const jitMarket = { collateralAsset: jit.collateralAsset, referenceAsset: jit.referenceAsset, expiryTimestamp: jit.expiryTimestamp.toString(), recipe: jit.recipe, rateOverride: "5", extraData: jit.additionalData, oracleSalt: jit.oracleSalt, swapFeePercentage: "6", unwindSwapFeePercentage: "7", constraint: { rateMin: "1", rateMax: "2", rateChangePerDayMax: "3", rateChangeCapacityMax: "4" } };
+    for (const partial of [false, true]) {
+      const order = await signedOrder({ settler: partial ? PARTIAL : EXACT, allowPartialFills: partial, jitMarketHash: hashJitMarketParams(jit, "0.2") });
+      const input = { orderDigest: order.digest, signedOrder: order.payload, forSelf, jitMarket };
+      // The premium is cash only in the signed JIT destination, not in the source market.
+      const env = await fill(input, { resolveRpc: chain({ pools: { [SRC_POOL]: { reference: OTHER_COLLATERAL }, [DST_POOL]: null } }) });
+      expect(env.state).toBe("ok");
+      const data = env.data as Data;
+      expect(data).toMatchObject({ to: FOR_SELF, from: FILLER, fillFunction: "rolloverForSelfWithMarket", execution: { kind: "account-call" }, forSelf: { marketCreator: FOR_SELF_CREATOR, partialSlot: { filler: FOR_SELF, subFiller: pad(FILLER) } } });
+      expect(data.approvals.map((entry) => entry.spender)).toEqual([FOR_SELF, FOR_SELF]);
+      const decoded = decodeFunctionData({ abi: forSelfAbi, data: data.calldata });
+      expect(decoded.functionName).toBe("rolloverForSelfWithMarket");
+      expect(decoded.args[1]).toEqual({ collateralAsset: COLLATERAL, referenceAsset: PREMIUM, expiryTimestamp: jit.expiryTimestamp, recipe: jit.recipe, rateOverride: 5n, constraint: { rateMin: 1n, rateMax: 2n, rateChangePerDayMax: 3n, rateChangeCapacityMax: 4n }, extraData: "0x1234", oracleSalt: jit.oracleSalt, swapFeePercentage: 6n, unwindSwapFeePercentage: 7n });
+      const decodedEnvelope = await runTool("cork_decode", { kind: "calldata", data: data.calldata, to: FOR_SELF, chainId: CHAIN }, { nowSeconds: NOW, resolveRpc: async () => null });
+      const decodedData = decodedEnvelope.data as { legs: Array<{ params: unknown; market: unknown }>; summary: string[] };
+      expect(decodedData.legs[0]?.params).toMatchObject({ orderDigest: order.digest, premiumCap: "62" });
+      expect(decodedData.legs[0]?.market).toEqual(JSON.parse(JSON.stringify(decoded.args[1], (_key, value) => typeof value === "bigint" ? value.toString() : value)));
+      expect(decodedData.summary.join("\n")).toContain(jit.recipe);
+      const drifted = await fill({ ...input, jitMarket: { ...jitMarket, extraData: "0x5678" } });
+      expect(drifted.state).toBe("conflict");
+      expect(codes(drifted)).toContain("jit_market_hash_mismatch");
+      for (const world of [{ forSelf: { creator: zeroAddress } }, { forSelf: { creatorPool: PREVIOUS_PM } }, { code: { [lc(FOR_SELF_CREATOR)]: "0x" } }, { forSelf: { error: NOT_A_REVERT } }]) {
+        const refused = await fill(input, { resolveRpc: chain(world) });
+        expect(["unavailable", "conflict"]).toContain(refused.state);
+        expect(refused.data).toBeNull();
+      }
+    }
   });
 
   it("refuses expired/beyond-order deadlines, zero floor, old wire and the owner-signed bounded mode", async () => {

@@ -87,3 +87,20 @@ jobs:
           # Bump deliberately, next to the lockfile pins.
           npm install -g --ignore-scripts phala@1.1.20
           phala deploy -c phala-compose.deploy.yml -n cork-mcp --wait
+
+      # Best-effort PostHog release annotation "cork-cli@<sha12>"; a no-op without the secret.
+      # Skipped while the POSTHOG_PROJECT_ID variable is unset. The key reaches curl on stdin.
+      - name: Annotate the release in PostHog (best-effort)
+        if: ${{ success() && vars.POSTHOG_PROJECT_ID != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$POSTHOG_PERSONAL_API_KEY" ]; then echo "POSTHOG_PERSONAL_API_KEY is not set — no annotation"; exit 0; fi
+          sha12=$(printf '%s' "$RELEASE_SHA" | cut -c1-12)
+          body=$(jq -nc --arg c "cork-cli@$sha12" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{content: $c, date_marker: $d, scope: "project"}')
+          printf 'Authorization: Bearer %s\n' "$POSTHOG_PERSONAL_API_KEY" | curl -fsS --max-time 20 -H @- -H 'content-type: application/json' -d "$body" "https://eu.posthog.com/api/projects/$POSTHOG_PROJECT_ID/annotations/" > /dev/null
+          echo "annotated cork-cli@$sha12"

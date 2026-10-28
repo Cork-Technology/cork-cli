@@ -44,6 +44,7 @@ const FORGE_SELECTORS: Record<string, string> = {
   fillOrderForSelf: "0xa9aa7877",
   // Actual production-solc0.8.30 compiled rollover ABI, not a client self-encoding fixture.
   rolloverForSelf: "0x2f5e9865",
+  rolloverForSelfWithMarket: "0x3a0fb24b",
 };
 
 describe("forself: selector parity with the compiled example adapters", () => {

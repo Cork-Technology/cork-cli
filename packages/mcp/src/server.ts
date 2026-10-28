@@ -6,14 +6,49 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ChainId, descriptionExample, DOC_TOPICS, Envelope, REGISTRY, SCHEMA_VERSION, inputJsonSchema } from "@cork/schemas";
-import { BUILD_VERSION, runTool, ToolInputError, type HandlerContext } from "@cork/core";
+import { BUILD_VERSION, type CorkClientIdentity, runTool, ToolInputError, type HandlerContext, withMcpClient } from "@cork/core";
 
 // All tools return the same envelope; advertise it once so clients can rely on structuredContent.
 // io:"input": the hex primitives are transforms (string -> `0x${string}`) whose output side zod
 // cannot render; their input side has the identical wire shape (regex-checked string).
 const ENVELOPE_SCHEMA = z.toJSONSchema(Envelope, { io: "input" }) as { type: "object" };
 
-export function createCorkServer(ctx: HandlerContext = {}): Server {
+/** What a tools/call looked like, for an observer — metadata only. The result is deliberately NOT
+ *  here (an observer cannot leak what it is never handed); the arguments go to `onToolCall` as a
+ *  separate value, for the hosted analytics to shape-filter (lib/mcp-analytics.ts). */
+export interface ToolCallObservation {
+  /** A registry tool name, or "unknown_tool" (a caller-chosen string is never passed on). */
+  tool: string;
+  durationMs: number;
+  /** The envelope state; a thrown/invalid call is "unavailable". */
+  state: "ok" | "unavailable" | "conflict";
+  /** The MCP `isError` flag this call returned. */
+  isError: boolean;
+  /** The first warning code (a closed snake_case enum), "invalid_input" or "internal_error". */
+  errorType?: string;
+  /** provenance.chainId of an envelope the tool produced (a public protocol identifier). */
+  chainId?: number;
+  /** The thrown error of an internal_error call, for exception capture by the observer. */
+  error?: unknown;
+}
+
+export interface CorkServerHooks {
+  /** The MCP client's name when the TRANSPORT knows it but this instance never saw the
+   *  initialize handshake (the stateless HTTP projection builds a server per request). */
+  clientName?: () => string | undefined;
+  /** Called once per tools/call, after the result is built, with the call's raw arguments. Must
+   *  not throw (it is guarded). Only the hosted HTTP projection sets it. */
+  onToolCall?: (call: ToolCallObservation, args: unknown) => void;
+}
+
+/** The identity of a server whose embedder did not set ctx.corkClient: the local stdio MCP
+ *  (`ch mcp`, `cork-mcp`) — a process the user runs, driven by an agent. */
+const STDIO_MCP_CLIENT: CorkClientIdentity = Object.freeze({ client: "cork-cli-mcp", comment: { surface: "mcp" as const } });
+
+const KNOWN_TOOLS: ReadonlySet<string> = new Set(REGISTRY.map((t) => t.name));
+const WARNING_CODE = /^[a-z0-9_]{1,64}$/u;
+
+export function createCorkServer(ctx: HandlerContext = {}, hooks: CorkServerHooks = {}): Server {
   // serverInfo.version is the BUILD version (release tag, "dev" in source runs); the envelope
   // schema version stays SCHEMA_VERSION on every result — two different contracts.
   const server = new Server(
@@ -58,10 +93,32 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
     })),
   }));
 
+  // Each call names the MCP client that drove it in the attribution headers it sends to Cork
+  // servers (cork-client.ts): from this instance's own handshake, else from the transport.
+  const callCtx = (): HandlerContext => ({ ...ctx, corkClient: withMcpClient(ctx.corkClient ?? STDIO_MCP_CLIENT, server.getClientVersion()?.name ?? hooks.clientName?.()) });
+  const observe = (call: ToolCallObservation, args: unknown): void => {
+    try {
+      hooks.onToolCall?.(call, args);
+    } catch {
+      /* an observer failure must never change a tool result */
+    }
+  };
+
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
+    const started = performance.now();
+    const tool = KNOWN_TOOLS.has(name) ? name : "unknown_tool";
     try {
-      const envelope = await runTool(name, args ?? {}, ctx);
+      const envelope = await runTool(name, args ?? {}, callCtx());
+      const code = envelope.warnings[0]?.code;
+      observe({
+        tool,
+        durationMs: Math.round(performance.now() - started),
+        state: envelope.state,
+        isError: envelope.state === "unavailable",
+        ...(envelope.state !== "ok" && code !== undefined && WARNING_CODE.test(code) ? { errorType: code } : {}),
+        ...(typeof envelope.provenance?.chainId === "number" ? { chainId: envelope.provenance.chainId } : {}),
+      }, args);
       return {
         resultType: "complete" as const,
         content: [{ type: "text" as const, text: JSON.stringify(envelope, null, 2) }],
@@ -93,6 +150,7 @@ export function createCorkServer(ctx: HandlerContext = {}): Server {
         provenance: { source: "config" as const, chainId, fetchedAt: new Date().toISOString() },
         schemaVersion: SCHEMA_VERSION,
       };
+      observe({ tool, durationMs: Math.round(performance.now() - started), state: "unavailable", isError: true, errorType: tie ? "invalid_input" : "internal_error", ...(tie ? {} : { error: err }) }, args);
       // Still resultType "complete": SEP-1303 keeps validation failures IN-BAND (isError results
       // an agent can self-correct from), and the reserved protocol-error band (-32020..-32099,
       // RC error-code policy) stays untouched — this server never mints custom JSON-RPC codes.

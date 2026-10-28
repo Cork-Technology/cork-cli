@@ -6,11 +6,13 @@ output, tool names, input schemas, exit codes, and the released public SDK contr
 Human-readable text and log formats are not covered.
 
 ## [Unreleased]
+
 ### Added
 
-- Explicit `rollover-fill.forSelf` prepares an existing-market `CorkForSelfAdapter.rolloverForSelf` account CALL for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. Default BaseFiller execution is unchanged. Premium funding is limited to signed-market cash assets; shared-adapter reservations, JIT creation and owner-bounded combinations refuse without fallback.
-- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access: use the separately admitted account/session wallet SDK, not an EOA transaction from the Safe. No deployed adapter default or RC3 availability is implied; deployment/configuration and tracking integration remain separate release gates.
+- Explicit `rollover-fill.forSelf` prepares `CorkForSelfAdapter.rolloverForSelf` and signed-JIT `rolloverForSelfWithMarket` account CALLs for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. JIT uses the adapter's fixed creator by ordinary CALL before the shared direct settler fill; disabled, unreadable or mismatched creator bindings refuse without fallback. The default BaseFiller route is unchanged.
+- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access; decoded JIT calls retain the complete signed market instruction. No deployed adapter default or release availability is implied. Independent account-side premium/amount/value limits and actual deployment/account execution qualification remain required; source binding checks do not supply that policy.
 
+- Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
 
 ## [0.8.0-rc.2] — preparation, not yet published
 

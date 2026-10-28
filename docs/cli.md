@@ -388,7 +388,7 @@ both invalidators. Existing-pool direct-wallet flow: maker cST allowance → sig
 order → taker premium-token allowance to LOP → prepare/simulate/sign individual partial fills.
 Approval preparation is not an approval transaction or proof of effective permission.
 
-### ForSelf rollover (existing markets)
+### ForSelf rollover (existing markets and signed JIT)
 
 `ch prepare order rollover-fill` accepts an explicit `--for-self` JSON object with
 `adapter` and `deadline` (a decimal-string Unix timestamp). Supply the reviewed improved
@@ -402,10 +402,15 @@ flow, not a JSON-RPC method). `ch sign` refuses it. Verify deployment/runtime id
 simulate the complete guarded operation before client-side session signing/submission.
 Getter agreement alone is not source identity or policy admission.
 
-This route supports 0.2 settlers and existing markets only, requires a positive destination
-floor, and refuses `bounded`, explicit JIT creation and signed JIT commitments before any
-sign/send, without fallback. Creation remains a separately admitted direct Safe CALL to
-the existing `BaseFiller.executeWithMarket`; the default BaseFiller route is unchanged.
+This route supports exact and partial 0.2 settlers and requires a positive destination
+floor. Existing-market fills use `rolloverForSelf`. For a signed JIT commitment, supply
+the matching `--jit-market` JSON instruction; `rolloverForSelfWithMarket` calls the
+adapter's fixed `MARKET_CREATOR` to resolve/create that destination, then fills the
+settler directly. The creator must have code and match the selected pool manager.
+Zero/absent/unreadable/mismatched creator bindings refuse without fallback. The adapter
+needs no creator role, BaseFiller dependency or delegatecall. Decoding retains the full
+market instruction, including constraints, extraData, salt and fees.
+`bounded` remains incompatible; the default BaseFiller route is unchanged.
 Premium must be collateral or reference cash of either signed market. An order reserved
 to the shared adapter refuses; third-party FillerAuth binds the actual destination Safe.
 Partial slots are `(digest, adapter, bytes32(Safe))`, independent of BaseFiller slots.
@@ -421,9 +426,15 @@ its maker-controlled clone even while the destination floor holds. Require an in
 approved account-side premium/amount/value budget before admitting this selector. Token and
 target/selector/spender admission alone are necessary but not sufficient.
 
-Source support is not a live deployment claim. RC3 remains gated on actual improved
-ForSelf deployment/configuration/operation and the separately reviewed tracking integration;
-an RC tag does not update the hosted MCP.
+Source support is not a live deployment claim. Activation requires the actual selected
+adapter/runtime/creator bindings and the admitted Safe/session/Guard/account policy;
+pricing and selected API availability remain separately qualified. An RC tag does not
+update the hosted MCP or establish production acceptance.
+The existing `cork_track verify forSelfAdapter` classification checks basic pool/LOP/caller-gate
+bindings, not rollover settler/creator/runtime identity or account policy. `cork_decode`
+retains the complete JIT market argument, but the embedded signed order's `originData` is
+still raw bytes; independently inspect that order's assets and commitment before authorizing
+third-party calldata. Neither result is a rollover execution approval.
 
 ### Bounded rollover batch (explicit module inputs)
 

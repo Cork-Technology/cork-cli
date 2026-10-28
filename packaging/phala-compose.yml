@@ -34,3 +34,12 @@ services:
       - ENVIO_API_TOKEN=${ENVIO_API_TOKEN}
       # Venue API base override; unset = api-phoenix.cork.tech/v1.
       - CORK_VENUE_URL=${CORK_VENUE_URL}
+      # Server-side analytics to PostHog EU (what is recorded: README, "What this sends to Cork").
+      # These lines are Cork's deployment config: REMOVE THEM when you self-host (without them
+      # the server sends nothing). The key is a public, write-only ingestion key.
+      # Kill switch: the encrypted CVM secret CORK_TELEMETRY=0 (see VERIFY.md).
+      - CORK_MCP_ANALYTICS=1
+      - POSTHOG_KEY=phc_ktQQriXeDWDvNGf77xxrDmvrp8SKCzZAHEKs9ZP7UD8N
+      - POSTHOG_HOST=https://eu.i.posthog.com
+      - CORK_ENV=prod
+      - CORK_TELEMETRY=${CORK_TELEMETRY}

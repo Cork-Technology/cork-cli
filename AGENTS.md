@@ -33,6 +33,10 @@ the root file's index). The rules below are the ones whose violation cost a rele
 - A new contract code hash goes into `approvedImplementations` in the same change that adds the
   address; the allowlist is never read from the remote copy.
 - Never commit an RPC URL or an API key.
+- No PostHog (or any analytics) SDK in any package, and no telemetry in the CLI or the stdio
+  MCP server. Hosted-server analytics live only in `packages/mcp/src/lib/` (the analytics core
+  (`analytics.ts`, `scrub.ts`, `telemetry-env.ts`, `log-export.ts`) and `mcp-analytics.ts`, the one entry);
+  `packages/mcp/test/analytics-guard.test.ts` holds both rules.
 - Gates: `bun run typecheck`, `bun run test:ci`, `bun run test:mutation`; a surface change
   regenerates its fixture only after the tier's checks (see `evals/README.md`).
 - Keep this file and `CLAUDE.md` free of dated history: a rule states what to do and the test

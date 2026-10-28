@@ -19,6 +19,19 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
+/** What the HOSTED server's analytics may keep from this tool's arguments
+ *  (packages/mcp/src/lib/mcp-analytics.ts; filtered there by value shape AND declared schema shape,
+ *  fail-closed). Every tool declares it.
+ *  - `read`: a query, a computation, a decode, a verification. No address is kept, and no 32-byte
+ *    hash either (a tx or order hash in a read names who is looked at, not who acts) — except at
+ *    the `keepHashes` paths (dotted, camelCase, into the validated input), which name a public
+ *    protocol identifier such as a pool id. Empty by default.
+ *  - `write`: the call builds or relays something an account will sign or has signed. Addresses
+ *    and hashes are kept, and `actor` lists the dotted paths of the acting wallet — the first
+ *    present address wins; it becomes the event's distinct_id. An empty list = no acting wallet
+ *    in the input (the event keeps the session identity). */
+export type ToolTelemetry = { readonly kind: "read"; readonly keepHashes?: readonly string[] } | { readonly kind: "write"; readonly actor: readonly string[] };
+
 export interface ToolDef<In extends z.ZodType = z.ZodType> {
   name: `cork_${string}`;
   /** Human display label (MCP Tool.title) — UI-only; models see name/description/schema. */
@@ -30,6 +43,7 @@ export interface ToolDef<In extends z.ZodType = z.ZodType> {
   phase: 1 | 2 | 3 | 4;
   description: string;
   annotations: ToolAnnotations;
+  telemetry: ToolTelemetry;
   input: In;
   output: z.ZodType;
 }
@@ -47,6 +61,7 @@ export const REGISTRY = [
     description:
       "Read any Cork resource (a cork-pool is one expiry of a market — the (collateralAsset, referenceAsset) family; a trading-pair is a LOP pair listing). Live chain state: cork-pool, account-state, pool-whitelist, protocol-config; whitelisted-addresses enumerates whitelist membership from chain events (HyperSync). Venue-discovered + chain-verified (hybrid, the default for lists): cork-pools, orderbook, fills, trading-pairs, rollover-orders (orders/fills/contracts via filters.kind), rfqs — rows carry verification:'confirmed'|'unverified', chain-refuted rows are dropped. Use for STATE READS. NOT for derived math (use cork_compute) or building txs (use cork_prepare_*).",
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+    telemetry: { kind: "read", keepHashes: ["filters.poolId"] },
     input: QueryInput,
     output: Envelope,
   }),
@@ -58,6 +73,7 @@ export const REGISTRY = [
     description:
       "Deterministic math over verified chain state: swap/unwind rate, dutch-auction (Fusion) price, rollover premium floor, worst-case impairment floor, RFQ quote. NOT for raw reads or byte-building.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "read", keepHashes: ["params.poolId"] },
     input: ComputeInput,
     output: Envelope,
   }),
@@ -69,6 +85,7 @@ export const REGISTRY = [
     description:
       "Decode bytes to labeled JSON: Cork calldata (recursively unwraps Bundler3 multicall; pass `to` — the address you intend to send to — for target verification, a mismatch is a conflict), a SIGNED raw transaction (kind 'tx': recovered signer + named target + inner legs — validate BEFORE broadcasting), a limit order, an event, or a receipt. Reconstructs; never trusts a caller-supplied parse.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "read" },
     input: DecodeInput,
     output: Envelope,
   }),
@@ -80,6 +97,7 @@ export const REGISTRY = [
     description:
       "The searchable manual + maturity map. No args → maturity of every tool/variant; topic → full variant docs OR a doc topic (topic:'signing' = how to sign & broadcast prepared artifacts client-side); search → keyword to exact tool+variant+filled template. Progressive disclosure.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "read" },
     input: CapabilitiesInput,
     output: Envelope,
   }),
@@ -92,6 +110,7 @@ export const REGISTRY = [
     description:
       "Build an unsigned Bundler3 bundle for a Cork Phoenix adapter action or token-authority op. Returns bytes for LATER signing — executes nothing. Deterministic for identical inputs + observed state; the deadline is wall-clock + deadlineSeconds, so it re-anchors on a later retry. Post-expiry settles are withdraw/withdraw-other/redeem (pre-expiry actions on an expired pool build but would revert). Full per-variant docs via cork_capabilities.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "write", actor: ["account"] },
     input: PreparePhoenixInput,
     output: Envelope,
   }),
@@ -104,6 +123,7 @@ export const REGISTRY = [
     description:
       "Build unsigned limit-order lifecycle typed-data (1inch LOP v4 maker/taker/cancel) or a rollover ERC-7683 intent (CorkSettler domain). Returns typed-data for LATER signing. Submission is cork_submit.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "write", actor: ["account"] },
     input: PrepareOrdersInput,
     output: Envelope,
   }),
@@ -115,6 +135,8 @@ export const REGISTRY = [
     description:
       "Build an unsigned market-infrastructure tx. deploy-oracle = MarketRegistry.deploy(ca, ref, mode): create the pair's rate oracle — permissionless and IDEMPOTENT (safe to send even if it already exists). create-pool = CorkMarketCreator.createNewPool(params): create the pool a JIT order derives AHEAD of the fill — the permit-free path (needed by a smart account where the JIT permit is ECDSA-only — phoenix/v0.4-rc.1 and the flat wire; optional on phoenix/v0.5, whose permit a contract wallet signs through ERC-1271; batch create-pool, cst.approve, then a permit-free fill); also permissionless and idempotent. Live on Arbitrum One and Base (42161, 8453). Markets are otherwise created just-in-time by a LOP fill (cork_prepare_orders maker-order with jitMarket).",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    // No account input: the sender of a permissionless deploy is not in the arguments.
+    telemetry: { kind: "write", actor: [] },
     input: PrepareMarketInput,
     output: Envelope,
   }),
@@ -126,6 +148,7 @@ export const REGISTRY = [
     description:
       "Verify a resource against deployed state, simulate frozen bytes, or reconcile a receipt/order/ref to a closed lifecycle state. Chain outranks indexer; disagreement → state 'conflict'.",
     annotations: { readOnlyHint: true, idempotentHint: true },
+    telemetry: { kind: "read", keepHashes: ["subject.poolId"] },
     input: TrackInput,
     output: Envelope,
   }),
@@ -142,6 +165,8 @@ export const REGISTRY = [
       idempotentHint: true,
       openWorldHint: true,
     },
+    // lop-order: the order's maker · rollover-order: the order's user · rfq-open/-counter: the requester · rfq-answer: the underwriter.
+    telemetry: { kind: "write", actor: ["action.order.maker", "action.order.user", "action.requester", "action.underwriter"] },
     input: SubmitInput,
     output: Envelope,
   }),

@@ -98,6 +98,13 @@ this (chain reads verified against CREATE2-derivable addresses, commitments reco
   the release's own scripts, a throwaway key and no push.
 - Runtime secrets (`CORK_MCP_TOKEN`, `CORK_MCP_DIAGNOSTICS_TOKEN`, `ENVIO_API_TOKEN`, a private `CORK_RPC_URL`, …) are set as
   **encrypted CVM secrets** in the Phala dashboard — never in the compose, never in git.
+- **Analytics.** Cork's compose turns on the hosted server's PostHog analytics: `CORK_MCP_ANALYTICS=1`,
+  the public write-only ingestion key, `POSTHOG_HOST` (EU) and `CORK_ENV=prod` are plain lines of the
+  measured compose, so a verifier sees exactly what is configured. What is recorded: README, "What
+  this sends to Cork". The kill switch is the encrypted CVM secret `CORK_TELEMETRY` (`0` = off),
+  referenced as `${CORK_TELEMETRY}`: set it (to `1`) at the first deploy of this compose, so that
+  turning analytics off later changes a secret value, not the compose. A server built from this
+  repo sends nothing unless it sets the same lines.
 
 ## One-time setup the release channel requires
 

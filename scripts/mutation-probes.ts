@@ -132,6 +132,11 @@ const T = {
   docTopics: "packages/core/test/doc-topics.test.ts",
   docsFreshness: "packages/core/test/docs-freshness.test.ts",
   http: "packages/mcp/test/http.test.ts",
+  analytics: "packages/mcp/test/analytics.test.ts",
+  analyticsCore: "packages/mcp/test/analytics-core.test.ts",
+  vectors: "packages/mcp/test/vectors.test.ts",
+  corkClient: "packages/core/test/cork-client.test.ts",
+  shutdown: "packages/mcp/test/shutdown.test.ts",
   httpAdmission: "packages/mcp/test/http-admission.test.ts",
   surfaceTier: "packages/mcp/test/surface-tier.test.ts",
   makerReadiness: "packages/core/test/maker-readiness.test.ts",
@@ -157,6 +162,9 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+  { id: "forself-jit-creator-pool-unbound", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: 'if (!creatorCode || creatorCode === "0x" || !isAddressEqual(creatorPool, phoenix.poolManager))', replace: 'if (!creatorCode || creatorCode === "0x")', tests: ["packages/core/test/rollover-fill.test.ts"] },
+  { id: "forself-jit-signed-extra-data-dropped", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: "extraData: jitParams.additionalData, oracleSalt:", replace: 'extraData: "0x", oracleSalt:', tests: ["packages/core/test/rollover-fill.test.ts"] },
+  { id: "forself-jit-decoded-market-hidden", file: "packages/core/src/bundle/decode.ts", find: '...(functionName === "rolloverForSelfWithMarket" ? { market: args[1] } : {})', replace: "...{}", tests: ["packages/core/test/rollover-fill.test.ts"] },
 {"id":"compatible-api-confidence-unchecked","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(CONFIDENCE_VALUES.includes(row.confidence), \"unsupported native checkpoint confidence; never finality or execution permission\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-api-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(isReviewedApiRevision(evidence.apiRevision), \"deployment identity must identify exactly one reviewed native API source revision\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-infra-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
@@ -172,7 +180,7 @@ const CATALOG: Mutant[] = [
   {"id":"bounded-owner-grant-original-size","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"const remainingPosition = order.orderSize - state.rolled;","replace":"const remainingPosition = order.orderSize;","tests":["packages/core/test/rollover-fill.test.ts"]},
   {"id":"native-history-false-completeness","file":"packages/core/src/handlers/track.ts","find":"fillsScanComplete: capability.supported && fillsScan.complete,\n              count: fills.items.length,","replace":"fillsScanComplete: true,\n              count: fills.items.length,","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {"id":"repeated-fill-trait-ignored","file":"packages/core/src/orders.ts","find":"allowMultipleFills: a.allowMultipleFills ?? false,","replace":"allowMultipleFills: false,","tests":["packages/core/test/orders.test.ts","packages/core/test/maker-ladder.test.ts"]},
-  {"id":"bounded-fill-caller-changed","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"to: bounded ? account : baseFiller,","replace":"to: baseFiller,","tests":["packages/core/test/rollover-fill.test.ts"]},
+  {"id":"bounded-fill-caller-changed","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"to: bounded ? account : fillHelper,","replace":"to: fillHelper,","tests":["packages/core/test/rollover-fill.test.ts"]},
   {"id":"native-exact-history-ranked-away","file":"packages/core/src/handlers/query.ts","find":"const verification = input.resource === \"orderbook\" && filters.orderHash !== undefined ? null : await verifyVenueRows","replace":"const verification = await verifyVenueRows","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {"id":"native-inactive-resting-conflict","file":"packages/core/src/handlers/track.ts","find":"if (bookRow && resting === true && onChain.status === \"filled-or-cancelled\")","replace":"if (bookRow && onChain.status === \"filled-or-cancelled\")","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {
@@ -2696,11 +2704,12 @@ const CATALOG: Mutant[] = [
     tests: [T.docsFreshness],
   },
   {
-    // The README names only one side of the trade again.
+    // The README denies the available fill capability. Removing only the BaseFiller paragraph
+    // is no longer an omission: the adjacent ForSelf paragraph independently describes the fill.
     id: "docs-rollover-readme-half-told",
     file: "README.md",
-    find: "which the cPT holder signs.\n  And it builds rollover-fill: the unsigned `BaseFiller.execute` calldata with which the source\n  cST holder fills that order and pays the premium.",
-    replace: "which the cPT holder signs.",
+    find: "And it builds rollover-fill:",
+    replace: "It cannot build rollover-fill:",
     tests: [T.docsFreshness],
   },
   {
@@ -2850,7 +2859,7 @@ const CATALOG: Mutant[] = [
     // The signing topic's transaction producers drop the rollover fill.
     id: "docs-signing-producers-rollover-fill-dropped",
     file: "packages/schemas/src/doc-topics.ts",
-    find: "\\`cork_prepare_orders\\` taker-fill, cancel,\nrollover-fill and deploy-rollover-contract.",
+    find: "\\`cork_prepare_orders\\` taker-fill, cancel,\ndefault BaseFiller rollover-fill and deploy-rollover-contract.",
     replace: "\\`cork_prepare_orders\\` taker-fill, cancel and\ndeploy-rollover-contract.",
     tests: [T.docTopics],
   },
@@ -7043,8 +7052,8 @@ const CATALOG: Mutant[] = [
     // the caller's signal is set on deps but never reaches the fetch (the rc.3 state).
     id: "venue-signal-not-passed",
     file: "packages/core/src/datasources/venue.ts",
-    find: "      { ...(init ?? {}), ...(deps.signal ? { signal: deps.signal } : {}) },",
-    replace: "      init ?? {},",
+    find: "      { ...(init ?? {}), headers: withCorkClientHeaders(init?.headers, deps.client), ...(deps.signal ? { signal: deps.signal } : {}) },",
+    replace: "      { ...(init ?? {}), headers: withCorkClientHeaders(init?.headers, deps.client) },",
     tests: [T.venueTransport],
   },
   {
@@ -9091,8 +9100,8 @@ const CATALOG: Mutant[] = [
     // The posture seam is removed and responses leave bare.
     id: "http-security-headers-not-applied",
     file: "packages/mcp/src/http.ts",
-    find: "return async (req, peerAddress) => withSecurityHeaders(await route(req, peerAddress));",
-    replace: "return route;",
+    find: "const serve = async (): Promise<Response> => withSecurityHeaders(await route(req, peerAddress, facts));",
+    replace: "const serve = (): Promise<Response> => route(req, peerAddress, facts);",
     tests: [T.mcpHttp],
   },
   {
@@ -9155,8 +9164,8 @@ const CATALOG: Mutant[] = [
   {
     id: "apikey-http-endpoint-not-marked",
     file: "packages/mcp/src/http.ts",
-    find: "const server = createCorkServer({ ...(opts.ctx ?? {}), signal, apiKeys: \"refuse\" });",
-    replace: "const server = createCorkServer({ ...(opts.ctx ?? {}), signal });",
+    find: "{ ...(opts.ctx ?? {}), corkClient: opts.ctx?.corkClient ?? HOSTED_MCP_CLIENT, signal, apiKeys: \"refuse\" },",
+    replace: "{ ...(opts.ctx ?? {}), corkClient: opts.ctx?.corkClient ?? HOSTED_MCP_CLIENT, signal },",
     tests: [T.mcpHttp],
   },
   {
@@ -10350,6 +10359,488 @@ const CATALOG: Mutant[] = [
     find: "const diskDisabled = (): boolean => process.env.VITEST !== undefined && process.env.CORK_RPC_CACHE_FILE === undefined;",
     replace: "const diskDisabled = (): boolean => process.env.VITEST !== undefined;",
     tests: [T.rpcCacheHermetic],
+  },
+  {
+    // Venue calls lose the attribution headers: the API can no longer tell cork-cli from cork-mcp.
+    id: "cork-client-headers-dropped",
+    file: "packages/core/src/cork-client.ts",
+    find: "for (const [name, value] of Object.entries(corkClientHeaders(client))) out.set(name, value);",
+    replace: "",
+    tests: [T.corkClient],
+  },
+  {
+    // A hostile MCP client name passes into the header unsanitized (header/free-text injection).
+    id: "cork-client-token-unsanitized",
+    file: "packages/core/src/cork-client.ts",
+    find: 'if (normalized.includes(fragment)) return label;\n  return "other";',
+    replace: 'if (normalized.includes(fragment)) return label;\n  return raw as McpClientLabel;',
+    tests: [T.corkClient],
+  },
+  {
+    // An address/hash/e-mail-shaped client name that CONTAINS a known name passes as that name.
+    id: "cork-client-sensitive-name-passes",
+    file: "packages/core/src/cork-client.ts",
+    find: 'if (raw.length > 128 || /0x[0-9a-f]{4,}|[0-9a-f]{16,}|@/iu.test(raw)) return "other";',
+    replace: "",
+    tests: [T.corkClient],
+  },
+  {
+    // A call site's own User-Agent / X-Cork-Client survives over the attribution pair.
+    id: "cork-client-call-site-overrides",
+    file: "packages/core/src/cork-client.ts",
+    find: "for (const [name, value] of Object.entries(corkClientHeaders(client))) out.set(name, value);",
+    replace: "for (const [name, value] of Object.entries(corkClientHeaders(client))) if (!out.has(name)) out.set(name, value);",
+    tests: [T.corkClient],
+  },
+  {
+    // A call site's own User-Agent is dropped instead of kept after ours.
+    id: "cork-client-existing-ua-dropped",
+    file: "packages/core/src/cork-client.ts",
+    find: '  if (existing) out.set("user-agent", `${out.get("user-agent")} ${existing}`);',
+    replace: "",
+    tests: [T.corkClient],
+  },
+  {
+    // X-Cork-Client carries the User-Agent comment again (the API allowlist expects it bare).
+    id: "cork-client-x-header-not-bare",
+    file: "packages/core/src/cork-client.ts",
+    find: 'return { "user-agent": formatCorkUserAgent(who, version), "x-cork-client": formatCorkClient(who, version) };',
+    replace: 'return { "user-agent": formatCorkUserAgent(who, version), "x-cork-client": formatCorkUserAgent(who, version) };',
+    tests: [T.corkClient, T.analytics],
+  },
+  {
+    // A non-semver build version goes out raw.
+    id: "cork-client-version-unchecked",
+    file: "packages/core/src/cork-client.ts",
+    find: 'return v.length <= 64 && SEMVER.test(v) ? v : "0.0.0-unknown";',
+    replace: "return v;",
+    tests: [T.corkClient],
+  },
+  {
+    // The kill switch inverted: DO_NOT_TRACK no longer turns hosted analytics off (even with a sink).
+    id: "analytics-do-not-track-ignored",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "const killed = env.DO_NOT_TRACK || !env.CORK_TELEMETRY;",
+    replace: "const killed = !env.CORK_TELEMETRY;",
+    tests: [T.analytics],
+  },
+  {
+    // Staging events reach the prod project.
+    id: "analytics-prod-key-guard-dropped",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "return env.CORK_ENV === required ? undefined : `${required} project key with CORK_ENV=${env.CORK_ENV}`;",
+    replace: "return undefined;",
+    tests: [T.analytics],
+  },
+  {
+    // A POSTHOG_KEY in the environment turns analytics on without the explicit opt-in.
+    id: "analytics-opt-in-ignored",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "if (rawEnv[\"CORK_MCP_ANALYTICS\"]?.trim() !== \"1\") return",
+    replace: "if (false) return",
+    tests: [T.analytics],
+  },
+  {
+    // Someone else's PostHog key is accepted.
+    id: "analytics-foreign-key-accepted",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "return \"POSTHOG_KEY is not a Cork project key\";",
+    replace: "return undefined;",
+    tests: [T.analytics],
+  },
+  {
+    // Server events start creating person profiles.
+    id: "analytics-person-profile-on",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "...(person ? {} : { $process_person_profile: false }),",
+    replace: "...(person ? {} : { $process_person_profile: true }),",
+    tests: [T.analytics],
+  },
+  {
+    // Signatures / calldata (hex longer than 64 digits) stay in error text.
+    id: "analytics-scrub-long-hex-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: ".replace(LONG_HEX_RE, (m) => `[hex:${m.length - 2}]`)",
+    replace: "",
+    tests: [T.vectors],
+  },
+  {
+    // A percent-encoded secret is no longer decoded before the secret rules run.
+    id: "analytics-scrub-percent-not-decoded",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "  s = percentDecode(s);",
+    replace: "",
+    tests: [T.vectors],
+  },
+  {
+    // IPv4 addresses survive the scrub.
+    id: "analytics-scrub-ipv4-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "    .replace(IPV4_RE, \"[redacted-ip]\")\n",
+    replace: "",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // Home-directory user names survive the scrub.
+    id: "analytics-scrub-home-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "    .replace(HOME_DIR_RE, \"$1[user]\");",
+    replace: "    ;",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // key=value secrets survive the scrub.
+    id: "analytics-scrub-key-value-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "redactName(name) && !isAddress(value) ? `${name}=[redacted]` : m,",
+    replace: "m,",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // Vendor credentials (AWS, sk-, ghp_, …) survive the scrub.
+    id: "analytics-scrub-aws-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "    .replace(CREDENTIAL_TEXT_RE, \"[redacted-credential]\")\n",
+    replace: "",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // URL paths (RPC keys) survive the scrub.
+    id: "analytics-scrub-url-path-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "`${scheme}://${host}${rest !== \"\" && rest !== \"/\" ? \"/[redacted]\" : \"\"}`,",
+    replace: "`${scheme}://${host}${rest}`,",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // E-mail addresses survive the scrub.
+    id: "analytics-scrub-email-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "    .replace(EMAIL_RE, \"[redacted-email]\")\n",
+    replace: "",
+    tests: [T.vectors, T.analytics],
+  },
+  {
+    // The client's User-Agent keeps its comments (free text) instead of product tokens only.
+    id: "analytics-ua-comments-kept",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'for (let i = 0; i < 8 && /\\([^()]*\\)/u.test(s); i++) s = s.replace(/\\([^()]*\\)/gu, " ");',
+    replace: "",
+    tests: [T.analytics],
+  },
+  {
+    // A client version that is not version-shaped passes through.
+    id: "analytics-version-shape-unchecked",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'return VERSION_SHAPE.test(v) && !SENSITIVE_SHAPE.test(v) ? v : "other";',
+    replace: "return v;",
+    tests: [T.analytics],
+  },
+  {
+    // An unknown User-Agent product name passes through.
+    id: "analytics-ua-name-unlisted",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'return label === undefined ? "other" : label;',
+    replace: 'return label === undefined || label === "other" ? raw : label;',
+    tests: [T.analytics],
+  },
+  {
+    // Any x-anthropic-client value passes through.
+    id: "analytics-vendor-unlisted",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: '.replace(/[^a-z0-9]+/gu, "")) ?? "other";',
+    replace: '.replace(/[^a-z0-9]+/gu, "")) ?? raw;',
+    tests: [T.analytics],
+  },
+  {
+    // Frame-shaped lines inside the error MESSAGE are parsed as stack frames (core stackFrames).
+    id: "analytics-stack-parsed-from-message",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "if (at >= 0) stack = stack.slice(at + err.message.length);",
+    replace: "void at;",
+    tests: [T.analytics],
+  },
+  {
+    // A frame keeps a path from someone's disk.
+    id: "analytics-frame-external-path-kept",
+    file: "packages/mcp/src/lib/posthog-http.ts",
+    find: 'else return "<external>";',
+    replace: "else kept = f;",
+    tests: [T.analytics],
+  },
+  {
+    // Frames go out in a shape PostHog's Node symbolication does not read.
+    id: "analytics-frame-platform-wrong",
+    file: "packages/mcp/src/lib/posthog-http.ts",
+    find: 'frames.push({ platform: "node:javascript", filename,',
+    replace: 'frames.push({ platform: "custom", filename,',
+    tests: [T.analytics],
+  },
+  {
+    // OTLP int attributes go out as JSON numbers (proto3 JSON wants int64 as a string): the
+    // core's log exporter, as the hosted server's request logs use it.
+    id: "analytics-otlp-int-as-number",
+    file: "packages/mcp/src/lib/log-export.ts",
+    find: "? { intValue: String(v) }",
+    replace: "? { intValue: v as unknown as string }",
+    tests: [T.analytics],
+  },
+  {
+    // PostHog geolocates our own server again (the core's base properties; this repo's transport
+    // also sets the flag, so only the core test sees it).
+    id: "analytics-geoip-on",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "    $geoip_disable: true,\n    ...(person",
+    replace: "    ...(person",
+    tests: [T.analyticsCore],
+  },
+  {
+    // The rebuilt error's stack header carries the whole message (its frame-shaped lines too).
+    id: "analytics-stack-header-whole-message",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: 'safe.stack = `${name}: ${message.split("\\n", 1)[0] ?? ""}\\n${frames}`;',
+    replace: 'safe.stack = `${name}: ${message}\\n${frames}`;',
+    tests: [T.analyticsCore],
+  },
+  {
+    // A request log's client_version skips its validator (any client string reaches the logs).
+    id: "analytics-log-client-version-unvalidated",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "const REQUEST_LOG_PASSTHROUGH = { client_version: matching(VERSIONISH) };",
+    replace: "const REQUEST_LOG_PASSTHROUGH = { client_version: (v: unknown) => v };",
+    tests: [T.analytics],
+  },
+  {
+    // A request log's JSON-RPC method keeps its `/`: the property filter then drops it.
+    id: "analytics-log-rpc-method-raw",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'rpc_method: rec.rpcMethod?.replace(/\\//gu, "_"),',
+    replace: "rpc_method: rec.rpcMethod,",
+    tests: [T.analytics],
+  },
+  {
+    // All sessions of one MCP client share one per-caller minute cap (no capKey).
+    id: "analytics-capkey-dropped",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "return meta.session ? { capKey: meta.session.sessionId } : {};",
+    replace: "return {};",
+    tests: [T.analytics],
+  },
+  {
+    // An argument key may take a top-level event name (client, env, chain_id, pool_id, …).
+    id: "analytics-arg-key-collides",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'return key.startsWith("$") || RESERVED_EVENT_KEYS.has(key) || Object.hasOwn(MCP_PASSTHROUGH, key);',
+    replace: 'return key.startsWith("$");',
+    tests: [T.analytics],
+  },
+  {
+    // A pool id the core alias already carries is counted as a dropped argument.
+    id: "analytics-arg-pool-alias-counted",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "else if (pools[k] !== v) dropped++;",
+    replace: "else dropped++;",
+    tests: [T.analytics],
+  },
+  {
+    // An <external> frame keeps its function name.
+    id: "analytics-external-frame-function-kept",
+    file: "packages/mcp/src/lib/posthog-http.ts",
+    find: 'function: filename === "<external>" ? "<anonymous>" : frameFunction(m[1]),',
+    replace: "function: frameFunction(m[1]),",
+    tests: [T.analytics],
+  },
+  {
+    // The event queue grows without bound when PostHog is down.
+    id: "analytics-queue-uncapped",
+    file: "packages/mcp/src/lib/posthog-http.ts",
+    find: "if (this.items.length >= ANALYTICS_QUEUE_CAP) {",
+    replace: "if (false) {",
+    tests: [T.analytics],
+  },
+  {
+    // The daily event cap is ignored (a flood of a public endpoint becomes a bill).
+    id: "analytics-daily-cap-ignored",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "if (d.n >= dailyCap) {",
+    replace: "if (false) {",
+    tests: [T.analytics],
+  },
+  {
+    // The per-caller per-minute cap is ignored (a retry loop floods).
+    id: "analytics-caller-cap-ignored",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "} else if (++c.n > MAX_EVENTS_PER_CALLER_PER_MINUTE) {",
+    replace: "} else if (false) {",
+    tests: [T.analytics],
+  },
+  {
+    // Exceptions are no longer deduplicated.
+    id: "analytics-exception-dedupe-ignored",
+    file: "packages/mcp/src/lib/analytics.ts",
+    find: "if (!ctx.fatal && !dedupeAllows(s, key, now)) return;",
+    replace: "",
+    tests: [T.analytics],
+  },
+  {
+    // distinct_id collides with the API's own anon_ ids again.
+    id: "analytics-distinct-id-unprefixed",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "return identityFor({ client: `mcp-${meta.session?.clientName ?? \"unknown\"}`, ...capKeyOf(meta) });",
+    replace: "return identityFor({ client: meta.session?.clientName ?? \"unknown\", ...capKeyOf(meta) });",
+    tests: [T.analytics],
+  },
+  {
+    // A failed initialize still hands out a session token.
+    id: "session-minted-on-failed-initialize",
+    file: "packages/mcp/src/http.ts",
+    find: "if (!rpc.initialize || session === undefined || !(await initializeSucceeded(res))) return res;",
+    replace: "if (!rpc.initialize || session === undefined) return res;",
+    tests: [T.analytics],
+  },
+  {
+    // A stale token on initialize wins over the handshake.
+    id: "session-stale-token-wins",
+    file: "packages/mcp/src/http.ts",
+    find: "const session: SessionInfo | undefined = rpc.initialize\n",
+    replace: 'const session: SessionInfo | undefined = !req.headers.get("mcp-session-id") && rpc.initialize\n',
+    tests: [T.analytics],
+  },
+  {
+    // SIGTERM: the flush waits behind the drain again (a slow call starves it).
+    id: "shutdown-flush-after-drain",
+    file: "packages/mcp/src/lib/shutdown.ts",
+    find: "const early = analytics?.flush();\n  await server.stop();",
+    replace: "await server.stop();\n  const early = analytics?.flush();",
+    tests: [T.shutdown],
+  },
+  {
+    // The crash path keeps serving while it flushes.
+    id: "shutdown-fatal-listener-kept",
+    file: "packages/mcp/src/lib/shutdown.ts",
+    find: "void server?.stop(true).catch(() => undefined);",
+    replace: "",
+    tests: [T.shutdown],
+  },
+  {
+    // The crash path is no longer bounded: a hung PostHog holds a dead process.
+    id: "shutdown-fatal-unbounded",
+    file: "packages/mcp/src/lib/shutdown.ts",
+    find: "return Promise.race([run, bound])",
+    replace: "return run",
+    tests: [T.shutdown],
+  },
+  {
+    // The hosted server stops naming the end client in its venue calls.
+    id: "analytics-session-client-not-forwarded",
+    file: "packages/mcp/src/http.ts",
+    find: "            clientName: () => session?.clientName,",
+    replace: "            clientName: () => undefined,",
+    tests: [T.analytics],
+  },
+  {
+    // A read tool keeps the addresses in its arguments (who is looked at, not who acts).
+    id: "analytics-read-keeps-addresses",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "{ addresses: false, hashes: new Set(telemetry.keepHashes ?? []) }",
+    replace: "{ addresses: true, hashes: new Set(telemetry.keepHashes ?? []) }",
+    tests: [T.analytics],
+  },
+  {
+    // A read tool keeps every 32-byte hash (tx / order hashes), not only its keepHashes.
+    id: "analytics-read-keeps-hashes",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "{ addresses: false, hashes: new Set(telemetry.keepHashes ?? []) }",
+    replace: "{ addresses: false, hashes: true as const }",
+    tests: [T.analytics],
+  },
+  {
+    // A 32-byte value is kept in any string field (generic Hex, free text), not only a Bytes32.
+    id: "analytics-hash-any-field",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "  if (pattern === HASH_PATTERN) return HASH_SHAPE.test(v)",
+    replace: "  if (HASH_SHAPE.test(v)) return HASH_SHAPE.test(v)",
+    tests: [T.analytics],
+  },
+  {
+    // A digit string is kept in any string field (a card number in a search), not only a numeric one.
+    id: "analytics-numeric-any-field",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: 'if (typeof pattern === "string" && NUMERIC_PATTERNS.has(pattern)) return',
+    replace: "if (AMOUNT_SHAPE.test(v)) return",
+    tests: [T.analytics],
+  },
+  {
+    // An enum-shaped free string the schema does not declare as an enum is kept.
+    id: "analytics-undeclared-enum-kept",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "  if (literalsOf(leaf).includes(v)) return ENUM_SHAPE.test(v);",
+    replace: "  if (ENUM_SHAPE.test(v)) return true;",
+    tests: [T.analytics],
+  },
+  {
+    // One union alternative vouching is enough (a Bytes32 | Hex union keeps arbitrary 32-byte hex).
+    id: "analytics-union-any-alternative",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "leaves.every((l) => leafAllows(",
+    replace: "leaves.some((l) => leafAllows(",
+    tests: [T.analytics],
+  },
+  {
+    // Discriminated unions stop resolving: every variant's fields vouch for every other's.
+    id: "analytics-union-discriminator-ignored",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: '    if (lits.length === 1 && "const" in alts[0]! && value[k] !== lits[0]) return false;',
+    replace: "",
+    tests: [T.analytics],
+  },
+  {
+    // A record's caller-chosen keys become property names.
+    id: "analytics-record-entered",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "if (declared && p.length < MAX_ARG_DEPTH",
+    replace: "if (p.length < MAX_ARG_DEPTH",
+    tests: [T.analytics],
+  },
+  {
+    // cork_query filters lose their advertised key shapes (every filter is dropped again).
+    id: "analytics-query-filters-unadvertised",
+    file: "packages/schemas/src/tools.ts",
+    find: "    .meta({ properties: QUERY_FILTER_PROPERTIES })\n",
+    replace: "",
+    tests: [T.analytics],
+  },
+  {
+    // Conflicting pool ids still produce a top-level pool_id (the first one wins).
+    id: "analytics-flat-pool-conflict-kept",
+    file: "packages/mcp/src/lib/scrub.ts",
+    find: "    if (values.size === 1) out[name] = [...values][0] as Scalar;",
+    replace: "    if (values.size >= 1) out[name] = [...values][0] as Scalar;",
+    tests: [T.analytics],
+  },
+  {
+    // The cross-product `client` property disappears from hosted events.
+    id: "analytics-client-property-dropped",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "    client: s?.clientName ?? \"unknown\",\n",
+    replace: "",
+    tests: [T.analytics],
+  },
+  {
+    // A write's acting wallet no longer becomes the event's identity.
+    id: "analytics-actor-not-identity",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "identityFor({ wallet: { address: args.actor, verified: false } })",
+    replace: "clientIdentity(meta)",
+    tests: [T.analytics],
+  },
+  {
+    // A passthrough key skips its validator (any session id string passes).
+    id: "analytics-passthrough-unvalidated",
+    file: "packages/mcp/src/lib/mcp-analytics.ts",
+    find: "  mcp_session_id: matching(SESSION_ID),",
+    replace: "  mcp_session_id: (v) => v,",
+    tests: [T.analytics],
   },
 ];
 

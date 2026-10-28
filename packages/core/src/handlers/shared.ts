@@ -8,6 +8,7 @@ import { resolveDeployment as resolveDeploymentBuiltin, resolveGenerations, reso
 import { type CorkDeployment } from "../config.ts";
 import { type GenerationBlockKind, type GenerationRef, type GenerationRefusal, IMPLEMENTED_MARKET_REGISTRY_WIRES, isGenerationAlias, type MarketRegistryWire, type PhoenixWire, type PoolGenerationClient, type PoolGenerationResolution, resolveGenerationAlias, resolvePoolGeneration } from "../generations.ts";
 import { type HyperSyncSource } from "../datasources/hypersync.ts";
+import { type CorkClientIdentity } from "../cork-client.ts";
 import { VenueAborted, type VenueDeps, VenueHttpError, VenueUnreachable } from "../datasources/venue.ts";
 import { marketRegistryAbi, REGISTRY_DEPLOY_ERROR_NAMES } from "../market-registry.ts";
 
@@ -48,6 +49,10 @@ export interface HandlerContext {
   venueFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** Override the venue base URL (default: CORK_VENUE_URL env or api-phoenix.cork.tech/v1). */
   venueUrl?: string;
+  /** Who this process is to Cork servers (cork-client.ts) — the `User-Agent` / `X-Cork-Client`
+   *  value on every venue call. Set by each surface (CLI, stdio MCP, hosted MCP); absent =
+   *  `cork-sdk/<version>`. Attribution only, never auth. */
+  corkClient?: CorkClientIdentity;
   /** Override the logs-capable endpoint (default: CORK_LOGS_RPC_URL env, else HyperRPC via ENVIO_API_TOKEN). */
   logsUrl?: string;
   /** Override the logs fetch implementation (tests inject a stub). */
@@ -93,6 +98,7 @@ export function venueDepsOf(ctx: HandlerContext): VenueDeps {
     ...(ctx.venueFetch ? { fetch: ctx.venueFetch } : {}),
     ...(ctx.venueUrl ? { baseUrl: ctx.venueUrl } : {}),
     ...(ctx.signal ? { signal: ctx.signal } : {}),
+    ...(ctx.corkClient ? { client: ctx.corkClient } : {}),
   };
 }
 

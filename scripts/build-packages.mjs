@@ -43,6 +43,15 @@ for await (const rel of glob("**/*.d.ts", { cwd: staging })) {
   if (after !== before) await writeFile(path, after);
 }
 
+// Stamp @cork/core's package version into its emitted package-version.js (source value:
+// undefined), so an npm consumer's X-Cork-Client names the version it installed instead of
+// 0.0.0-dev (packages/core/src/cork-client.ts). A whole-file write of one constant, never a
+// regex over emitted code.
+{
+  const { version } = JSON.parse(await readFile(resolve(root, "packages", "core", "package.json"), "utf8"));
+  await writeFile(resolve(staging, "packages", "core", "src", "package-version.js"), `export const PACKAGE_VERSION = ${JSON.stringify(version)};\n`);
+}
+
 // Give each package a self-contained dist subtree so it publishes independently; core also carries
 // the bundled defaults its relative JSON imports resolve to (../../../cork-defaults.v2.json — the
 // schema-2 document this line reads; the frozen schema-1 file rides along for the 0.5.x tooling

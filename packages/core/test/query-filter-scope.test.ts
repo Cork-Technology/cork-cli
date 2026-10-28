@@ -4,7 +4,7 @@
 // RESOURCE_FILTER_KEYS record to the schema's resource enum and to KNOWN_FILTER_KEYS from both
 // sides, so a new resource or a new key cannot land half-mapped.
 import { describe, expect, it } from "vitest";
-import { QueryInput } from "@cork/schemas";
+import { inputJsonSchema, QUERY_FILTER_PROPERTIES, QueryInput } from "@cork/schemas";
 import { runTool, ToolInputError } from "@cork/core";
 import { KNOWN_FILTER_KEYS, RESOURCE_FILTER_KEYS } from "../src/handlers/filters.ts";
 import { withNativeApiMetadata } from "./helpers.ts";
@@ -125,5 +125,41 @@ describe("RESOURCE_FILTER_KEYS drift gates", () => {
     // A key no resource consumes is dead vocabulary: parseQueryFilters would accept it and the
     // gate would refuse it EVERYWHERE — delete it from KNOWN_FILTER_KEYS instead.
     expect([...known].filter((k) => !consumed.has(k))).toEqual([]);
+  });
+});
+
+describe("typed (advertised) filter keys: the schema documents them, validation is exactly the open record's", () => {
+  it("the advertised keys are exactly KNOWN_FILTER_KEYS, and the JSON schema carries them as properties of an open object", () => {
+    expect(Object.keys(QUERY_FILTER_PROPERTIES).sort()).toEqual([...KNOWN_FILTER_KEYS].sort());
+    const filters = (inputJsonSchema("cork_query") as { properties: Record<string, { properties?: object; additionalProperties?: unknown }> }).properties["filters"]!;
+    expect(Object.keys(filters.properties ?? {}).sort()).toEqual([...KNOWN_FILTER_KEYS].sort());
+    expect(filters.additionalProperties).toEqual({});
+  });
+
+  it("whatever the open record accepted is still accepted, verbatim and in the caller's key order", () => {
+    const accepted: Array<Record<string, unknown>> = [
+      { zzz: 1, side: "SELL", poolId: "not-a-pool-id" }, // unknown key + malformed known values: refused later by the handler, not the schema
+      { rate: 1000000000000000000, fillable: "yes", account: 42, nested: { deep: [1, 2] } },
+      { status: "OPEN", rfqId: "rfq_0abc", orderHash: `0x${"cd".repeat(32)}` },
+      {},
+    ];
+    for (const filters of accepted) {
+      const parsed = QueryInput.safeParse({ resource: "orderbook", filters });
+      expect(parsed.success, JSON.stringify(filters)).toBe(true);
+      expect(parsed.data!.filters).toEqual(filters);
+      expect(Object.keys(parsed.data!.filters!)).toEqual(Object.keys(filters));
+    }
+    // ...and what it refused is still refused.
+    for (const bad of ["x", 1, ["poolId"], null]) expect(QueryInput.safeParse({ resource: "orderbook", filters: bad }).success).toBe(false);
+  });
+
+  it("the handler's own refusals and codes are unchanged: unknown key → did-you-mean, malformed known value → its own teaching", async () => {
+    const unknown = await q("orderbook", { poolid: `0x${"ab".repeat(32)}` }).catch((e: ToolInputError) => e);
+    expect(unknown).toBeInstanceOf(ToolInputError);
+    const bad = await q("orderbook", { side: "sideways" }).catch((e: ToolInputError) => e);
+    expect(bad).toBeInstanceOf(ToolInputError);
+    expect((bad as ToolInputError & { issues: Array<{ path: unknown[]; message: string }> }).issues[0]).toMatchObject({ path: ["filters", "side"], message: "expected 'BUY' | 'SELL'" });
+    const pool = await q("cork-pool", { poolId: "nope" }).catch((e: ToolInputError) => e);
+    expect((pool as ToolInputError & { issues: Array<{ message: string }> }).issues[0]!.message).toBe("not a valid 32-byte pool id");
   });
 });

@@ -352,6 +352,9 @@ export async function runCli(
     readSecret?: (prompt: string) => Promise<string>;
   } & WalletIo = {},
 ): Promise<CliResult> {
+  // The CLI's identity to Cork servers: `User-Agent` / `X-Cork-Client: cork-cli/<version>` on
+  // every venue call (packages/core/src/cork-client.ts). Attribution only; an embedder may set its own.
+  ctx = { corkClient: { client: "cork-cli" }, ...ctx };
   let out = "";
   let err = "";
   let code: number = EXIT.ok;

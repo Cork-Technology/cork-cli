@@ -1,0 +1,1378 @@
+{
+  "$comment": "Cork telemetry scrub conformance vectors. DATA ONLY. Do not edit a copy: change the source, then re-copy. {\"$join\": [..]} = the parts joined (split so push protection does not trip; every value is fake).",
+  "version": 1,
+  "setup": {
+    "registerSecrets": [
+      "0xc0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "correct-horse-battery-staple-42"
+    ]
+  },
+  "cases": [
+    {
+      "id": "text.pk.keyword-colon",
+      "fn": "scrubText",
+      "input": "privateKey: 0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+      "expect": "privateKey: [redacted]"
+    },
+    {
+      "id": "text.pk.assign",
+      "fn": "scrubText",
+      "input": "PRIVATE_KEY=0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a node app.js",
+      "expect": "PRIVATE_KEY=[redacted] node app.js"
+    },
+    {
+      "id": "text.pk.pk-assign",
+      "fn": "scrubText",
+      "input": "signer pk=0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+      "expectAbsent": [
+        "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a"
+      ]
+    },
+    {
+      "id": "text.pk.json",
+      "fn": "scrubText",
+      "input": "config {\"privateKey\":\"0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a\",\"chainId\":1}",
+      "expect": "config {\"privateKey\":\"[redacted]\",\"chainId\":1}"
+    },
+    {
+      "id": "text.pk.json-camel-pk",
+      "fn": "scrubText",
+      "input": "{\"signerPk\": \"0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a\"}",
+      "expect": "{\"signerPk\": \"[redacted]\"}"
+    },
+    {
+      "id": "text.pk.session-key-words",
+      "fn": "scrubText",
+      "input": "loaded session key 0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a for agent",
+      "expect": "loaded session key [redacted] for agent"
+    },
+    {
+      "id": "text.registered.exact",
+      "fn": "scrubText",
+      "input": "wallet init with 0xc0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "expect": "wallet init with [redacted-secret]"
+    },
+    {
+      "id": "text.registered.upper",
+      "fn": "scrubText",
+      "input": "key 0xC0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00 loaded",
+      "expectAbsent": [
+        "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00"
+      ],
+      "expectPresent": [
+        "[redacted-secret]"
+      ]
+    },
+    {
+      "id": "text.registered.no-0x",
+      "fn": "scrubText",
+      "input": "raw=c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "expectAbsent": [
+        "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+      ]
+    },
+    {
+      "id": "text.registered.decimal",
+      "fn": "scrubText",
+      "input": "bigint 87296255565461414097782468958669970255991234985404839579780944818361281277440 overflow",
+      "expect": "bigint [redacted-secret] overflow"
+    },
+    {
+      "id": "text.registered.word",
+      "fn": "scrubText",
+      "input": "login failed for correct-horse-battery-staple-42 on retry",
+      "expect": "login failed for [redacted-secret] on retry"
+    },
+    {
+      "id": "text.registered.word-case",
+      "fn": "scrubText",
+      "input": "echo CORRECT-HORSE-BATTERY-STAPLE-42",
+      "expect": "echo [redacted-secret]"
+    },
+    {
+      "id": "text.url.path-key",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "fetch failed: https://eth-mainnet.g.alchemy.com/v2/",
+          "FAKEkey1234567890abcdefXYZ"
+        ]
+      },
+      "expect": "fetch failed: https://eth-mainnet.g.alchemy.com/[redacted]"
+    },
+    {
+      "id": "text.url.query-key",
+      "fn": "scrubText",
+      "input": "GET https://rpc.example.org/?apikey=notarealkey123456 timed out",
+      "expect": "GET https://rpc.example.org/[redacted] timed out"
+    },
+    {
+      "id": "text.url.basic-auth",
+      "fn": "scrubText",
+      "input": "connect https://user:hunter2pass@rpc.example.org:8545/x failed",
+      "expect": "connect https://rpc.example.org:8545/[redacted] failed"
+    },
+    {
+      "id": "text.url.wss",
+      "fn": "scrubText",
+      "input": "ws closed wss://arb-mainnet.example.io/ws/v3/fakeFAKEfake0123456789",
+      "expect": "ws closed wss://arb-mainnet.example.io/[redacted]"
+    },
+    {
+      "id": "text.url.host-only-kept",
+      "fn": "scrubText",
+      "input": "POST https://eu.i.posthog.com 503",
+      "expect": "POST https://eu.i.posthog.com 503"
+    },
+    {
+      "id": "text.url.schemeless-v-path",
+      "fn": "scrubText",
+      "input": "host eth-mainnet.g.alchemy.com/v2/abcdEFGH1234 refused",
+      "expect": "host eth-mainnet.g.alchemy.com/[redacted] refused"
+    },
+    {
+      "id": "text.url.schemeless-long-seg",
+      "fn": "scrubText",
+      "input": "post to hooks.slack.com/services/T000FAKE/B000FAKE/fakefakefakefakefake failed",
+      "expect": "post to hooks.slack.com/[redacted] failed"
+    },
+    {
+      "id": "text.url.schemeless-uuid",
+      "fn": "scrubText",
+      "input": "gw virtual.mainnet.rpc.tenderly.co/0f0f0f0f-1111-2222-3333-444455556666 down",
+      "expect": "gw virtual.mainnet.rpc.tenderly.co/[redacted] down"
+    },
+    {
+      "id": "text.url.schemeless-query",
+      "fn": "scrubText",
+      "input": "rpc.example.org/rpc?key=fakefake ok",
+      "expectAbsent": [
+        "fakefake"
+      ],
+      "expectPresent": [
+        "rpc.example.org/rpc?[redacted]"
+      ]
+    },
+    {
+      "id": "text.url.schemeless-short-path-kept",
+      "fn": "scrubText",
+      "input": "api.cork.tech/limit-orders/v1 returned 400",
+      "expect": "api.cork.tech/limit-orders/v1 returned 400"
+    },
+    {
+      "id": "text.url.encoded",
+      "fn": "scrubText",
+      "input": "redirect to https%3A%2F%2Frpc.example.org%2Fv2%2Ffakekey123",
+      "expect": "redirect to https://rpc.example.org/[redacted]"
+    },
+    {
+      "id": "text.url.double-encoded",
+      "fn": "scrubText",
+      "input": "next=https%253A%252F%252Frpc.example.org%252Fv2%252Ffakekey123",
+      "expectAbsent": [
+        "fakekey123"
+      ]
+    },
+    {
+      "id": "text.dsn.postgres",
+      "fn": "scrubText",
+      "input": "db error postgres://cork:s3cr3t@pw@db.internal:5432/cork",
+      "expect": "db error postgres://db.internal:5432/[redacted]"
+    },
+    {
+      "id": "text.dsn.schemeless",
+      "fn": "scrubText",
+      "input": "pool connect cork:pa55word@db.internal:5432 refused",
+      "expectAbsent": [
+        "pa55word"
+      ],
+      "expectPresent": [
+        "db.internal"
+      ]
+    },
+    {
+      "id": "text.dsn.redis",
+      "fn": "scrubText",
+      "input": "redis://default:fakepassword@cache.example.net:6379",
+      "expect": "redis://cache.example.net:6379"
+    },
+    {
+      "id": "text.cred.query-assign",
+      "fn": "scrubText",
+      "input": "retry with api_key=notarealvalue&chain=1",
+      "expect": "retry with api_key=[redacted]&chain=1"
+    },
+    {
+      "id": "text.cred.env-assign",
+      "fn": "scrubText",
+      "input": "PROVIDER_API_KEY=notarealvalue started",
+      "expect": "PROVIDER_API_KEY=[redacted] started"
+    },
+    {
+      "id": "text.cred.header",
+      "fn": "scrubText",
+      "input": "x-api-key: notarealvalue rejected",
+      "expect": "x-api-key: [redacted] rejected"
+    },
+    {
+      "id": "text.cred.password-colon",
+      "fn": "scrubText",
+      "input": "password: hunter2hunter2",
+      "expect": "password: [redacted]"
+    },
+    {
+      "id": "text.cred.bearer",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "Authorization: Bearer ",
+          "abc.def-ghi_FAKE"
+        ]
+      },
+      "expect": "Authorization: Bearer [redacted]"
+    },
+    {
+      "id": "text.cred.basic",
+      "fn": "scrubText",
+      "input": "Authorization: Basic dXNlcjpmYWtlcGFzcw==",
+      "expect": "Authorization: Basic [redacted]"
+    },
+    {
+      "id": "text.cred.jwt",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "token eyJ",
+          "hbGciOiJIUzI1NiJ9",
+          ".",
+          "eyJzdWIiOiJmYWtlIn0",
+          ".",
+          "ZmFrZXNpZ25hdHVyZQ"
+        ]
+      },
+      "expectAbsent": [
+        "hbGciOiJIUzI1NiJ9",
+        "ZmFrZXNpZ25hdHVyZQ"
+      ]
+    },
+    {
+      "id": "text.cred.phc",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "key ph",
+          "c_",
+          "FAKEFAKEFAKEFAKE1234"
+        ]
+      },
+      "expectAbsent": [
+        "FAKEFAKEFAKEFAKE1234"
+      ]
+    },
+    {
+      "id": "text.cred.phx",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "personal ph",
+          "x_",
+          "FAKEFAKEFAKEFAKE5678 used"
+        ]
+      },
+      "expectAbsent": [
+        "FAKEFAKEFAKEFAKE5678"
+      ]
+    },
+    {
+      "id": "text.cred.openai",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "llm error for s",
+          "k-",
+          "FAKEfake0000000000fake"
+        ]
+      },
+      "expect": "llm error for [redacted-credential]"
+    },
+    {
+      "id": "text.cred.stripe",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "stripe s",
+          "k_live_",
+          "FAKE0000fake0000"
+        ]
+      },
+      "expect": "stripe [redacted-credential]"
+    },
+    {
+      "id": "text.cred.github",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "clone with gh",
+          "p_",
+          "FAKEfakeFAKEfake0000"
+        ]
+      },
+      "expect": "clone with [redacted-credential]"
+    },
+    {
+      "id": "text.cred.aws",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "aws AK",
+          "IA",
+          "FAKEFAKEFAKE0000",
+          " denied"
+        ]
+      },
+      "expect": "aws [redacted-credential] denied"
+    },
+    {
+      "id": "text.cred.slack",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "slack xo",
+          "xb-",
+          "0000-FAKE-fake"
+        ]
+      },
+      "expect": "slack [redacted-credential]"
+    },
+    {
+      "id": "text.cred.high-entropy",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "token ",
+          "Zm9vYmFyQmF6",
+          "UXV4MTIzNDU2Nzg5MGFi",
+          " rejected"
+        ]
+      },
+      "expect": "token [redacted-token] rejected"
+    },
+    {
+      "id": "text.cred.bare-hex-32",
+      "fn": "scrubText",
+      "input": "infura project 0123456789abcdef0123456789abcdef down",
+      "expect": "infura project [hex] down"
+    },
+    {
+      "id": "text.mnemonic.assign-quoted",
+      "fn": "scrubText",
+      "input": "MNEMONIC=\"test test test test test test test test test test test junk\" done",
+      "expect": "MNEMONIC=[redacted] done"
+    },
+    {
+      "id": "text.mnemonic.colon-line",
+      "fn": "scrubText",
+      "input": "mnemonic: abandon ability able about above absent absorb abstract absurd abuse access accident\nnext line",
+      "expect": "mnemonic: [redacted]\nnext line"
+    },
+    {
+      "id": "text.mnemonic.seed-phrase",
+      "fn": "scrubText",
+      "input": "seed phrase: legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "expect": "seed phrase: [redacted]"
+    },
+    {
+      "id": "text.mnemonic.stops-at-assign",
+      "fn": "scrubText",
+      "input": "SEED_PHRASE=word word word word CHAIN_ID=1",
+      "expect": "SEED_PHRASE=[redacted] CHAIN_ID=1"
+    },
+    {
+      "id": "text.keep.tx-hash",
+      "fn": "scrubText",
+      "input": "tx 0xabababababababababababababababababababababababababababababababab reverted",
+      "expect": "tx 0xabababababababababababababababababababababababababababababababab reverted"
+    },
+    {
+      "id": "text.keep.address",
+      "fn": "scrubText",
+      "input": "maker 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 has no allowance",
+      "expect": "maker 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 has no allowance"
+    },
+    {
+      "id": "text.keep.pool-key-json",
+      "fn": "scrubText",
+      "input": "{\"poolKey\":\"0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f\",\"marketKey\":\"0xabababababababababababababababababababababababababababababababab\"}",
+      "expect": "{\"poolKey\":\"0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f\",\"marketKey\":\"0xabababababababababababababababababababababababababababababababab\"}"
+    },
+    {
+      "id": "text.keep.pool-key-colon",
+      "fn": "scrubText",
+      "input": "poolKey: 0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "expect": "poolKey: 0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+    },
+    {
+      "id": "text.keep.token-address-colon",
+      "fn": "scrubText",
+      "input": "token: 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 unsupported",
+      "expect": "token: 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 unsupported"
+    },
+    {
+      "id": "text.keep.plain",
+      "fn": "scrubText",
+      "input": "UncertainExecutionFailure: smart-session expired at block 123456",
+      "expect": "UncertainExecutionFailure: smart-session expired at block 123456"
+    },
+    {
+      "id": "text.keep.time",
+      "fn": "scrubText",
+      "input": "retry at 10:00:05 status 429",
+      "expect": "retry at 10:00:05 status 429"
+    },
+    {
+      "id": "text.keep.stack-frame",
+      "fn": "scrubText",
+      "input": "    at handler (/app/dist/lib/orders.js:120:15)",
+      "expect": "    at handler (/app/dist/lib/orders.js:120:15)"
+    },
+    {
+      "id": "text.keep.amount",
+      "fn": "scrubText",
+      "input": "amount 1000000000000000000 exceeds 12.5",
+      "expect": "amount 1000000000000000000 exceeds 12.5"
+    },
+    {
+      "id": "text.hex.signature",
+      "fn": "scrubText",
+      "input": "bad signature 0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+      "expect": "bad signature [hex:130]"
+    },
+    {
+      "id": "text.hex.calldata-bytea",
+      "fn": "scrubText",
+      "input": "data \\x00000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expect": "data [hex:80]"
+    },
+    {
+      "id": "text.ip.v4",
+      "fn": "scrubText",
+      "input": "rate limited 203.0.113.7 (429)",
+      "expect": "rate limited [redacted-ip] (429)"
+    },
+    {
+      "id": "text.ip.v6",
+      "fn": "scrubText",
+      "input": "peer 2001:db8:85a3:0:0:8a2e:370:7334 reset",
+      "expect": "peer [redacted-ip] reset"
+    },
+    {
+      "id": "text.ip.v6-short",
+      "fn": "scrubText",
+      "input": "listen on ::1 failed",
+      "expect": "listen on [redacted-ip] failed"
+    },
+    {
+      "id": "text.email",
+      "fn": "scrubText",
+      "input": "invite sent to alice@example.com",
+      "expect": "invite sent to [redacted-email]"
+    },
+    {
+      "id": "text.home-dir",
+      "fn": "scrubText",
+      "input": "ENOENT /home/alice/.cork/config.json",
+      "expect": "ENOENT /home/[user]/.cork/config.json"
+    },
+    {
+      "id": "text.viem.request-body",
+      "fn": "scrubText",
+      "input": "HTTP request failed.\n\nURL: https://arb-mainnet.example.io/v2/fakeFAKE1234\nRequest body: {\"method\":\"eth_call\",\"params\":[{\"data\":\"0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede\",\"to\":\"0xAbCdEf0123456789aBcDeF0123456789AbCdEf01\"},\"latest\"]}\n\nVersion: viem@2.21.0",
+      "expect": "HTTP request failed.\n\nURL: https://arb-mainnet.example.io/[redacted]\nRequest body: method=eth_call\n\nVersion: viem@2.21.0"
+    },
+    {
+      "id": "text.viem.contract-call",
+      "fn": "scrubText",
+      "input": "The contract function \"swap\" reverted.\n\nContract Call:\n  address:   0xAbCdEf0123456789aBcDeF0123456789AbCdEf01\n  function:  swap(bytes32 poolId, uint256 amount)\n  args:          (0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f, 100)\n  sender:    0xAbCdEf0123456789aBcDeF0123456789AbCdEf01\n\nDocs: https://viem.sh/docs/contract/writeContract\nVersion: viem@2.21.0",
+      "expect": "The contract function \"swap\" reverted.\n\nContract Call:\n  function:  swap(bytes32 poolId, uint256 amount)\n\nDocs: https://viem.sh/[redacted]\nVersion: viem@2.21.0"
+    },
+    {
+      "id": "text.viem.raw-call-args",
+      "fn": "scrubText",
+      "input": "Execution reverted.\n\nRaw Call Arguments:\n  from:  0xAbCdEf0123456789aBcDeF0123456789AbCdEf01\n  to:    0xAbCdEf0123456789aBcDeF0123456789AbCdEf01\n  data:  0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede\n\nDetails: execution reverted",
+      "expect": "Execution reverted.\n\nRaw Call Arguments: [redacted]\n\nDetails: execution reverted"
+    },
+    {
+      "id": "text.viem.short-message-kept",
+      "fn": "scrubText",
+      "input": "The contract function \"deposit\" reverted with the following reason:\nUncertainExecutionFailure",
+      "expect": "The contract function \"deposit\" reverted with the following reason:\nUncertainExecutionFailure"
+    },
+    {
+      "id": "value.address-lowercased",
+      "fn": "scrubValue",
+      "input": {
+        "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+      },
+      "expect": {
+        "maker": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    },
+    {
+      "id": "value.hash-lowercased",
+      "fn": "scrubValue",
+      "input": {
+        "pool_id": "0x1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F",
+        "tx_hash": "0xabababababababababababababababababababababababababababababababab"
+      },
+      "expect": {
+        "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "tx_hash": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    {
+      "id": "value.secret-keys-dropped",
+      "fn": "scrubValue",
+      "input": {
+        "privateKey": "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+        "signerPk": "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+        "api_key": "notreal",
+        "password": "x",
+        "mnemonic": "a b c",
+        "chain_id": 1
+      },
+      "expect": {
+        "chain_id": 1
+      }
+    },
+    {
+      "id": "value.pool-market-key-kept",
+      "fn": "scrubValue",
+      "input": {
+        "poolKey": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "marketKey": "0xabababababababababababababababababababababababababababababababab"
+      },
+      "expect": {
+        "poolKey": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "marketKey": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    {
+      "id": "value.session-key-address-kept",
+      "fn": "scrubValue",
+      "input": {
+        "session_key": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "token": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+      },
+      "expect": {
+        "session_key": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "token": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    },
+    {
+      "id": "value.token-non-address-dropped",
+      "fn": "scrubValue",
+      "input": {
+        "token": "notarealtoken",
+        "auth_token": "x"
+      },
+      "expect": {}
+    },
+    {
+      "id": "value.content-keys-dropped",
+      "fn": "scrubValue",
+      "input": {
+        "signature": "0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+        "body": {
+          "a": 1
+        },
+        "headers": {
+          "x": "y"
+        },
+        "url": "https://x.io/a",
+        "calldata": "0x00",
+        "status": 500
+      },
+      "expect": {
+        "status": 500
+      }
+    },
+    {
+      "id": "value.registered-secret-redacted",
+      "fn": "scrubValue",
+      "input": {
+        "detail": "using 0xc0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "maybe": "0xc0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+      },
+      "expectAbsent": [
+        "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+      ],
+      "expectPresent": [
+        "[redacted-secret]"
+      ]
+    },
+    {
+      "id": "value.text-scrubbed",
+      "fn": "scrubValue",
+      "input": {
+        "msg": "fetch https://rpc.example.org/v2/fakekey000 from 198.51.100.4"
+      },
+      "expect": {
+        "msg": "fetch https://rpc.example.org/[redacted] from [redacted-ip]"
+      }
+    },
+    {
+      "id": "value.nested-and-arrays",
+      "fn": "scrubValue",
+      "input": {
+        "a": {
+          "b": [
+            "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+            {
+              "password": "x",
+              "n": 2
+            }
+          ]
+        }
+      },
+      "expect": {
+        "a": {
+          "b": [
+            "0xabcdef0123456789abcdef0123456789abcdef01",
+            {
+              "n": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "value.long-hex-in-field",
+      "fn": "scrubValue",
+      "input": {
+        "data": "0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede"
+      },
+      "expect": {
+        "data": "[hex:130]"
+      }
+    },
+    {
+      "id": "value.proto-skipped",
+      "fn": "scrubValue",
+      "input": {
+        "__proto__": {
+          "polluted": true
+        },
+        "ok": true
+      },
+      "expect": {
+        "ok": true
+      },
+      "note": "input is parsed with JSON.parse, so __proto__ is an own key"
+    },
+    {
+      "id": "props.shapes-kept",
+      "fn": "scrubProperties",
+      "input": {
+        "chain_id": 42161,
+        "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "pool_id": "0x1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F",
+        "order_hash": "0xabababababababababababababababababababababababababababababababab",
+        "amount": "1000000000000000000",
+        "price": "0.9975",
+        "filled": false,
+        "outcome": "accepted"
+      },
+      "expect": {
+        "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "chain_id": 42161,
+        "maker": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "order_hash": "0xabababababababababababababababababababababababababababababababab",
+        "amount": "1000000000000000000",
+        "price": "0.9975",
+        "filled": false,
+        "outcome": "accepted"
+      }
+    },
+    {
+      "id": "props.enums-kept",
+      "fn": "scrubProperties",
+      "input": {
+        "custody": "smart-session",
+        "error_class": "UncertainExecutionFailure",
+        "erc": "7579",
+        "client": "cork-cli"
+      },
+      "expect": {
+        "custody": "smart-session",
+        "error_class": "UncertainExecutionFailure",
+        "erc": "7579",
+        "client": "cork-cli"
+      }
+    },
+    {
+      "id": "props.free-text-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "reason": "maker has no allowance",
+        "note": "hello world",
+        "ok": 1
+      },
+      "expect": {
+        "ok": 1
+      }
+    },
+    {
+      "id": "props.long-hex-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "sig_blob": "0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+        "data": "0xababababababababababababababababababababababababababababababababab",
+        "ok": true
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "props.short-hex-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "selector": "0x12345678",
+        "raw": "deadbeefcafe"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.ip-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "peer": "203.0.113.7",
+        "v6": "2001:db8::1"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.url-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "endpoint": "https://rpc.example.org",
+        "host": "rpc.example.org"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.email-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "contact": "alice@example.com"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.secret-names-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "privateKey": "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+        "signer_pk": "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+        "apiKey": "abc",
+        "session_token": "abcdef",
+        "seed": "x"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.secret-name-address-kept",
+      "fn": "scrubProperties",
+      "input": {
+        "sessionKey": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+      },
+      "expect": {
+        "session_key": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    },
+    {
+      "id": "props.pool-key-kept",
+      "fn": "scrubProperties",
+      "input": {
+        "poolKey": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "marketKey": "0xabababababababababababababababababababababababababababababababab"
+      },
+      "expect": {
+        "pool_key": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "market_key": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    {
+      "id": "props.signature-parts-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "sig": {
+          "v": 27,
+          "r": "0xabababababababababababababababababababababababababababababababab",
+          "s": "0xabababababababababababababababababababababababababababababababab"
+        },
+        "permitSignature": "0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+        "permit2": {
+          "amount": "1"
+        },
+        "nonce": "5",
+        "salt": "99"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.registered-secret-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "value": "0xc0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "dec": "87296255565461414097782468958669970255991234985404839579780944818361281277440",
+        "word": "correct-horse-battery-staple-42"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.credential-prefix-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "a": {
+          "$join": [
+            "ph",
+            "c_",
+            "abc"
+          ]
+        },
+        "b": {
+          "$join": [
+            "s",
+            "k-",
+            "abc"
+          ]
+        },
+        "c": {
+          "$join": [
+            "gh",
+            "p_",
+            "abc"
+          ]
+        },
+        "d": {
+          "$join": [
+            "AK",
+            "IA",
+            "FAKE"
+          ]
+        }
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.token-shaped-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "id": "aB3dE5fG7hJ9kL1mN"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.enum-too-long-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "kind": "a-very-long-enum-value-over-28-chars"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.numeric-too-long-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "amount": "1111111111111111111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.flatten-snake",
+      "fn": "scrubProperties",
+      "input": {
+        "order": {
+          "makerAsset": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+          "rolloverParams": {
+            "srcPoolId": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+          }
+        }
+      },
+      "expect": {
+        "src_pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "order.maker_asset": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "order.rollover_params.src_pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+      }
+    },
+    {
+      "id": "props.depth-limit",
+      "fn": "scrubProperties",
+      "input": {
+        "a": {
+          "b": {
+            "c": {
+              "d": 1
+            },
+            "e": 2
+          }
+        }
+      },
+      "expect": {
+        "a.b.e": 2
+      }
+    },
+    {
+      "id": "props.array-count",
+      "fn": "scrubProperties",
+      "input": {
+        "orders": [
+          {
+            "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+          },
+          {
+            "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+          }
+        ],
+        "tags": []
+      },
+      "expect": {
+        "orders_count": 2,
+        "tags_count": 0
+      }
+    },
+    {
+      "id": "props.proto-skipped",
+      "fn": "scrubProperties",
+      "input": {
+        "__proto__": {
+          "x": 1
+        },
+        "constructor": 1,
+        "ok": true
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "props.dollar-keys",
+      "fn": "scrubProperties",
+      "input": {
+        "$ip": "203.0.113.7",
+        "$set": {
+          "a": 1
+        },
+        "$geoip_disable": true,
+        "$process_person_profile": false
+      },
+      "expect": {
+        "$geoip_disable": true,
+        "$process_person_profile": false
+      }
+    },
+    {
+      "id": "props.pool-alias-single",
+      "fn": "scrubProperties",
+      "input": {
+        "source": {
+          "poolId": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+        },
+        "target": {
+          "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+        }
+      },
+      "expect": {
+        "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "source.pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "target.pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+      }
+    },
+    {
+      "id": "props.pool-alias-conflict",
+      "fn": "scrubProperties",
+      "input": {
+        "source": {
+          "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+        },
+        "target": {
+          "pool_id": "0xabababababababababababababababababababababababababababababababab"
+        }
+      },
+      "expect": {
+        "source.pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "target.pool_id": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    {
+      "id": "props.dotted-input-stable",
+      "fn": "scrubProperties",
+      "input": {
+        "order.maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "order.signature": "0xdedededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+        "credentials.value": "abc"
+      },
+      "expect": {
+        "order.maker": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    },
+    {
+      "id": "props.token-object-walked",
+      "fn": "scrubProperties",
+      "input": {
+        "token": {
+          "address": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+          "symbol": "USDC",
+          "decimals": 6
+        }
+      },
+      "expect": {
+        "token.address": "0xabcdef0123456789abcdef0123456789abcdef01",
+        "token.symbol": "USDC",
+        "token.decimals": 6
+      }
+    },
+    {
+      "id": "props.number-kinds",
+      "fn": "scrubProperties",
+      "input": {
+        "n": 1.5,
+        "neg": "-42",
+        "big": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      },
+      "expect": {
+        "n": 1.5,
+        "neg": "-42",
+        "big": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      }
+    },
+    {
+      "id": "props.cap-40",
+      "fn": "scrubProperties",
+      "input": {
+        "k00": 0,
+        "k01": 1,
+        "k02": 2,
+        "k03": 3,
+        "k04": 4,
+        "k05": 5,
+        "k06": 6,
+        "k07": 7,
+        "k08": 8,
+        "k09": 9,
+        "k10": 10,
+        "k11": 11,
+        "k12": 12,
+        "k13": 13,
+        "k14": 14,
+        "k15": 15,
+        "k16": 16,
+        "k17": 17,
+        "k18": 18,
+        "k19": 19,
+        "k20": 20,
+        "k21": 21,
+        "k22": 22,
+        "k23": 23,
+        "k24": 24,
+        "k25": 25,
+        "k26": 26,
+        "k27": 27,
+        "k28": 28,
+        "k29": 29,
+        "k30": 30,
+        "k31": 31,
+        "k32": 32,
+        "k33": 33,
+        "k34": 34,
+        "k35": 35,
+        "k36": 36,
+        "k37": 37,
+        "k38": 38,
+        "k39": 39,
+        "k40": 40,
+        "k41": 41,
+        "k42": 42,
+        "k43": 43,
+        "k44": 44,
+        "k45": 45,
+        "k46": 46,
+        "k47": 47,
+        "k48": 48,
+        "k49": 49
+      },
+      "expect": {
+        "k00": 0,
+        "k01": 1,
+        "k02": 2,
+        "k03": 3,
+        "k04": 4,
+        "k05": 5,
+        "k06": 6,
+        "k07": 7,
+        "k08": 8,
+        "k09": 9,
+        "k10": 10,
+        "k11": 11,
+        "k12": 12,
+        "k13": 13,
+        "k14": 14,
+        "k15": 15,
+        "k16": 16,
+        "k17": 17,
+        "k18": 18,
+        "k19": 19,
+        "k20": 20,
+        "k21": 21,
+        "k22": 22,
+        "k23": 23,
+        "k24": 24,
+        "k25": 25,
+        "k26": 26,
+        "k27": 27,
+        "k28": 28,
+        "k29": 29,
+        "k30": 30,
+        "k31": 31,
+        "k32": 32,
+        "k33": 33,
+        "k34": 34,
+        "k35": 35,
+        "k36": 36,
+        "k37": 37,
+        "k38": 38,
+        "k39": 39
+      }
+    },
+    {
+      "id": "props.cap-keeps-alias",
+      "fn": "scrubProperties",
+      "input": {
+        "k00": 0,
+        "k01": 1,
+        "k02": 2,
+        "k03": 3,
+        "k04": 4,
+        "k05": 5,
+        "k06": 6,
+        "k07": 7,
+        "k08": 8,
+        "k09": 9,
+        "k10": 10,
+        "k11": 11,
+        "k12": 12,
+        "k13": 13,
+        "k14": 14,
+        "k15": 15,
+        "k16": 16,
+        "k17": 17,
+        "k18": 18,
+        "k19": 19,
+        "k20": 20,
+        "k21": 21,
+        "k22": 22,
+        "k23": 23,
+        "k24": 24,
+        "k25": 25,
+        "k26": 26,
+        "k27": 27,
+        "k28": 28,
+        "k29": 29,
+        "k30": 30,
+        "k31": 31,
+        "k32": 32,
+        "k33": 33,
+        "k34": 34,
+        "k35": 35,
+        "k36": 36,
+        "k37": 37,
+        "k38": 38,
+        "k39": 39,
+        "k40": 40,
+        "k41": 41,
+        "k42": 42,
+        "k43": 43,
+        "k44": 44,
+        "k45": 45,
+        "k46": 46,
+        "k47": 47,
+        "k48": 48,
+        "k49": 49,
+        "deep": {
+          "pool_id": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+        }
+      },
+      "expectPresent": [
+        "\"pool_id\":\"0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f\""
+      ],
+      "expectAbsent": [
+        "\"k40\""
+      ]
+    },
+    {
+      "id": "text.pct.encoded-assign",
+      "fn": "scrubText",
+      "input": "retry with api%5Fkey%3Dnotarealvalue ok",
+      "expect": "retry with api_key=[redacted] ok"
+    },
+    {
+      "id": "text.pct.encoded-phc-in-url",
+      "fn": "scrubText",
+      "input": {
+        "$join": [
+          "next=https%3A%2F%2Fapp.example.io%2Fcb%3Fk%3Dph",
+          "c_",
+          "FAKEFAKEFAKEFAKE1234"
+        ]
+      },
+      "expectAbsent": [
+        "FAKEFAKEFAKEFAKE1234"
+      ]
+    },
+    {
+      "id": "text.pct.double-encoded-assign",
+      "fn": "scrubText",
+      "input": "q=password%253Dhunter2hunter2",
+      "expectAbsent": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "text.pct.keep-percent",
+      "fn": "scrubText",
+      "input": "fee 5% of 100%, done",
+      "expect": "fee 5% of 100%, done"
+    },
+    {
+      "id": "text.url.schemeless-mixed-seg",
+      "fn": "scrubText",
+      "input": "rpc.ankr.com/eth/abc123def456 down",
+      "expect": "rpc.ankr.com/[redacted] down"
+    },
+    {
+      "id": "text.url.schemeless-words-kept",
+      "fn": "scrubText",
+      "input": "see docs.cork.tech/guides/limit-orders and api.cork.tech/pools/v1/markets",
+      "expect": "see docs.cork.tech/guides/limit-orders and api.cork.tech/pools/v1/markets"
+    },
+    {
+      "id": "text.cred.lower-run",
+      "fn": "scrubText",
+      "input": "project abcd1234efgh5678ijkl9012mnop3456qrst ok",
+      "expect": "project [redacted-token] ok"
+    },
+    {
+      "id": "text.cred.upper-run",
+      "fn": "scrubText",
+      "input": "id ABCD1234EFGH5678IJKL9012MNOP3456QRST ok",
+      "expect": "id [redacted-token] ok"
+    },
+    {
+      "id": "text.keep.snake-identifier",
+      "fn": "scrubText",
+      "input": "worker app_example_service_posthog_worker_v2_stage ready",
+      "expect": "worker app_example_service_posthog_worker_v2_stage ready"
+    },
+    {
+      "id": "text.keep.letters-run",
+      "fn": "scrubText",
+      "input": "word abcdefghijklmnopqrstuvwxyzabcdefgh end",
+      "expect": "word abcdefghijklmnopqrstuvwxyzabcdefgh end"
+    },
+    {
+      "id": "text.keep.hashes-after-runs",
+      "fn": "scrubText",
+      "input": "tx 0xabababababababababababababababababababababababababababababababab from 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 pool 0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "expect": "tx 0xabababababababababababababababababababababababababababababababab from 0xAbCdEf0123456789aBcDeF0123456789AbCdEf01 pool 0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+    },
+    {
+      "id": "text.name.dkey",
+      "fn": "scrubText",
+      "input": "worker dkey=notarealvalue started",
+      "expect": "worker dkey=[redacted] started"
+    },
+    {
+      "id": "text.name.skey-sk",
+      "fn": "scrubText",
+      "input": "skey: notarealvalue sk=alsonotreal",
+      "expect": "skey: [redacted] sk=[redacted]"
+    },
+    {
+      "id": "text.name.sig",
+      "fn": "scrubText",
+      "input": "verify sig=0x1234abcd failed",
+      "expect": "verify sig=[redacted] failed"
+    },
+    {
+      "id": "text.keep.risk-poolkey",
+      "fn": "scrubText",
+      "input": "risk=low poolKey=0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f marketKey: 0xabababababababababababababababababababababababababababababababab",
+      "expect": "risk=low poolKey=0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f marketKey: 0xabababababababababababababababababababababababababababababababab"
+    },
+    {
+      "id": "props.short-secret-names-dropped",
+      "fn": "scrubProperties",
+      "input": {
+        "dkey": "abc",
+        "skey": "abc",
+        "sk": "abc",
+        "pk": "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+        "webhookUrl": "abc",
+        "jwt": "abc",
+        "basic_auth": "abc"
+      },
+      "expect": {}
+    },
+    {
+      "id": "props.short-names-kept",
+      "fn": "scrubProperties",
+      "input": {
+        "risk": "low",
+        "poolKey": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "marketKey": "0xabababababababababababababababababababababababababababababababab",
+        "token_id": "5",
+        "task": "rollover"
+      },
+      "expect": {
+        "risk": "low",
+        "pool_key": "0x1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        "market_key": "0xabababababababababababababababababababababababababababababababab",
+        "token_id": "5",
+        "task": "rollover"
+      }
+    },
+    {
+      "id": "props.dotted-prefix-no-depth",
+      "fn": "scrubProperties",
+      "input": {
+        "arg.action.order.maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+        "arg": {
+          "action": {
+            "order": {
+              "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+            }
+          }
+        }
+      },
+      "expect": {
+        "arg.action.order.maker": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    },
+    {
+      "id": "props.cross-product-key",
+      "fn": "scrubProperties",
+      "input": {
+        "action": {
+          "order": {
+            "maker": "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+          }
+        }
+      },
+      "expect": {
+        "action.order.maker": "0xabcdef0123456789abcdef0123456789abcdef01"
+      }
+    }
+  ]
+}

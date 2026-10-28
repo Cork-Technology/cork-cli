@@ -72,6 +72,7 @@ function boundedProfile(intent: ParsedRolloverPayload["intent"], modules: NonNul
 
 const TERMINAL: ReadonlySet<string> = new Set(["Settled", "Expired", "Cancelled", "Closing"]);
 const rolloverPoolBindingAbi = parseAbi(["function CORK_POOL_MANAGER() view returns (address)"]);
+const forSelfCreatorBindingAbi = parseAbi(["function POOL_MANAGER() view returns (address)"]);
 
 /** The venue's resolved record for one digest carries the signed payload under `order.payload`
  *  (the list rows under `payload`); both spellings are read. */
@@ -188,21 +189,19 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const generation: RolloverGeneration = cls.generation;
   const fillHelper = action.forSelf?.adapter ?? generation.baseFiller;
   const helperName = action.forSelf ? "ForSelf adapter" : "BaseFiller";
-  if (!fillHelper) return refuse("unknown_deployment", `the ${generation.label} rollover generation configures no BaseFiller on chainId ${chainId}; select an explicitly deployed improved ForSelf adapter only for existing-market fills`);
+  if (!fillHelper) return refuse("unknown_deployment", `the ${generation.label} rollover generation configures no BaseFiller on chainId ${chainId}; the ForSelf route requires an explicitly selected adapter and verified bindings`);
   if (cls.kind === "EXACT" && order.allowPartialFills) return refuse("settler_mode_mismatch", `the order is bound to the ExactSettler of ${generation.label} but allows partial fills — the settler reverts Settler__PartialFillsNotSupported; this order can never fill`);
   if (cls.kind === "PARTIAL" && !order.allowPartialFills) return refuse("settler_mode_mismatch", `the order is bound to the PartialSettler of ${generation.label} but forbids partial fills — the settler reverts Settler__ExactFillsNotSupported; this order can never fill`);
   if (order.fillDeadline <= nowSecs) return refuse("invalid_order_terms", `the order's fillDeadline ${order.fillDeadline} has passed (now ${nowSecs}) — the settler reverts Settler__FillAfterDeadline`);
   if (order.rolloverParams.settler.toLowerCase() !== order.settler.toLowerCase()) return refuse("invalid_order_terms", `rolloverParams.settler ${order.rolloverParams.settler} differs from the order's settler ${order.settler} — admission reverts Settler__RolloverParamsSettlerMismatch`);
   const resolved = await getRpc(ctx, chainId);
+  let forSelfMarketCreator: `0x${string}` | undefined;
   if (action.forSelf) {
     if (isAddressEqual(order.exclusiveFiller, fillHelper)) return refuse("shared_adapter_reservation", "an order reserved to a shared ForSelf adapter does not identify a Safe and is refused; reserve to an actual exclusive filler with its caller-bound FillerAuth, or use an open order");
     if (generation.wire !== "0.2") return refuse("unsupported_for_self_route", "rolloverForSelf supports only the verified rollover 0.2 wire; keep the direct BaseFiller route for other generations");
     if (action.bounded) return refuse("unsupported_for_self_route", "bounded selects the existing owner-signed staging wrapper, not the session-key ForSelf path; do not combine them or replace the session signer with an owner");
     if (intent.preRolloverHooks.some((hook) => hook.callData.slice(0, 10).toLowerCase() === stagedFundingSelector)) {
       return refuse("unsupported_for_self_route", "the signed pre-hook has the staged funding execute(address,address,address) ABI; the single-call ForSelf consumer does not stage transient funding. Use a separately reviewed staged account batch, not this artifact; no automatic owner-route fallback");
-    }
-    if (action.jitMarket !== undefined || order.rolloverParams.jitMarketHash.toLowerCase() !== zeroHash) {
-      return refuse("for_self_market_creation_unsupported", "ForSelf does not create markets or hold POOL_CREATOR_ROLE. To create the committed destination, explicitly choose the existing direct Safe CALL to BaseFiller.executeWithMarket and its admitted session policy. No target, allowance spender or partial slot was automatically changed");
     }
     const deadline = BigInt(action.forSelf.deadline);
     if (deadline <= BigInt(nowSecs) || deadline > order.fillDeadline) return refuse("invalid_order_terms", "forSelf.deadline must be in the future and no later than the signed fillDeadline");
@@ -223,8 +222,22 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       if (!code || code === "0x" || !isAddressEqual(cork, phoenix.poolManager) || !isAddressEqual(whitelist, phoenix.whitelistManager) || exact.toLowerCase() !== generation.exactSettler.toLowerCase() || partial.toLowerCase() !== generation.partialSettler.toLowerCase() || !isAddressEqual(settlerPool, phoenix.poolManager)) {
         return envelope({ state: "conflict", data: null, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the selected ForSelf contract is absent, rollover-disabled or bound to different pool/whitelist/settler identities; no allowance or transaction artifact was built" }, ...warnings], ctx });
       }
+      if (action.jitMarket !== undefined) {
+        const creator = await resolved.client.readContract({ address: fillHelper, abi: forSelfBindingAbi, functionName: "MARKET_CREATOR", ...at });
+        if (isAddressEqual(creator, zeroAddress)) return refuse("for_self_market_creation_unsupported", "the explicit ForSelf adapter has JIT disabled (MARKET_CREATOR is zero); no automatic BaseFiller fallback");
+        const [creatorCode, creatorPool] = await Promise.all([
+          resolved.client.getCode({ address: creator, ...at }),
+          resolved.client.readContract({ address: creator, abi: forSelfCreatorBindingAbi, functionName: "POOL_MANAGER", ...at }),
+        ]);
+        if (!creatorCode || creatorCode === "0x" || !isAddressEqual(creatorPool, phoenix.poolManager)) {
+          return envelope({ state: "conflict", data: null, chainId, source: "chain", warnings: [{ code: "adapter_binding_mismatch", message: "the fixed ForSelf market creator is absent or bound to a different pool manager; no fill or allowance artifact" }, ...warnings], ctx });
+        }
+        forSelfMarketCreator = creator;
+      }
       if (!isAddressEqual(order.premiumToken, sourceMarket.collateralAsset) && !isAddressEqual(order.premiumToken, sourceMarket.referenceAsset)) {
-        const destinationMarket = await resolved.client.readContract({ address: phoenix.poolManager, abi: marketAbiFor(phoenix.wire), functionName: "market", args: [order.rolloverParams.dstPoolId], ...at });
+        // A signed JIT destination may not exist yet; its cash assets are committed
+        // by the same hash checked below, not inferred from an absent market.
+        const destinationMarket = action.jitMarket ?? await resolved.client.readContract({ address: phoenix.poolManager, abi: marketAbiFor(phoenix.wire), functionName: "market", args: [order.rolloverParams.dstPoolId], ...at });
         if (!isAddressEqual(order.premiumToken, destinationMarket.collateralAsset) && !isAddressEqual(order.premiumToken, destinationMarket.referenceAsset)) return refuse("for_self_premium_not_in_markets", "ForSelf premium funding is limited to the collateral/reference assets of the two signed pools; unrelated tokens cannot be approved through this route");
       }
     } catch (err) {
@@ -326,10 +339,10 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const hasCommitment = committed.toLowerCase() !== zeroHash;
   let jitParams: JitMarketParamsStruct | undefined;
   if (hasCommitment && action.jitMarket === undefined) {
-    return refuse("invalid_order_terms", `the order commits to a just-in-time destination market (rolloverParams.jitMarketHash ${committed}) — pass the negotiated jitMarket instruction so the fill runs executeWithMarket; without it the destination pool may not exist and BaseFiller__JitNotConfigured / the settler's DstCstNotCanonical refuses`);
+    return refuse("invalid_order_terms", `the order commits to a just-in-time destination market (rolloverParams.jitMarketHash ${committed}) — pass the negotiated jitMarket instruction for ${action.forSelf ? "rolloverForSelfWithMarket" : "executeWithMarket"}; without it the destination pool may not exist and the fill cannot satisfy the signed destination`);
   }
   if (!hasCommitment && action.jitMarket !== undefined) {
-    return refuse("invalid_order_terms", "the order commits to NO just-in-time market (jitMarketHash is zero), but a jitMarket instruction was passed — BaseFiller would revert BaseFiller__JitMarketHashMismatch; drop jitMarket (the destination pool must already exist)");
+    return refuse("invalid_order_terms", "the order commits to NO just-in-time market (jitMarketHash is zero), but a jitMarket instruction was passed — drop jitMarket; the destination pool must already exist");
   }
   if (action.jitMarket !== undefined) {
     const jm = action.jitMarket;
@@ -364,7 +377,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
         data: { orderDigest: localDigest, committedJitMarketHash: committed, localJitMarketHash: localHash, jitMarketWire: wire },
         chainId,
         source: artifactSource,
-        warnings: [...warnings, { code: "jit_market_hash_mismatch", message: `the jitMarket instruction hashes to ${localHash} on the ${generation.label} generation's ${wire} wire, but the order commits to ${committed} — BaseFiller reverts BaseFiller__JitMarketHashMismatch; the holder signed a different instruction (fees, constraint, recipe, salt or expiry differ). No fill bytes` }],
+        warnings: [...warnings, { code: "jit_market_hash_mismatch", message: `the jitMarket instruction hashes to ${localHash} on the ${generation.label} generation's ${wire} wire, but the order commits to ${committed} — the holder signed a different instruction (fees, constraint, recipe, salt or expiry differ). No fill bytes` }],
         ctx,
       });
     }
@@ -570,9 +583,20 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
   const jobArgs = { order, intent, userSig: signature, fillerSrcCst, premiumCap, minDstPerSrc, fillerAuthSig: action.fillerAuthSig ?? "0x" } as const;
   let calldata: `0x${string}`;
   try {
-    calldata = action.forSelf
-      ? encodeFunctionData({ abi: forSelfAbi, functionName: "rolloverForSelf", args: [{ orderDigest: localDigest, originData, userSig: signature, intent, fillerSrcCst, premiumCap, minDstPerSrc, fillerAuthSig: action.fillerAuthSig ?? "0x", deadline: BigInt(action.forSelf.deadline) }] })
-      : jitParams !== undefined ? encodeBaseFillerExecuteWithMarket(jobArgs, jitParams, generation.wire as "rc.2" | "0.2") : encodeBaseFillerExecute(jobArgs);
+    if (action.forSelf) {
+      const params = { orderDigest: localDigest, originData, userSig: signature, intent, fillerSrcCst, premiumCap, minDstPerSrc, fillerAuthSig: action.fillerAuthSig ?? "0x", deadline: BigInt(action.forSelf.deadline) } as const;
+      calldata = jitParams
+        ? encodeFunctionData({ abi: forSelfAbi, functionName: "rolloverForSelfWithMarket", args: [params, {
+          collateralAsset: jitParams.collateralAsset, referenceAsset: jitParams.referenceAsset,
+          expiryTimestamp: jitParams.expiryTimestamp, recipe: jitParams.recipe, rateOverride: jitParams.rateOverride,
+          constraint: { rateMin: jitParams.rateMin, rateMax: jitParams.rateMax, rateChangePerDayMax: jitParams.rateChangePerDayMax, rateChangeCapacityMax: jitParams.rateChangeCapacityMax },
+          extraData: jitParams.additionalData, oracleSalt: jitParams.oracleSalt ?? zeroHash,
+          swapFeePercentage: jitParams.swapFeePercentage, unwindSwapFeePercentage: jitParams.unwindSwapFeePercentage,
+        }] })
+        : encodeFunctionData({ abi: forSelfAbi, functionName: "rolloverForSelf", args: [params] });
+    } else {
+      calldata = jitParams !== undefined ? encodeBaseFillerExecuteWithMarket(jobArgs, jitParams, generation.wire as "rc.2" | "0.2") : encodeBaseFillerExecute(jobArgs);
+    }
   } catch (err) {
     return refuse("invalid_order_terms", firstLine(err));
   }
@@ -590,8 +614,8 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
       from: safeProfile?.owner ?? account,
       calldata,
       value: "0",
-      fillFunction: action.forSelf ? "rolloverForSelf" : jitParams !== undefined ? "executeWithMarket" : "execute",
-      ...(action.forSelf ? { forSelf: { adapter: fillHelper, deadline: String(action.forSelf.deadline), bindingsChecked: true, sourceIdentityVerified: false, callerPolicy: "funding/destination/subFiller/refunds are the actual calling account; execute from the Safe via its admitted Guard CALL path", partialSlot: { filler: fillHelper, subFiller: pad(account) } } } : {}),
+      fillFunction: action.forSelf ? jitParams ? "rolloverForSelfWithMarket" : "rolloverForSelf" : jitParams !== undefined ? "executeWithMarket" : "execute",
+      ...(action.forSelf ? { forSelf: { adapter: fillHelper, deadline: String(action.forSelf.deadline), bindingsChecked: true, sourceIdentityVerified: false, ...(forSelfMarketCreator ? { marketCreator: forSelfMarketCreator } : {}), callerPolicy: "funding/destination/subFiller/refunds are the actual calling account; execute from the Safe via its admitted Guard CALL path", partialSlot: { filler: fillHelper, subFiller: pad(account) } } } : {}),
       ...(bounded && calls ? {
         batch: { caller: account, signer: safeProfile!.owner, profile: "safe-1.4.1-single-eoa-owner", mode: "Safe.execTransaction delegatecall MultiSendCallOnly; inner CALLs revert atomically", calls, clone: order.rolloverContract, orderDigest: localDigest },
         bounded: { ...bounded, sourceAmount: fillerSrcCst.toString(), moduleIdentitiesVerified: false },
@@ -657,7 +681,7 @@ export async function handleRolloverFill(input: PrepareOrdersInput, action: Roll
     },
     chainId,
     source: artifactSource,
-    warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings, { code: "unsigned_artifact", message: `unsigned ${bounded ? "Safe owner eth-transaction wrapping atomic stage + BaseFiller batch" : action.forSelf ? "rolloverForSelf account-CALL calldata for the admitted session-key/Guard path (not an owner-signed rollover)" : `BaseFiller.${jitParams !== undefined ? "executeWithMarket" : "execute"} calldata`} only — simulate with the actual account and outer execution route, and grant only missing allowances in data.approvals to ${helperName} ${fillHelper}; dst cST is delivered to the calling account (${account})` }],
+    warnings: [...(resolved ? rpcWarn(resolved) : []), ...warnings, { code: "unsigned_artifact", message: `unsigned ${bounded ? "Safe owner eth-transaction wrapping atomic stage + BaseFiller batch" : action.forSelf ? `${jitParams ? "rolloverForSelfWithMarket" : "rolloverForSelf"} account-CALL calldata for the admitted session-key/Guard path (not an owner-signed rollover)` : `BaseFiller.${jitParams !== undefined ? "executeWithMarket" : "execute"} calldata`} only — simulate with the actual account and outer execution route, and grant only missing allowances in data.approvals to ${helperName} ${fillHelper}; dst cST is delivered to the calling account (${account})` }],
     ...(resolved ? rpcProvenance(input.format, resolved) : {}),
     ctx,
   });

@@ -213,6 +213,14 @@
       "kind": "type"
     },
     {
+      "name": "CorkClientIdentity",
+      "kind": "type"
+    },
+    {
+      "name": "CorkClientName",
+      "kind": "type"
+    },
+    {
       "name": "CorkDefaults",
       "kind": "type"
     },
@@ -866,6 +874,10 @@
     },
     {
       "name": "MarketRow",
+      "kind": "type"
+    },
+    {
+      "name": "McpClientLabel",
       "kind": "type"
     },
     {
@@ -1929,6 +1941,10 @@
       "kind": "value"
     },
     {
+      "name": "corkClientHeaders",
+      "kind": "value"
+    },
+    {
       "name": "corkDefaultsUrlFor",
       "kind": "value"
     },
@@ -2261,6 +2277,14 @@
       "kind": "value"
     },
     {
+      "name": "formatCorkClient",
+      "kind": "value"
+    },
+    {
+      "name": "formatCorkUserAgent",
+      "kind": "value"
+    },
+    {
       "name": "fundingApprovals",
       "kind": "value"
     },
@@ -2566,6 +2590,10 @@
     },
     {
       "name": "max",
+      "kind": "value"
+    },
+    {
+      "name": "mcpClientLabel",
       "kind": "value"
     },
     {
@@ -3142,6 +3170,10 @@
     },
     {
       "name": "withFixedRateLiveRate",
+      "kind": "value"
+    },
+    {
+      "name": "withMcpClient",
       "kind": "value"
     },
     {
@@ -6061,6 +6093,14 @@
   ],
   "./venue": [
     {
+      "name": "CorkClientIdentity",
+      "kind": "type"
+    },
+    {
+      "name": "CorkClientName",
+      "kind": "type"
+    },
+    {
       "name": "DEFAULT_VENUE_URL",
       "kind": "value"
     },
@@ -6071,6 +6111,10 @@
     {
       "name": "MIRRORED_VENUE_LOGIC",
       "kind": "value"
+    },
+    {
+      "name": "McpClientLabel",
+      "kind": "type"
     },
     {
       "name": "PageParams",
@@ -6181,6 +6225,18 @@
       "kind": "value"
     },
     {
+      "name": "corkClientHeaders",
+      "kind": "value"
+    },
+    {
+      "name": "formatCorkClient",
+      "kind": "value"
+    },
+    {
+      "name": "formatCorkUserAgent",
+      "kind": "value"
+    },
+    {
       "name": "getLopFills",
       "kind": "value"
     },
@@ -6218,6 +6274,10 @@
     },
     {
       "name": "getRolloverOrders",
+      "kind": "value"
+    },
+    {
+      "name": "mcpClientLabel",
       "kind": "value"
     },
     {
@@ -6282,6 +6342,10 @@
     },
     {
       "name": "venueDiagnostics",
+      "kind": "value"
+    },
+    {
+      "name": "withMcpClient",
       "kind": "value"
     }
   ]
