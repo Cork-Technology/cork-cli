@@ -162,6 +162,9 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+  { id: "forself-jit-creator-pool-unbound", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: 'if (!creatorCode || creatorCode === "0x" || !isAddressEqual(creatorPool, phoenix.poolManager))', replace: 'if (!creatorCode || creatorCode === "0x")', tests: ["packages/core/test/rollover-fill.test.ts"] },
+  { id: "forself-jit-signed-extra-data-dropped", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: "extraData: jitParams.additionalData, oracleSalt:", replace: 'extraData: "0x", oracleSalt:', tests: ["packages/core/test/rollover-fill.test.ts"] },
+  { id: "forself-jit-decoded-market-hidden", file: "packages/core/src/bundle/decode.ts", find: '...(functionName === "rolloverForSelfWithMarket" ? { market: args[1] } : {})', replace: "...{}", tests: ["packages/core/test/rollover-fill.test.ts"] },
 {"id":"compatible-api-confidence-unchecked","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(CONFIDENCE_VALUES.includes(row.confidence), \"unsupported native checkpoint confidence; never finality or execution permission\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-api-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.ok(isReviewedApiRevision(evidence.apiRevision), \"deployment identity must identify exactly one reviewed native API source revision\");","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
 {"id":"compatible-api-infra-revision-unbound","file":"scripts/verify-compatible-api.mjs","find":"  assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);","replace":"","tests":["packages/cli/test/compatible-api-gate.test.ts"]},
@@ -177,7 +180,7 @@ const CATALOG: Mutant[] = [
   {"id":"bounded-owner-grant-original-size","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"const remainingPosition = order.orderSize - state.rolled;","replace":"const remainingPosition = order.orderSize;","tests":["packages/core/test/rollover-fill.test.ts"]},
   {"id":"native-history-false-completeness","file":"packages/core/src/handlers/track.ts","find":"fillsScanComplete: capability.supported && fillsScan.complete,\n              count: fills.items.length,","replace":"fillsScanComplete: true,\n              count: fills.items.length,","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {"id":"repeated-fill-trait-ignored","file":"packages/core/src/orders.ts","find":"allowMultipleFills: a.allowMultipleFills ?? false,","replace":"allowMultipleFills: false,","tests":["packages/core/test/orders.test.ts","packages/core/test/maker-ladder.test.ts"]},
-  {"id":"bounded-fill-caller-changed","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"to: bounded ? account : baseFiller,","replace":"to: baseFiller,","tests":["packages/core/test/rollover-fill.test.ts"]},
+  {"id":"bounded-fill-caller-changed","file":"packages/core/src/handlers/prepare-rollover-fill.ts","find":"to: bounded ? account : fillHelper,","replace":"to: fillHelper,","tests":["packages/core/test/rollover-fill.test.ts"]},
   {"id":"native-exact-history-ranked-away","file":"packages/core/src/handlers/query.ts","find":"const verification = input.resource === \"orderbook\" && filters.orderHash !== undefined ? null : await verifyVenueRows","replace":"const verification = await verifyVenueRows","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {"id":"native-inactive-resting-conflict","file":"packages/core/src/handlers/track.ts","find":"if (bookRow && resting === true && onChain.status === \"filled-or-cancelled\")","replace":"if (bookRow && onChain.status === \"filled-or-cancelled\")","tests":["packages/core/test/native-api-reconcile.test.ts"]},
   {
@@ -2701,11 +2704,12 @@ const CATALOG: Mutant[] = [
     tests: [T.docsFreshness],
   },
   {
-    // The README names only one side of the trade again.
+    // The README denies the available fill capability. Removing only the BaseFiller paragraph
+    // is no longer an omission: the adjacent ForSelf paragraph independently describes the fill.
     id: "docs-rollover-readme-half-told",
     file: "README.md",
-    find: "which the cPT holder signs.\n  And it builds rollover-fill: the unsigned `BaseFiller.execute` calldata with which the source\n  cST holder fills that order and pays the premium.",
-    replace: "which the cPT holder signs.",
+    find: "And it builds rollover-fill:",
+    replace: "It cannot build rollover-fill:",
     tests: [T.docsFreshness],
   },
   {
@@ -2855,7 +2859,7 @@ const CATALOG: Mutant[] = [
     // The signing topic's transaction producers drop the rollover fill.
     id: "docs-signing-producers-rollover-fill-dropped",
     file: "packages/schemas/src/doc-topics.ts",
-    find: "\\`cork_prepare_orders\\` taker-fill, cancel,\nrollover-fill and deploy-rollover-contract.",
+    find: "\\`cork_prepare_orders\\` taker-fill, cancel,\ndefault BaseFiller rollover-fill and deploy-rollover-contract.",
     replace: "\\`cork_prepare_orders\\` taker-fill, cancel and\ndeploy-rollover-contract.",
     tests: [T.docTopics],
   },
@@ -4285,7 +4289,7 @@ const CATALOG: Mutant[] = [
     // no FillerAuth, and the settler reverts Settler__UnauthorizedFiller (msg.sender is BaseFiller).
     id: "rollover-fill-exclusive-caller-is-account",
     file: "packages/core/src/handlers/prepare-rollover-fill.ts",
-    find: "!isAddressEqual(order.exclusiveFiller, baseFiller);",
+    find: "!isAddressEqual(order.exclusiveFiller, fillHelper);",
     replace: "!isAddressEqual(order.exclusiveFiller, account);",
     tests: [T.rolloverFill],
   },

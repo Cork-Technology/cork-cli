@@ -680,6 +680,11 @@ Implemented + tested:
   nonce per `clientRequestId`. Give each order that you want live at the same time its own id.
   Otherwise the orders share a bit, and a fill of one invalidates the others. To share a bit on
   purpose (one-cancels-the-other), name an `ocoGroup`.
+  Explicit `rollover-fill.forSelf` prepares an existing-market or signed-JIT ForSelf account CALL
+  for the funding Safe's admitted session/Guard path; it is not an owner-signed transaction.
+  No deployed adapter default is assumed. JIT uses the adapter's fixed market creator by
+  ordinary CALL, then the direct settler fill; missing bindings refuse without fallback.
+  See [ForSelf rollover](docs/cli.md#forself-rollover-existing-markets-and-signed-jit) for execution and release gates.
 - **cork_prepare_market** — unsigned `MarketRegistry.deploy(ca, ref, mode[, oracleSalt])`
   oracle-wrapper txs, `deployFixedRateOracle(rate)` fixed-rate oracle txs, and
   `CorkMarketCreator.createNewPool` txs that create a JIT pool ahead of the fill. All are

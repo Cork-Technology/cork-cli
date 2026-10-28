@@ -373,6 +373,10 @@ export function registerWalletCommands(program: Command, deps: { env: Record<str
         } catch {
           throw new SignRefusal("invalid_json", "the artifact to sign is not JSON — pipe a prepare result (`ch prepare … --json | ch sign --account <name>`) or pass its file");
         }
+        const artifact = (doc as { data?: unknown } | null)?.data ?? doc;
+        if ((artifact as { execution?: { kind?: unknown } } | null)?.execution?.kind === "account-call") {
+          throw new SignRefusal("account_call_requires_session", "this artifact is a Safe/session account CALL, not an EOA transaction — use the verified Guard/account wallet SDK; ch sign cannot supply its session authorization");
+        }
         const name = String(opts["account"]);
         const td = typedDataOf(doc);
         if (td) {

@@ -18,11 +18,9 @@ function tsFiles(dir: string): string[] {
   });
 }
 
-/** Every code literal the handlers emit, via the two emission shapes:
- *  `code: "<snake>"` on a warning object (excluding zod's addIssue vocabulary), and the
- *  `unavailable(<target>, "<snake>", …)` positional. Mirrors the shapes the codebase actually
- *  uses — a third emission shape would surface here as a missing-code failure, which is the
- *  point: emission shapes are part of the contract this test pins. */
+/** Every code literal emitted directly, through unavailable(target, code, message), or
+ *  through a handler-local refuse(code, message). Local refusal helpers must not hide
+ *  new public warning vocabulary from this gate. */
 function emittedCodes(): Set<string> {
   const codes = new Set<string>();
   for (const file of tsFiles(new URL("../src", import.meta.url).pathname)) {
@@ -30,6 +28,7 @@ function emittedCodes(): Set<string> {
       if (line.includes("addIssue")) continue; // zod issue codes, not envelope warning codes
       for (const m of line.matchAll(/code: "([a-z0-9_]+)"/g)) codes.add(m[1]!);
       for (const m of line.matchAll(/unavailable\([^,]+, "([a-z0-9_]+)"/g)) codes.add(m[1]!);
+      for (const m of line.matchAll(/\brefuse\("([a-z0-9_]+)"/g)) codes.add(m[1]!);
     }
   }
   return codes;

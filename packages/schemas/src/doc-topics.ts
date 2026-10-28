@@ -95,7 +95,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "unavailable",
     contract:
       "a deliberate gate refused the call before anything ran — a backend not wired (needs_indexer, needs_service, hypersync_unavailable), a phase or mode boundary (phase_gated, mode_unavailable), a missing required filter, the deprecation gate, or the generation gate (generation_unknown: the `generation` label names no configured set on this chain — the message lists them; generation_read_only: the named set is kept for reads, decode and attribution only, so a prepare refuses); deprecated/deprecation_notice are the two INFO siblings that ride ok results when a legacy path DID run or sugar was translated",
-    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only"],
+    codes: ["needs_indexer", "needs_service", "phase_gated", "mode_unavailable", "hypersync_unavailable", "missing_filter", "deprecated_gated", "deprecated", "deprecation_notice", "generation_unknown", "generation_read_only", "unsupported_account_profile"],
   },
   {
     family: "scan honesty",
@@ -154,7 +154,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "mixed",
     contract:
       "what protects the filler of a rollover order (cork_prepare_orders rollover-fill): BaseFiller pays only the caller, but the VALUE is decided in the holder's clone, by hooks the holder signed and attesters the holder chose — dst_floor_derived (info) says minDstPerSrc was derived from previewUnwindMint and previewDeposit with no tolerance (Phoenix converts both ways at exactly 1:1); dst_floor_underivable (unavailable, no bytes) says it was omitted and could not be derived, data.gap names why — pass it explicitly; no_dst_floor (info) says an explicit 0 removes the settler's mint-rate check; dst_floor_slack (info) says an explicit floor below the honest rate lets the hooks keep the difference; rollover_trust_custom (info) says the clone trusts attesters other than the factory defaults; rollover_trust_pending (info) says the holder queued a trust change; hook_not_vetted (info) names every intent hook the default attesters do not vouch for, a mid-roll hook first",
-    codes: ["dst_floor_derived", "dst_floor_underivable", "no_dst_floor", "dst_floor_slack", "rollover_trust_custom", "rollover_trust_pending", "hook_not_vetted"],
+    codes: ["dst_floor_derived", "dst_floor_underivable", "no_dst_floor", "dst_floor_slack", "rollover_trust_custom", "rollover_trust_pending", "hook_not_vetted", "shared_adapter_reservation", "unsupported_for_self_route", "for_self_market_creation_unsupported", "for_self_premium_not_in_markets"],
   },
   {
     family: "bundle guards",
@@ -182,13 +182,13 @@ export const DOC_TOPICS: Record<string, DocTopic> = {
 
 Every \`cork_prepare_*\` result is **UNSIGNED**. This server never signs, never holds keys, and
 never broadcasts on-chain transactions. Each prepare result carries a \`data.execution\`
-block naming its exact completion path; the two artifact families are:
+block naming its exact completion path; the artifact families are:
 
 ## Family A — unsigned Ethereum transactions
 
 Producers: \`cork_prepare_phoenix\` (Bundler3 bundles and the authority-onboard/revoke approve
 txs), \`cork_prepare_market\` (every action), \`cork_prepare_orders\` taker-fill, cancel,
-rollover-fill and deploy-rollover-contract.
+default BaseFiller rollover-fill and deploy-rollover-contract.
 The result carries \`{to, data|calldata|multicall, value, chainId}\`.
 
 1. **Simulate first** — \`cork_track\` mode:"simulate" dry-runs the frozen bytes and answers
@@ -237,6 +237,20 @@ rfq-write (the venue's \`Cork RFQ\` domain). The result carries the full \`typed
   carries it. Its \`data.execution.then\` lists every step.
 - \`cork_submit\` relays only — it recomputes every commitment locally before relaying and
   never signs.
+
+## Family C — session-account calls
+
+An explicit \`rollover-fill.forSelf\` produces an \`account-call\`, not an EOA transaction.
+Its \`execution.sign: "wallet-session"\` names a client wallet-SDK flow, **not a JSON-RPC
+signing method**. The funding Safe must CALL the selected adapter through its admitted
+Guard/session execution path. Do not sign a raw transaction pretending the Safe is an EOA,
+wrap this call in the owner-signed BaseFiller batch, or use delegatecall.
+
+Verify the actual deployed adapter, Guard, account implementation and policy; simulate the
+complete guarded execution, including approvals. The direct adapter simulation alone does
+not prove session admission. Sign and submit the account operation with your own configured
+wallet SDK, then reconcile its receipt. This server neither builds the session authorization
+nor signs or broadcasts it. This route requires separately verified deployment/configuration.
 
 ## Signing from the \`ch\` CLI with a keystore
 
@@ -1116,6 +1130,39 @@ The holder's two slippage floors, \`minCaReceived\` and \`minSharesOut\`, are ch
 
 A session-key policy that allows only the call (BaseFiller, execute) routes the value safely, but it cannot enforce the floor. The wallet must set or keep \`minDstPerSrc\`.
 
+## Explicit ForSelf existing-market and signed-JIT fill
+
+\`rollover-fill.forSelf\` takes the improved adapter's actual \`adapter\` address and a
+decimal-string \`deadline\`. It prepares an \`account-call\` for the funding Safe's admitted
+Guard/session path, not an owner-signed BaseFiller wrapper or Phoenix Bundler3 bundle.
+The Safe is source funder, destination, refund recipient and partial-slot subFiller.
+Approvals go to the adapter; partial slots are \`(digest, adapter, bytes32(Safe))\`.
+Third-party FillerAuth binds that destination Safe; a reservation to the shared adapter
+itself is refused. Premium must be collateral/reference cash of either signed market.
+
+The route supports exact/partial 0.2 settlers with a positive destination floor.
+For existing markets it prepares \`rolloverForSelf\`. With a signed JIT commitment, pass
+the matching \`jitMarket\`: \`rolloverForSelfWithMarket\` resolves/creates the destination
+through the adapter's immutable \`MARKET_CREATOR\` using ordinary CALL, then fills the
+settler directly. There is no BaseFiller dependency, delegatecall or creator role on
+the adapter. A zero, absent, unreadable or differently bound creator refuses without
+fallback. Decoding preserves the complete signed market instruction.
+\`bounded\` remains a separate owner route and cannot be combined with ForSelf.
+Binding getters are not runtime identity or session-policy proof. Verify the actual
+deployment and complete Guard/account execution before client-side signing. Client
+caps/floors are not policy amount enforcement. Source support does not claim deployment
+or release readiness; the default BaseFiller route is unchanged.
+The single-call consumer rejects signed staged-funding pre-hooks with the
+\`execute(address,address,address)\` ABI even when \`bounded\` was omitted. Standard owner-pull
+hooks need the holder's grant to its clone; unused-cPT refunds do not restore allowance,
+so repeated partial fills can require renewal.
+
+**Residual premium/price risk:** an agent can author its own holder order and choose a
+premium/cap that transfers the Safe's entire approved market-cash balance to its own clone,
+even while destination cST meets the floor. An independently approved account-side
+premium/amount/value policy is required before admitting this selector. Token/selector
+binding alone is necessary but not sufficient; ForSelf does not mitigate that economic loss.
+
 ## What the results tell you
 
 - \`rollover-intent\`: \`data.ranges\` (the settler's pool manager, quantum, \`fillDeadlineBefore\`, fill sizes and the smallest fill that clears your floors).
@@ -1170,8 +1217,9 @@ export function findDocTopic(key: string): DocTopic | undefined {
 // next steps with exact tool names.
 
 export interface ExecutionBlock {
-  kind: "eth-transaction" | "eip712-typed-data";
-  sign: "eth_signTransaction" | "eth_signTypedData_v4";
+  kind: "eth-transaction" | "eip712-typed-data" | "account-call";
+  /** wallet-session denotes the caller's account SDK, not a JSON-RPC signing method. */
+  sign: "eth_signTransaction" | "eth_signTypedData_v4" | "wallet-session";
   /** Ordered next steps naming exact tools. */
   then: string[];
   reference: typeof SIGNING_TOPIC_REFERENCE;
@@ -1188,6 +1236,21 @@ export function executionEthTransaction(): ExecutionBlock {
       "cork_decode kind:'tx' (validate the signed bytes: signer, to, chainId, legs)",
       "eth_sendRawTransaction via your own RPC endpoint (chainlist.org lists public ones)",
       "cork_track txHash (reconcile; receipt_not_found = still pending)",
+    ],
+    reference: SIGNING_TOPIC_REFERENCE,
+  };
+}
+
+/** A Safe/session CALL; never sign it as a raw transaction from the Safe address. */
+export function executionAccountCall(): ExecutionBlock {
+  return {
+    kind: "account-call",
+    sign: "wallet-session",
+    then: [
+      "verify deployed adapter, Guard, Safe implementation and session policy",
+      "simulate the complete admitted Guard/account CALL including approvals; direct adapter simulation is not session-admission proof",
+      "sign and submit with your configured account/session wallet SDK, not eth_signTransaction from the Safe or an owner-signed BaseFiller wrapper",
+      "cork_track txHash (reconcile the account operation's execution receipt)",
     ],
     reference: SIGNING_TOPIC_REFERENCE,
   };

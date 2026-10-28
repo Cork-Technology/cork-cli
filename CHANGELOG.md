@@ -9,6 +9,9 @@ Human-readable text and log formats are not covered.
 
 ### Added
 
+- Explicit `rollover-fill.forSelf` prepares `CorkForSelfAdapter.rolloverForSelf` and signed-JIT `rolloverForSelfWithMarket` account CALLs for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. JIT uses the adapter's fixed creator by ordinary CALL before the shared direct settler fill; disabled, unreadable or mismatched creator bindings refuse without fallback. The default BaseFiller route is unchanged.
+- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access; decoded JIT calls retain the complete signed market instruction. No deployed adapter default or release availability is implied. Independent account-side premium/amount/value limits and actual deployment/account execution qualification remain required; source binding checks do not supply that policy.
+
 - Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
 
 ## [0.8.0-rc.2] — preparation, not yet published

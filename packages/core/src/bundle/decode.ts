@@ -87,7 +87,7 @@ type LegBase = {
 
 export type DecodedLeg =
   | (LegBase & { kind: "cork"; action: string; params: unknown })
-  | (LegBase & { kind: "forself"; action: string; params: unknown })
+  | (LegBase & { kind: "forself"; action: string; params: unknown; market?: unknown })
   /** A GeneralAdapter fund/sweep leg (`role: "adapter"`, trusted against corkAdapter) or a
    *  plain ERC-20 call (`role: "erc20"`, trusted only against the caller's token list). */
   | (LegBase & { kind: "leg"; role: "adapter" | "erc20"; fn: string; args: readonly unknown[] })
@@ -257,7 +257,7 @@ function decodeCall(c: Call, depth: number, trust: DecodeTrustTargets, delegatec
     }
     if (FORSELF_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: forSelfAbi, data: c.data });
-      return { ...base(c), ...flag, ...verifyForSelf(c.to, trust), kind: "forself", action: functionName, params: args[0] };
+      return { ...base(c), ...flag, ...verifyForSelf(c.to, trust), kind: "forself", action: functionName, params: args[0], ...(functionName === "rolloverForSelfWithMarket" ? { market: args[1] } : {}) };
     }
     if (MARKET_SELECTORS.has(selector)) {
       const { functionName, args } = decodeFunctionData({ abi: MARKET_ABI, data: c.data });

@@ -248,6 +248,18 @@ describe("ch sign", () => {
     expect(JSON.parse(partial.stderr).error.code).toBe("incomplete_transaction");
   });
 
+  it("refuses session-account calls before touching a keystore or prompting, even with complete transaction fields", async () => {
+    const { env } = freshDir();
+    const p = scripted({});
+    const data = { to: ALICE.address, calldata: "0x", value: "0", chainId: 8453, nonce: 7, gas: "21000", gasPrice: "1", execution: { kind: "account-call", sign: "wallet-session" } };
+    const r = await runCli(["sign", "--account", "absent", "--json"], {}, env, { prompter: p, readStdin: async () => JSON.stringify({ state: "ok", data }) });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stderr).error.code).toBe("account_call_requires_session");
+    expect(r.stdout).toBe("");
+    expect(p.asked).toEqual([]);
+    expect(existsSync(env.CORK_KEYSTORE_DIR)).toBe(false);
+  });
+
   it("an artifact file that cannot be read is the caller's input error, named, before any password", async () => {
     const { env } = freshDir();
     storeAlice(env);
