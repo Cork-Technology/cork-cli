@@ -93,6 +93,12 @@ Copy those local archives into your consumer and use the dependency and override
 Locally packed bytes are not attested release assets. The release proves reproducibility
 separately, with its own gates: a checksum comparison of independent builds, and provenance.
 
+The `0.8.0-rc.3` candidate uses the emitted core package's stamped version for SDK/MCP build
+metadata and the default config line: an installed `0.8.x` package reads `config/0.8`.
+An explicit `CH_BUILD_VERSION` still takes precedence; source runs remain `dev` and read `main`.
+Previously published archives retain their original behavior. This is package identity, not
+onchain version or deployment verification, and it does not enable binary self-update for an SDK.
+
 Why tarballs and not npm? [sdk-roadmap.md](sdk-roadmap.md) explains the distribution posture, the
 verification chain, and when the npm stage arrives.
 

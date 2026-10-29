@@ -11,8 +11,12 @@
 //
 // BUILD_TARGET doubles as the "am I a compiled release binary" signal: self-update refuses to
 // run without it, because a source checkout updates through git, not binary replacement.
+//
+// Emitted SDK/MCP packages use their existing stamped PACKAGE_VERSION when no explicit
+// build version is supplied. It is undefined in source runs, which remain "dev".
+import { PACKAGE_VERSION } from "./package-version.ts";
 
-export const BUILD_VERSION: string = process.env.CH_BUILD_VERSION ?? "dev";
+export const BUILD_VERSION: string = process.env.CH_BUILD_VERSION ?? PACKAGE_VERSION ?? "dev";
 export const BUILD_COMMIT: string = process.env.CH_BUILD_COMMIT ?? "unknown";
 export const BUILD_TARGET: string = process.env.CH_BUILD_TARGET ?? "";
 /**

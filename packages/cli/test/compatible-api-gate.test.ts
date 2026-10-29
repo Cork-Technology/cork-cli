@@ -69,6 +69,23 @@ describe("compatible default API release gate", () => {
     expect(result).toMatchObject({ status: "PASS", endpoints: [{ apiRevision }] });
   });
 
+  it.each(["c0bbf05", "c0bbf0552de9687612ce58a73b0d5cc819ad7059"])("accepts the reviewed cork-api 0.6.0 source %s with exact matching evidence", async apiRevision => {
+    const fixture = venue("unknown", { metadata: { component: apiComponent, version: "0.6.0", status: "active", commit: apiRevision } });
+    const result = await verifyCompatibleApi({ ...evidence(), apiRevision }, fixture);
+    expect(result).toMatchObject({ status: "PASS", endpoints: [{ apiRevision }] });
+  });
+
+  it.each([
+    "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f",
+    "7a9dc88ded21d591cab67fe31815b6d291767980",
+  ])("admits exact Infra %s only after the native API behavior probes pass", async infraRevision => {
+    const apiRevision = "c0bbf0552de9687612ce58a73b0d5cc819ad7059";
+    const fixture = venue("unknown", { metadata: { component: apiComponent, version: "0.6.0", status: "active", commit: apiRevision } });
+    const result = await verifyCompatibleApi({ ...evidence(), apiRevision, infraRevision }, fixture);
+    expect(result.status).toBe("PASS");
+    expect(fixture.requests).toHaveLength(7);
+  });
+
   it("rejects a different served abbreviation even when both identify reviewed sources", async () => {
     const fixture = venue("unknown", { metadata: { component: apiComponent, version: "0.5.0", status: "active", commit: "6c459d5" } });
     await expect(verifyCompatibleApi(evidence(), fixture)).rejects.toBeInstanceOf(AssertionError);
@@ -81,7 +98,17 @@ describe("compatible default API release gate", () => {
     ["non-hex API abbreviation", { apiRevision: "72010cg" }],
     ["uppercase API abbreviation", { apiRevision: "72010C8" }],
     ["unreviewed API abbreviation", { apiRevision: "72010c9" }],
+    ["unreviewed neighbour of the 0.6.0 source", { apiRevision: "c0bbf06" }],
     ["stale Infra runtime despite identical index bytes", { infraRevision: "2955cdb84b41a16c68ecc4dae3bb8bda8c5ef5c8" }],
+    ["abbreviated original Infra identity", { infraRevision: "a9f12d2" }],
+    ["abbreviated additional Infra identity", { infraRevision: "7a9dc88" }],
+    ["neighbour of original Infra identity", { infraRevision: "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23e" }],
+    ["neighbour of additional Infra identity", { infraRevision: "7a9dc88ded21d591cab67fe31815b6d291767981" }],
+    ["uppercase Infra identity", { infraRevision: "7A9DC88DED21D591CAB67FE31815B6D291767980" }],
+    ["non-hex Infra identity", { infraRevision: "7a9dc88ded21d591cab67fe31815b6d29176798g" }],
+    ["overlong Infra identity", { infraRevision: "7a9dc88ded21d591cab67fe31815b6d2917679800" }],
+    ["missing Infra identity", { infraRevision: undefined }],
+    ["non-string Infra identity", { infraRevision: 7 }],
     ["different migration artifact", { indexMigrationSha256: "0".repeat(64) }],
   ])("refuses %s before HTTP", async (_name, invalid) => {
     const fixture = venue("confirmed");
