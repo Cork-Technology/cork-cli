@@ -6,9 +6,10 @@
 // the surface-drift gate, pointed outward: on an EXPECTED change, review the fixture diff and
 // re-capture deliberately with UPDATE_VENUE_SPEC=1.
 //
-// The committed capture is PRODUCTION (api-phoenix.cork.tech, cork-api 0.5.0, commit 72010c8,
-// 2026-10-16). Reviewed changes retire RFQ v1 and add native order history, rollover requester
-// roles and effective status; RFQ v2's full-answer authorization remains intact.
+// The committed capture is PRODUCTION (api-phoenix.cork.tech, cork-api 0.6.0, commit c0bbf05,
+// 2026-10-29). Full-document and all 25 mirrored-rule reviews found version/signature-description
+// drift plus venue-origin salt and bounded RFQ legacy verification in the API. The client
+// already emits venue-salted proofs; no legacy fallback or weaker contract check is added.
 // Release evidence must run against the production default, without a staging override;
 // a staging success is not production proof.
 //
