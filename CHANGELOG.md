@@ -29,6 +29,10 @@ Human-readable text and log formats are not covered.
 - Native history also admits the reviewed API `0.6.0` source `c0bbf0552de9687612ce58a73b0d5cc819ad7059`, including its unambiguous short metadata revision. Existing reviewed sources, malformed/unknown-source refusals, history and pagination semantics are preserved. The release gate uses the same finite API identity list; its exact Infra identity and other deployment-evidence checks remain separate. Source admission is not current deployment, runtime or release acceptance.
 - Refresh the production API `0.6.0` OpenAPI capture after reviewing the full document and all mirrored venue rules, including the already-supported venue-origin-bound RFQ signatures. Retain the whole-document drift check and include it in `test:live`, so local live qualification does not omit the deployed-contract tripwire that CI runs.
 
+### Recorded release exceptions
+
+1. This candidate retains 14 unchanged source contexts supporting optional authenticated release channels and only their mechanically proven generated equivalents. The exception does not cover secrets, source-history references, operator-machine paths or other unreviewed content. Release coordination owns an explicit policy-owner clarification or a compatible public export by 2026-10-30 and before any later release candidate. Other release and integration checks remain required.
+
 ## [0.8.0-rc.2] — 2026-10-23
 
 ### Changed

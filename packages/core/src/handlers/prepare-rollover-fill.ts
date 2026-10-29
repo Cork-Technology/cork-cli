@@ -43,7 +43,7 @@ const stagedFundingSelector = toFunctionSelector(fundingAbi[0]);
 const guardAbi = parseAbi(["function execute(uint256 numerator, uint256 denominator)"]);
 const cloneStateAbi = parseAbi(["function orderState(bytes32) view returns ((uint256 rolled, bool rolloverTerminal) state)"]);
 
-/** Source pin: rollover-private 894bc912 (module source unchanged from cdb3e8c7).
+/** Canonical bounded rollover hook profile.
  * Identities are supplied explicitly until externally deployed/attested; not a config default. */
 function boundedProfile(intent: ParsedRolloverPayload["intent"], modules: NonNullable<RolloverFillAction["bounded"]>, amount: bigint) {
   const phases = [intent.preRolloverHooks, intent.midRolloverHooks, intent.postRolloverHooks];
