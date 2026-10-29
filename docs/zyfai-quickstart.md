@@ -778,15 +778,19 @@ an allowed call in which your Safe pays and an attacker receives.
 Deploy a Zyfai-owned wrapper that forces the payout to the Safe, and whitelist that wrapper. It
 has the same shape as your `*ForSelf` and AdapterProxy routes for Aave, Morpho and Euler.
 
-Cork's reference adapter exists, and it is proven end to end. `CorkForSelfAdapter`
-([Cork-Technology/cork-periphery](https://github.com/Cork-Technology/cork-periphery)) is the
-`*ForSelf` twin of the whole surface. It has one address and 14 entrypoints (the 13 pool actions
-plus `fillOrderForSelf`), and it is custody-free. It delivers every output to the calling Safe,
-with no receiver parameter anywhere. It binds every fill on chain to a named Cork market, and
-every ERC-20 approval goes to the adapter itself. We exercised it end to end on live-chain forks,
-against the real 1inch LOP and two pool managers: `arbitrum-v1.1` and `phoenix/v0.3-rc.1`
-(cork-periphery `test/fork`). No fork test covers the primary's pool manager yet. You still audit,
-vet and deploy it. Your users trust Zyfai.
+`CorkForSelfAdapter`
+([Cork-Technology/cork-periphery](https://github.com/Cork-Technology/cork-periphery)) exposes
+13 pool actions plus `fillOrderForSelf`; periphery **v0.3.0-rc.1** adds
+`rolloverForSelf` and `rolloverForSelfWithMarket`, for **16 transaction entrypoints**.
+Each path delivers outputs to the calling account without a receiver parameter; token approvals
+name the adapter. Rollover uses fixed exact/partial settlers and, for a signed JIT destination,
+the fixed market creator. It requires an account-call/session execution path, not owner signing.
+
+The earlier pool/LOP fork evidence against `arbitrum-v1.1` and `phoenix/v0.3-rc.1`
+does not establish the new adapter's rollover execution, current runtime, or Safe/session policy.
+The v0.3.0-rc.1 source and historical deployment correspondence are separate from integration,
+independent security review and economic-policy acceptance. Audit and vet the selected deployment;
+your users trust Zyfai.
 
 **B. Markets in this flow have the pool-level whitelist OFF, by construction.** Cork's adapter
 performs the JIT mint inside a fill. A market with its whitelist on would refuse that mint, and
@@ -834,6 +838,24 @@ v/r/s permits):
 | CorkPoolManager 1.4.0-rc.1 (10-field `Market`) | `0xcC17224A8710fa23BdA40c2CB563b85CeDDb0C2D` |
 | CorkAdapter (pool actions) | `0x71eB628c3A40FB3896613804847840426f9284A7` |
 | CorkForSelfAdapter v0.2.0-rc.1 (reference) | `0x3864902695DC930Df406ef5dEB74c4DC249e23f1` |
+
+The table preserves the older set's reference; it is **not a rollover adapter default**.
+The opt-in `phoenix/v0.7-rc.1` set records periphery v0.3.0-rc.1 at
+`0xe64F5deCEC381cd8C705f20B41BB24213b8a3507` on **Base (8453) and Arbitrum One (42161)**.
+Its pool manager, whitelist, LOP, exact/partial settlers and market creator are bound by the
+[pinned Distribution record](https://github.com/Cork-Technology/distribution/blob/a9e2b6444def883a8795ba0a407fe21d01f123ce/distributions/phoenix/v0.7-rc.1.json).
+This is historical deployment evidence, not fresh runtime or session-policy acceptance.
+
+For pool/LOP preparation, select `--generation phoenix/v0.7-rc.1` to name the new set
+and pass the adapter explicitly in `--for-self`. For rollover-fill, use `action.forSelf`;
+its `data.settlerGeneration` comes from the signed order's settler, not the request label
+(the shared 0.2 settlers still report `phoenix/v0.5`). Merely selecting a generation does
+**not** select ForSelf: omitting `forSelf` preserves Bundler3/raw LOP/BaseFiller.
+The primary remains `phoenix/v0.5`; older generations and reference addresses remain intact.
+`ch query protocol-config --chain-id <id>` reports the effective source under `data.config`
+and sets under `data.generations`. A pool/LOP request naming a set missing from remote config
+can refuse `generation_unknown`; rollover-fill does not validate that request label.
+This does not authorize switching endpoints, changing execution routes, or signing owner calls.
 
 The previous set (`phoenix/v0.3-rc.1`, contracts release **0.3.3**) is where most listed pools
 live today. Its registry is `0xa78d8137B01058dD23e545b6557209eBBc9611F1`, and its JIT adapter is

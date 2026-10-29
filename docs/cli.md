@@ -158,7 +158,8 @@ captures are not repinned to these reviewed sources.
   response is `invalid_service_response`, never proof of history or absence. An empty exact
   venue result is not proof of on-chain absence.
 
-These native fields are supported by the reviewed native-history contract in API `0.5.0`.
+These native fields are supported by the reviewed native-history contract in API `0.5.0`
+and the reviewed API `0.6.0` source `c0bbf05`.
 Metadata may declare a lowercase hexadecimal Git abbreviation of 7–40 characters, but it must
 identify exactly one reviewed source revision. Unknown, malformed or ambiguous declarations
 remain unavailable. Source association is not index readiness or deployment/rollout proof.
@@ -170,7 +171,10 @@ RFQ v2 refresh also returns `requote`: post the superseding answer carrying the 
 order before resting it. Known native unavailability refuses the refresh before that work.
 RFQ v1 and v2 history are not bridged by this integration.
 
-The reviewed infrastructure revision is `a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f`.
+The original reviewed migration/LOP contract source is `a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f`.
+The release checker also admits exact `7a9dc88ded21d591cab67fe31815b6d291767980` for that
+selected contract: all selected migration/LOP blob-mode entries match, while wider Infra
+source differs and is not certified. Actual deployment identity and runtime evidence remain required.
 Reader compatibility, index readiness and producer deployment require separate verification:
 sibling retirement commits in
 128-row batches. Native CANCELLED can mean spent-bit retirement, not explicit maker cancellation;
@@ -394,6 +398,27 @@ Approval preparation is not an approval transaction or proof of effective permis
 `adapter` and `deadline` (a decimal-string Unix timestamp). Supply the reviewed improved
 adapter's actual deployment address; no deployed default is assumed. This is the periphery
 ForSelf path, not Phoenix CorkAdapter/Bundler3.
+
+For the recorded v0.3.0-rc.1 deployment on Base (`8453`) or Arbitrum One (`42161`), use
+`--for-self '{"adapter":"0xe64F5deCEC381cd8C705f20B41BB24213b8a3507","deadline":"<unix-seconds>"}'`
+for rollover-fill. Its `data.settlerGeneration` comes from the signed order's settler,
+not `--generation`; the shared 0.2 settlers still report `phoenix/v0.5`.
+Pool/LOP requests may select `--generation phoenix/v0.7-rc.1` to name the new set.
+Pool actions use the same explicit adapter with no `deadline` member in `forSelf`
+(their ordinary `--deadline-at` controls expiry); LOP fills also require `poolId`.
+This additive set preserves older references, including the pool/LOP-only v0.2.0-rc.1
+adapter. Primary v0.5 and ordinary Bundler3/raw LOP/BaseFiller routes do not change.
+Selecting a generation alone never selects ForSelf; caller-supplied vetted adapters remain supported.
+`ch query protocol-config --chain-id <id>` reports the effective source under `data.config`
+and sets under `data.generations`. Pool/LOP requests naming an unpublished set can refuse
+`generation_unknown`; rollover-fill does not validate that request label.
+Do not replace historical records or use a failed binding check to choose another route.
+
+The chain/generation/constructor mapping is retained in the
+[immutable Distribution manifest](https://github.com/Cork-Technology/distribution/blob/a9e2b6444def883a8795ba0a407fe21d01f123ce/distributions/phoenix/v0.7-rc.1.json)
+and [periphery component record](https://github.com/Cork-Technology/distribution/blob/a9e2b6444def883a8795ba0a407fe21d01f123ce/components/cork-periphery/0.3.0-rc.1.json).
+Their earlier runtime correspondence is not a fresh deployment attestation, completed
+independent security review, or approval of this account's session/Guard or economic limits.
 
 The funding Safe must CALL the adapter through its admitted Guard/session path. Source
 funding, destination, refunds and `subFiller` are that Safe; approvals name the adapter.
@@ -766,10 +791,14 @@ repository variable containing `apiRevision`, `infraRevision`, `indexMigrationSh
 `activeOrderHash`, `inactiveOrderHash` and `blockedSiblingOrderHash` from an actual deployment.
 The canonical compatibility policy retains full reviewed source pins in `native-api-contract.mjs`.
 The evidence `apiRevision` must equal the revision actually served by metadata, including its
-short form (currently `72010c8`). Both runtime admission and release evidence require a lowercase
-7–40-character hexadecimal revision that identifies exactly one reviewed source; neither
-arbitrary prefixes nor ambiguous abbreviations are admitted. Infrastructure is pinned to
-`a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f`; the required index artifact digest is unchanged.
+short form (for example `72010c8` or `c0bbf05`). Both runtime admission and release evidence
+require a lowercase 7–40-character hexadecimal revision that identifies exactly one reviewed
+source; neither arbitrary prefixes nor ambiguous abbreviations are admitted. Infrastructure evidence
+must name exactly full `a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f` or
+`7a9dc88ded21d591cab67fe31815b6d291767980`, without abbreviation, case folding or neighbour
+admission; the required index artifact digest is unchanged. The additional source admission is
+conditional on final unrelabeled API0.6/Postgres/native CLI–MCP proof and non-author review,
+not whole-Infra certification or a waiver of cut-time deployment/default-endpoint evidence.
 Source association is not deployment proof. Identical migration bytes do not substitute for
 runtime revision binding. `venue-defaults.mjs` provides the URL authority shared by the SDK
 and raw-Node guard. Missing evidence/endpoint, unsupported revision, failed HTTP, deprecated
@@ -786,8 +815,14 @@ account/module permissions. Passing this check does not authorize publication, r
 
 ### Local reference consumer proof
 
+This optional runner is not included in the public source export; use it only where the
+`experiments/fork-harness` scripts are present. It retains legacy API/Infra source inputs,
+records their actual identities and expects release-gate refusal before HTTP. That refusal
+is not a compatible-deployment PASS or proof of current API0.6 behavior.
+
 Prerequisites: the pinned Bun toolchain, Node, Forge/Anvil, Docker/Podman, and read-only
-checkouts with submodules at the exact gate API/Infra pins and rollover source
+checkouts with submodules at the fixture's API `d5e0757d90640023c31008bc73b06e1ab7aa9cef`,
+Infra `2955cdb84b41a16c68ecc4dae3bb8bda8c5ef5c8` and rollover source
 `894bc9129b1de96c3dd49ed75346adcbd8690e25`. Set `FORGE_STD_REFERENCE` to that checkout’s
 `lib/forge-std` (`620536fa5277db4e3fd46772d5cbc1ea0696fb43`). Install the CLI frozen
 lockfile and build the API using its own instructions. From this CLI repository:

@@ -9,12 +9,26 @@ Human-readable text and log formats are not covered.
 
 ### Added
 
-- Explicit `rollover-fill.forSelf` prepares `CorkForSelfAdapter.rolloverForSelf` and signed-JIT `rolloverForSelfWithMarket` account CALLs for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. JIT uses the adapter's fixed creator by ordinary CALL before the shared direct settler fill; disabled, unreadable or mismatched creator bindings refuse without fallback. The default BaseFiller route is unchanged.
-- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access; decoded JIT calls retain the complete signed market instruction. No deployed adapter default or release availability is implied. Independent account-side premium/amount/value limits and actual deployment/account execution qualification remain required; source binding checks do not supply that policy.
 
 - Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
 
-## [0.8.0-rc.2] — preparation, not yet published
+## [0.8.0-rc.3] — release preparation
+
+### Release preparation
+
+- Synchronize the CLI, core, schemas and MCP manifests and workspace lock entries to `0.8.0-rc.3`. Dependency resolutions are unchanged.
+- Emitted SDK/MCP packages use their already-stamped package version for build metadata and the matching `config/0.8` defaults URL, instead of reporting `dev` and reading frozen `main`. Source runs remain `dev`, explicit native build stamps retain precedence, and the existing compiled-target requirement for self-update is unchanged.
+- This section records local RC preparation and the inherited candidate change catalogue below. Current default-endpoint compatibility, onchain/account execution and publication approval require their own reviewed, exact-candidate evidence; this preparation is not that evidence.
+
+### Added
+
+- Explicit `rollover-fill.forSelf` prepares `CorkForSelfAdapter.rolloverForSelf` and signed-JIT `rolloverForSelfWithMarket` account CALLs for an admitted Safe/session path, with caller-bound funding, destination, refunds and partial slots. JIT uses the adapter's fixed creator by ordinary CALL before the shared direct settler fill; disabled, unreadable or mismatched creator bindings refuse without fallback. The default BaseFiller route is unchanged.
+- The opt-in route reports `execution.kind: "account-call"` / `sign: "wallet-session"`. `ch sign` refuses these artifacts before key access; decoded JIT calls retain the complete signed market instruction. No deployed adapter default or release availability is implied. Independent account-side premium/amount/value limits and actual deployment/account execution qualification remain required; source binding checks do not supply that policy.
+- Add the non-primary `phoenix/v0.7-rc.1` reference set on Base and Arbitrum One for periphery v0.3.0-rc.1, retaining the selected adapter and historical runtime hash as provenance only, not current code-hash verification. Explicit `forSelf.adapter` selects the opt-in route. Pool/LOP requests may name the new generation; rollover-fill derives `data.settlerGeneration` from the signed settler (the shared 0.2 settlers remain `phoenix/v0.5`). Primary v0.5, ordinary routes and historical references are unchanged. The Distribution is partner-preview/unreviewed, not production integration or release acceptance.
+- ForSelf verification now identifies a configured reference adapter's own generation when several sets share its pool manager, rather than mislabelling the new reference as an integrator adapter of the primary. Arbitrary caller-supplied adapters and mismatched-binding refusals retain their existing behavior.
+- Native history also admits the reviewed API `0.6.0` source `c0bbf0552de9687612ce58a73b0d5cc819ad7059`, including its unambiguous short metadata revision. Existing reviewed sources, malformed/unknown-source refusals, history and pagination semantics are preserved. The release gate uses the same finite API identity list; its exact Infra identity and other deployment-evidence checks remain separate. Source admission is not current deployment, runtime or release acceptance.
+
+## [0.8.0-rc.2] — 2026-10-23
 
 ### Changed
 
@@ -24,7 +38,7 @@ Human-readable text and log formats are not covered.
 
 - RFQ write signatures now bind the canonical configured venue origin with standard EIP-712 `domain.salt = keccak256(UTF-8(origin))`. Prepare and submit use the same trusted endpoint selection; wallet and MCP projections retain the full salted domain. Low-level SDK `rfqWriteTypedData` requires `venueOrigin` and `planRfqWrite` requires `venueUrl`. No legacy-unbound fallback. Coordinate with the salt-bound API (`RFQ_VENUE_ORIGIN` required before boot) and Factory; pause signed writers during cutover and re-sign pending proofs. History, proof-independent stored-body retries, API-key semantics and LOP/settler domains are unchanged. Released `v0.8.0-rc.1` remains affected until separately released; no release/deployment is implied.
 
-## [0.8.0-rc.1] — Prepared (unreleased)
+## [0.8.0-rc.1] — 2026-10-19
 
 ### Breaking
 

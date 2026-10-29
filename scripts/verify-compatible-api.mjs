@@ -8,7 +8,11 @@ const DEFAULT_ENDPOINTS = [venueDefaults.venueUrl];
 // Reviewed native-history contract; separately supplied deployment identity remains required.
 // A merge or successful workflow is not evidence of default endpoint readiness.
 export const REQUIRED_API_REVISION = requiredApiRevision;
-export const REQUIRED_INFRA_REVISION = "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f";
+// Exact selected migration/LOP contract identities, not certification of wider Infra source.
+const REVIEWED_INFRA_REVISIONS = [
+  "a9f12d2f7e3af9b145e8e5ba47b56c3e301cc23f",
+  "7a9dc88ded21d591cab67fe31815b6d291767980",
+];
 const INDEX_SHA256 = "879ea3d9d5d42989c1e43ea50c379ed7c4a623d22074af6d79dff30467b18110";
 const CONFIDENCE_VALUES = ["unknown", "provisional", "confirmed"];
 const hash32 = (value) => typeof value === "string" && /^0x[0-9a-f]{64}$/i.test(value);
@@ -25,7 +29,7 @@ const requiredRow = (rows, hash) => {
 export async function verifyCompatibleApi(evidence, { endpoints = DEFAULT_ENDPOINTS, fetchImpl = fetch } = {}) {
   assert.ok(evidence && typeof evidence === "object", "CORK_NATIVE_API_RELEASE_EVIDENCE is required; a merged API PR is not deployment evidence");
   assert.ok(isReviewedApiRevision(evidence.apiRevision), "deployment identity must identify exactly one reviewed native API source revision");
-  assert.equal(evidence.infraRevision, REQUIRED_INFRA_REVISION);
+  assert.ok(REVIEWED_INFRA_REVISIONS.includes(evidence.infraRevision), "deployment identity must match an exact reviewed full Infra revision");
   assert.equal(evidence.indexMigrationSha256, INDEX_SHA256);
   assert.ok(Number.isFinite(Date.parse(evidence.deployedAt)), "actual deployment timestamp required");
   assert.ok(Array.isArray(evidence.endpoints));

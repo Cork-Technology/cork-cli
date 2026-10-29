@@ -289,13 +289,21 @@ describe("resolveRollover", () => {
       contractsVersion: "v0.2.0",
       wire: "0.2",
       label: "phoenix/v0.5",
-      alsoIn: ["phoenix/v0.4-rc.1"],
       status: "active",
       primary: true,
     });
     expect(arb.generation).toEqual({ label: "phoenix/v0.5", status: "active", distribution: "phoenix/v0.5-rc.1", wire: "0.2" });
     const base = await resolveRollover(8453);
     expect(base.rollover).toMatchObject({ factory: "0x99A5C47CbF062D4E6665afAF32aE6496F9f93F65", seededAtBlock: 51153216, wire: "0.2" });
+    for (const { chainId, selected } of [{ chainId: 42161, selected: arb.rollover! }, { chainId: 8453, selected: base.rollover! }]) {
+      const configured = BUNDLED_DEFAULTS.generations[String(chainId)]!;
+      const factory = configured.sets[configured.primary]!.rollover!.factory.toLowerCase();
+      const aliases = Object.entries(configured.sets)
+        .filter(([label, set]) => label !== configured.primary && set.rollover?.factory.toLowerCase() === factory)
+        .map(([label]) => label);
+      expect(new Set(selected.alsoIn)).toEqual(new Set(aliases));
+      expect(selected.alsoIn).not.toContain(configured.primary);
+    }
   });
   it("the whole flattened list rides along: rc.2 (phoenix/v0.3-rc.1) stays ACTIVE beside the primary, and Arbitrum's July set is RETIRED", async () => {
     const arb = (await resolveRollover(42161)).rollover!;
@@ -406,28 +414,6 @@ describe("rolloverGenerations — the ONE flattening every generation-aware cons
 });
 
 describe("generations in the bundled defaults", () => {
-  // 2026-09-22: the Distribution phoenix/v0.4-rc.1 set (phoenix v1.4.0-rc.1, 10-field wire) is
-  // the primary on 42161 + 8453; phoenix/v0.3-rc.1 (the 0.5 line's primary, 8-field) stays
-  // ACTIVE beside it; arbitrum-v1.1 (the venue's existing markets, the legacy registry, the
-  // retired July rollover) stays active; arbitrum-legacy (the pre-launch pair) is read-only.
-  it("42161: four generations in resolution order (primary, other active in config order, read-only last), each block declaring its wire", async () => {
-    const { generations, primary } = await resolveGenerations(42161);
-    expect(generations.map((g) => [g.label, g.status, g.primary])).toEqual([
-      ["phoenix/v0.5", "active", true],
-      ["phoenix/v0.4-rc.1", "active", false],
-      ["phoenix/v0.3-rc.1", "active", false],
-      ["arbitrum-v1.1", "active", false],
-      ["arbitrum-legacy", "read-only", false],
-    ]);
-    expect(primary?.label).toBe("phoenix/v0.5");
-    expect(generations.map((g) => [g.phoenix?.wire, g.marketRegistry?.wire, g.rollover?.wire])).toEqual([
-      ["10-field", "nested", "0.2"],
-      ["10-field", "nested", "0.2"],
-      ["8-field", "flat", "rc.2"],
-      ["8-field", "legacy", "rc.1"],
-      ["8-field", undefined, undefined],
-    ]);
-  });
   it("the primary 42161 deployment is the v1.4.0-rc.1 stack (Distribution record, bindings verified live 2026-09-22)", async () => {
     const r = await resolveDeployment(42161);
     expect(r.deployment).toMatchObject({

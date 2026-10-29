@@ -537,7 +537,11 @@ export async function classifyForSelfAdapter(args: {
   if (owner === undefined) {
     return { kind: "mismatch", adapter, reason: `CORK() names ${cork.value}, which is the pool manager of NO configured generation on this chain — the adapter trades on a protocol this tool does not know (a stale, shadow or foreign deployment)`, bindings };
   }
-  const gen = generations.find((g) => g.label === owner.label)!;
+  // Shared pool managers do not identify which reference adapter was selected.
+  // Prefer the adapter's own set only when its CORK binding agrees; arbitrary
+  // integrator adapters retain the existing primary-first binding classification.
+  const gen = generations.find((g) => g.forSelf?.adapter.toLowerCase() === adapter.toLowerCase() && g.phoenix?.poolManager.toLowerCase() === cork.value.toLowerCase())
+    ?? generations.find((g) => g.label === owner.label)!;
   if (lopProbe.kind === "answered" && lop !== undefined && lopProbe.value.toLowerCase() !== lop.toLowerCase()) {
     return { kind: "mismatch", adapter, reason: `LOP() names ${lopProbe.value}, not the chain's 1inch LOP v4 ${lop} — a fill through this adapter would settle on a different order protocol`, bindings };
   }

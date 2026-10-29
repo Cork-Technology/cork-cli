@@ -3,7 +3,7 @@
 // dist-only layout with declarations and no raw TypeScript leakage. Run after build-packages.mjs.
 import { access, glob, readFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const names = ["schemas", "core", "mcp"];
@@ -60,5 +60,17 @@ assert(String(mcp.bin?.["cork-mcp"]).startsWith("./dist/"), "mcp: cork-mcp bin m
 await access(resolve(root, "packages/mcp", mcp.bin["cork-mcp"]));
 await access(resolve(root, "packages/core/dist/cork-defaults.json"));
 await access(resolve(root, "packages/core/dist/cork-defaults.v2.json")); // the schema-2 document this line's JSON imports resolve to
+
+// Source aliases keep PACKAGE_VERSION undefined, so ordinary source tests cannot catch an
+// installed SDK reporting "dev" and reading frozen main instead of its release-line config.
+// Import the actual emitted config entry, not the monorepo's @cork/core source alias.
+const coreRoot = resolve(root, "packages/core");
+const core = JSON.parse(await readFile(resolve(coreRoot, "package.json"), "utf8"));
+const config = await import(pathToFileURL(resolve(coreRoot, core.exports["./config"].import)).href);
+const expectedVersion = process.env.CH_BUILD_VERSION ?? core.version;
+assert(config.BUILD_VERSION === expectedVersion, `core: emitted SDK reports ${config.BUILD_VERSION}, expected component ${expectedVersion}`);
+const line = /^v?(\d+\.\d+)\.\d+/u.exec(expectedVersion)?.[1];
+const expectedRef = line === undefined ? "main" : `config/${line}`;
+assert(config.CORK_DEFAULTS_URL === `${config.CORK_DEFAULTS_REPO}/${expectedRef}/cork-defaults.v2.json`, `core: emitted SDK selects the wrong default config resource: ${config.CORK_DEFAULTS_URL}`);
 
 process.stdout.write("Verified compiled package layouts (dist-only, declarations present, no raw .ts).\n");

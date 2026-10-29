@@ -14,6 +14,7 @@ const profiles = [
   { name: "non-hex revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010cg" }) },
   { name: "uppercase revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010C8" }) },
   { name: "unreviewed revision", response: () => Response.json({ ...nativeApiMetadataFixture, commit: "72010c9" }) },
+  { name: "unreviewed neighbour of the 0.6.0 source", response: () => Response.json({ ...nativeApiMetadataFixture, version: "0.6.0", commit: "c0bbf06" }) },
   { name: "paused component", response: () => Response.json({ ...nativeApiMetadataFixture, status: "paused" }) },
   { name: "different component", response: () => Response.json({ ...nativeApiMetadataFixture, component: "another-api" }) },
   { name: "malformed metadata", response: () => Response.json({ ...nativeApiMetadataFixture, commit: 110 }) },
@@ -29,6 +30,19 @@ for (const surface of ["CLI", "MCP"] as const) describe(surface + " native histo
     await withSurface(surface, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async url =>
       new URL(url).pathname === "/meta/v1"
         ? Response.json({ ...nativeApiMetadataFixture, version: "0.5.0", commit })
+        : Response.json({ items: [row], hasMore: false }),
+    }, async call => {
+      const result = await call("cork_query", { resource: "orderbook", chainId: 8453, filters: { orderHash: row.orderHash } });
+      expect(result.failed).toBe(false);
+      expect(result.envelope).toMatchObject({ state: "ok", data: { items: [row] } });
+    });
+  });
+
+  it.each(["c0bbf05", "c0bbf0552de9687612ce58a73b0d5cc819ad7059"])("admits the reviewed cork-api 0.6.0 source %s before reading exact history", async commit => {
+    const row = await signedRow(capture.unknown, "reviewed-0.6.0");
+    await withSurface(surface, { nowSeconds: NOW, resolveRpc: async () => null, venueFetch: async url =>
+      new URL(url).pathname === "/meta/v1"
+        ? Response.json({ ...nativeApiMetadataFixture, version: "0.6.0", commit })
         : Response.json({ items: [row], hasMore: false }),
     }, async call => {
       const result = await call("cork_query", { resource: "orderbook", chainId: 8453, filters: { orderHash: row.orderHash } });

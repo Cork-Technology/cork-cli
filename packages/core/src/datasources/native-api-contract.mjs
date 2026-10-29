@@ -5,6 +5,7 @@ export const supportedApiRevisions = Object.freeze([
   "72010c88a2d591796d90a99b32f33abbf77dd3be",
   "6c459d5dd403a73455f4172f533040fd7a0957ee",
   "b5c3405d15867f2bbbf383bb7729651c88ef18b6",
+  "c0bbf0552de9687612ce58a73b0d5cc819ad7059",
 ]);
 export const apiComponent = "cork-api";
 

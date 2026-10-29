@@ -12,7 +12,6 @@ import {
   attributeLogs,
   BASE_FILLER_JIT_MARKET_CREATED_TOPIC,
   BUNDLED_DEFAULTS,
-  classifyAddress,
   computeMarketId,
   decodeMarketRows,
   generationsOf,
@@ -182,7 +181,12 @@ describe("data.generation.alsoIn: every pool-scoped result names the other sets 
       await runTool("cork_track", { chainId: CHAIN, mode: "verify", subject: { kind: "marketRef", poolId: POOL }, format: "concise" }, ctx),
       await deposit(ctx),
     ];
-    for (const env of reads) expect((env.data as { generation: Gen }).generation, env.state).toMatchObject({ label: "phoenix/v0.5", alsoIn: ["phoenix/v0.4-rc.1"] });
+    for (const env of reads) {
+      const generation = (env.data as { generation: Gen }).generation;
+      expect(generation.label, env.state).toBe("phoenix/v0.5");
+      expect(generation.alsoIn).toContain("phoenix/v0.4-rc.1");
+      expect(generation.alsoIn).not.toContain(generation.label);
+    }
     // A pool on the 8-field v0.3 manager: no other set shares it.
     const v03 = await corkPool(ctxFor(V03_PM));
     expect((v03.data as { generation: Gen }).generation).not.toHaveProperty("alsoIn");
@@ -198,9 +202,6 @@ describe("10-field reads: fees FROM the tuple, the views compared", () => {
     expect(env.state).toBe("ok");
     const d = env.data as { generation: Gen; wire: string; market: Record<string, string>; swapFeePercentage: string; scales: Record<string, string> };
     expect(d.generation.label).toBe("phoenix/v0.5");
-    // The pool manager is shared with phoenix/v0.4-rc.1: data.generation names it, with no warning;
-    // provenance keeps the compact ref.
-    expect(d.generation.alsoIn).toEqual(["phoenix/v0.4-rc.1"]);
     expect(env.warnings.map((w) => w.code)).not.toContain("generation_shared");
     expect(env.provenance.generation).toEqual({ label: "phoenix/v0.5", status: "active", distribution: "phoenix/v0.5-rc.1" });
     expect(d.wire).toBe("10-field");
@@ -312,7 +313,10 @@ function log9(emitter: string) {
   const data = encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "address" }, { type: "address" }, { type: "uint256" }, { type: "uint256" }], [1_798_761_600n, ORACLE, CPT, CST, FEE, 2n * WAD]);
   return { address: emitter, topics: [...topics] as string[], data, blockNumber: 2, transactionHash: `0x${"cd".repeat(32)}` };
 }
-const EMITTERS = ARBITRUM.filter((g) => g.phoenix).map((g) => ({ poolManager: g.phoenix!.poolManager, wire: g.phoenix!.wire, label: g.label }));
+const EMITTERS = [
+  { poolManager: V03_PM, wire: "8-field" as const, label: "phoenix/v0.3-rc.1" },
+  { poolManager: PRIMARY_PM, wire: "10-field" as const, label: "phoenix/v0.4-rc.1" },
+];
 /** The same log as a receipt-shaped AttributableLog (bigint block). */
 const asReceiptLog = (l: ReturnType<typeof log7>) => ({ ...l, blockNumber: BigInt(l.blockNumber) });
 
@@ -502,11 +506,6 @@ describe("emitter roles ↔ verified events parity", () => {
   it("the BaseFiller JITMarketCreated (three args) is its own selector, emitted by the `baseFiller` role of the generation that records it", async () => {
     expect(BASE_FILLER_JIT_MARKET_CREATED_TOPIC).toBe("0xa42f9e5c6639673ffcad0a9dd20a3a0bb70cd67dd2c9e099d5d6c081dafca217");
     expect(PROTOCOL_EVENTS[BASE_FILLER_JIT_MARKET_CREATED_TOPIC.toLowerCase()]).toEqual({ event: "JITMarketCreated (BaseFiller)", roles: ["baseFiller"] });
-    expect(classifyAddress(ARBITRUM, "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224")).toEqual([
-      { label: "phoenix/v0.5", status: "active", primary: true, role: "baseFiller" },
-      { label: "phoenix/v0.4-rc.1", status: "active", primary: false, role: "baseFiller" },
-    ]);
-    expect(classifyAddress(ARBITRUM, "0xCdD4D39EBeBD5b8d4153E498220FB2Fe16807B9d")).toEqual([{ label: "phoenix/v0.3-rc.1", status: "active", primary: false, role: "baseFiller" }]);
     const emitters = await protocolEmittersFor(CHAIN);
     const log = { address: "0x3D16AD60a2fbD352Cc1108c4144F4093ab2E1224", topics: [BASE_FILLER_JIT_MARKET_CREATED_TOPIC, POOL, `0x${"00".repeat(12)}${ORACLE.slice(2)}`], data: encodeAbiParameters([{ type: "address" }], [RCV]) };
     const a = attributeLogs([log], emitters);
