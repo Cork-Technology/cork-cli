@@ -11,7 +11,7 @@
 //      that needs a deployed clone. This is the exact probe the venue used to verify
 //      its rc.2 encoder; a wire regression fails DECODE (a different error) before that state
 //      check is ever reached.
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import { encodeFunctionData, keccak256, stringToBytes } from "viem";
 import {
   buildRolloverIntent,
@@ -19,9 +19,9 @@ import {
   encodeOrderData,
   ORDER_DATA_TYPEHASH,
   resolveRollover,
-  resolveRpc,
-  runTool,
+  type ResolvedRpc,
 } from "@cork/core";
+import { configuredIt as it, resolveConfiguredRpc, runConfiguredTool as runTool } from "./live-rpc.ts";
 import { rolloverFactoryAbi } from "../src/rollover-fill.ts";
 import { cloneAdmission } from "../src/handlers/rollover-clone-admission.ts";
 import { deriveDstFloor, readRolloverTrust } from "../src/handlers/rollover-fill-safety.ts";
@@ -67,7 +67,7 @@ describe.skipIf(!LIVE)("rollover rc.2 deployment — live (both chains)", () => 
     it(`chain ${chainId}: domains match, factory approves both settlers, resolveFor accepts our encoding`, async () => {
       const { rollover } = await resolveRollover(chainId);
       expect(rollover).toBeDefined();
-      const r = await resolveRpc(chainId, undefined);
+      const r = await resolveConfiguredRpc(chainId);
       expect(r).not.toBeNull();
       const client = r!.client;
 
@@ -163,7 +163,7 @@ const KNOWN_CLONE = "0x149b46a125284611963c37e238679dd993d8ef41" as const;
 const ownerAbi = [{ type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }] as const;
 
 /** The 4-byte selector of the settler's revert from resolveFor, or a diagnostic string. */
-type LiveClient = NonNullable<Awaited<ReturnType<typeof resolveRpc>>>["client"];
+type LiveClient = ResolvedRpc["client"];
 async function resolveForRevert(client: LiveClient, chainId: 42161 | 8453, settler: `0x${string}`, user: `0x${string}`, rolloverContract: `0x${string}`): Promise<string> {
   const now = BigInt(Math.floor(Date.now() / 1000));
   const built = buildRolloverIntent({
@@ -199,7 +199,7 @@ describe.skipIf(!LIVE)("the settler's clone admission, mirrored — live (both c
   for (const chainId of [42161, 8453] as const) {
     it(`chain ${chainId}: each clone fault reverts the error cloneAdmission names, in the settler's order`, async () => {
       const { rollover } = await resolveRollover(chainId);
-      const client = (await resolveRpc(chainId, undefined))!.client;
+      const client = (await resolveConfiguredRpc(chainId)).client;
       const factory = rollover!.factory as `0x${string}`;
       const settler = rollover!.exactSettler as `0x${string}`;
       const STRANGER_USER = "0xC0FFEe0000000000000000000000000000000001" as const; // owns no clone
@@ -245,7 +245,7 @@ describe.skipIf(!LIVE)("rollover-fill safety reads — live (both chains)", () =
   for (const chainId of [42161, 8453] as const) {
     it(`chain ${chainId}: the clone's trust reads decode, and a standard module is vetted for its own phase only`, async () => {
       const { rollover } = await resolveRollover(chainId);
-      const client = (await resolveRpc(chainId, undefined))!.client;
+      const client = (await resolveConfiguredRpc(chainId)).client;
       const modules = rollover!.modules!;
       const pull = modules.ownerTokenPull!;
       const post = modules.postRolloverDstCptTransfer!;
@@ -263,7 +263,7 @@ describe.skipIf(!LIVE)("rollover-fill safety reads — live (both chains)", () =
     }, 90_000);
 
     it(`chain ${chainId}: every pool manager with a live pool previews 1:1, so the derived floor is exactly 1e18`, async () => {
-      const client = (await resolveRpc(chainId, undefined))!.client;
+      const client = (await resolveConfiguredRpc(chainId)).client;
       const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});
       expect(env.state).toBe("ok");
       // Arbitrum's primary pools are short-lived and staggered: at times none outlives a day.
@@ -297,7 +297,7 @@ describe.skipIf(!LIVE)("rollover range reads — live (both chains)", () => {
     it(`chain ${chainId}: every configured settler's pool manager is its generation's; the PartialSettler's accounting decodes`, async () => {
       const { rollover } = await resolveRollover(chainId);
       const { generations } = await resolveGenerations(chainId);
-      const client = (await resolveRpc(chainId, undefined))!.client;
+      const client = (await resolveConfiguredRpc(chainId)).client;
       const live = (rollover!.generations ?? []).filter((g) => g.retired === undefined);
       expect(live.length).toBeGreaterThan(0);
       for (const g of live) {
@@ -316,7 +316,7 @@ describe.skipIf(!LIVE)("rollover range reads — live (both chains)", () => {
 
     it(`chain ${chainId}: readRollPools reads a live pool from the settler's own pool manager`, async () => {
       const { rollover } = await resolveRollover(chainId);
-      const client = (await resolveRpc(chainId, undefined))!.client;
+      const client = (await resolveConfiguredRpc(chainId)).client;
       const settler = rollover!.exactSettler as `0x${string}`;
       const pm = (await client.readContract({ address: settler, abi: settlerPoolManagerAbi, functionName: "CORK_POOL_MANAGER" })).toLowerCase();
       const env = await runTool("cork_query", { chainId, resource: "cork-pools", pageSize: 200, maxPages: 5 }, {});

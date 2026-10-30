@@ -633,7 +633,7 @@ bun run verify:publish     # build + package-layout gate + publint --strict + at
 # Empirical fork-parity vs the live vnet fixture (never commit this RPC URL):
 CORK_TEST_RPC="https://virtual.mainnet…/REDACTED-VNET" bun run test:live
 
-# Live RPC-resolver smoke (default + chainlist fallback, real network):
+# Live smoke (requires the three private test endpoints described below, plus public discovery):
 CORK_RPC_LIVE=1 CORK_RPC_CACHE_FILE=/tmp/rpc-state.json bun run test:live
 
 # Agent evals (programmatically graded tool-surface quality; needs an API key OR ambient
@@ -659,6 +659,25 @@ The tools read `CORK_TEST_RPC` (vnet fixture) and `CORK_RPC_URL` (endpoint overr
 environment. Never commit them. Without `CORK_TEST_RPC`, the fork-parity/bundle-sim suites
 self-skip. Chain-backed tools still run at request time through the built-in default RPCs and
 the chainlist fallback.
+
+The opted-in `CORK_RPC_LIVE=1` RPC/registry/rollover tests also require
+`CORK_TEST_RPC_URL_1` (Ethereum mainnet), `CORK_TEST_RPC_URL_42161` (Arbitrum One), and
+`CORK_TEST_RPC_URL_8453` (Base). Supply nonblank private endpoint values through a local
+environment or repository **Actions secrets** with those exact names; `.github/workflows/ci.yml`
+maps them only into the affected live-smoke step. Do not commit or print endpoint values.
+These test-only names survive test isolation, which deliberately clears runtime
+`CORK_RPC_URL*`. Missing/blank values fail configured checks rather than skipping or falling
+back to a public provider. Configured checks verify chain identity; registry/rollover parity
+uses the matching endpoint for both the handler and its independent raw-read reference.
+The test-body diagnostic boundary hides private provider/endpoint details without changing
+the clients, errors or assertions seen by core readers.
+
+Configured endpoint success is **not** automatic public discovery acceptance. The original
+automatic Ethereum/Base, Sepolia discovery, unsupported-chain and cache-persistence checks
+remain separate and unchanged in behavior, as do offline failover tests. The observed
+automatic Ethereum discovery test's 30-second timeout is unresolved by this configuration
+change; adding secrets does not establish that the complete CI run will pass.
+
 
 ## Status
 

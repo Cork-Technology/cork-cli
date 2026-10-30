@@ -1,13 +1,14 @@
 // Live smoke for the RPC resolver against the real network. Self-skips unless CORK_RPC_LIVE=1.
 // CI's opted-in live job proves automatic public resolution serves the requested chain.
 // Public defaults can fail over to chainlist; provider tier is not the consumer contract.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it as automaticIt } from "vitest";
 import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeAbiParameters, keccak256, parseAbi, stringToBytes, zeroAddress } from "viem";
-import { generationsOf, resolveRpc, runTool } from "@cork/core";
+import { generationsOf, resolveRpc } from "@cork/core";
 import { DEMO_ACCOUNT } from "@cork/schemas";
+import { configuredIt as it, resolveConfiguredRpc, runConfiguredTool as runTool } from "./live-rpc.ts";
 
 const LIVE = process.env.CORK_RPC_LIVE === "1";
 
@@ -21,30 +22,30 @@ const LIVE = process.env.CORK_RPC_LIVE === "1";
 const FLAT_GEN = "phoenix/v0.3-rc.1";
 
 describe.skipIf(!LIVE)("resolveRpc — live", () => {
-  it("chain 1 resolves a public endpoint answering eth_chainId=1", async () => {
+  automaticIt("chain 1 resolves a public endpoint answering eth_chainId=1", async () => {
     const r = await resolveRpc(1, undefined);
     expect(r).not.toBeNull();
     expect(await r!.client.getChainId()).toBe(1);
   }, 30_000);
 
-  it("chain 8453 resolves a public endpoint answering eth_chainId=8453", async () => {
+  automaticIt("chain 8453 resolves a public endpoint answering eth_chainId=8453", async () => {
     const r = await resolveRpc(8453, undefined);
     expect(r).not.toBeNull();
     expect(await r!.client.getChainId()).toBe(8453);
   }, 30_000);
 
-  it("chain 11155111 (no default) falls back to a chainlist public RPC answering eth_chainId=11155111", async () => {
+  automaticIt("chain 11155111 (no default) falls back to a chainlist public RPC answering eth_chainId=11155111", async () => {
     const r = await resolveRpc(11155111, undefined);
     expect(r).not.toBeNull();
     expect(r!.source).toBe("chainlist");
     expect(await r!.client.getChainId()).toBe(11155111);
   }, 60_000);
 
-  it("chain 49222 (staging vnet, not on chainlist) resolves to null without an explicit RPC", async () => {
+  automaticIt("chain 49222 (staging vnet, not on chainlist) resolves to null without an explicit RPC", async () => {
     expect(await resolveRpc(49222, undefined)).toBeNull();
   }, 15_000);
 
-  it("persists an on-disk cache", async () => {
+  automaticIt("persists an on-disk cache", async () => {
     // Self-contained: point the resolver at a fresh temp cache file (the test previously assumed
     // the runner exported CORK_RPC_CACHE_FILE, so existsSync(undefined) always read false).
     const cacheFile = join(tmpdir(), `cork-rpc-cache-${process.pid}-${Date.now()}.json`);
@@ -62,7 +63,17 @@ describe.skipIf(!LIVE)("resolveRpc — live", () => {
   }, 30_000);
 });
 
-// End-to-end 2.1.0 parity: our chain-native registry reads (built-in Arbitrum RPC) vs an
+describe.skipIf(!LIVE)("configured RPC — live (not automatic public discovery)", () => {
+  for (const chainId of [1, 42161, 8453] as const) {
+    it(`chain ${chainId}: configured endpoint answers the requested eth_chainId`, async () => {
+      const r = await resolveConfiguredRpc(chainId);
+      expect(r.source).toBe("explicit");
+      expect(await r.client.getChainId()).toBe(chainId);
+    }, 30_000);
+  }
+});
+
+// End-to-end 2.1.0 parity: our chain-native registry reads (configured Arbitrum RPC) vs an
 // INDEPENDENT in-test raw-read reference over the same chain. The reference declares its own
 // minimal ABI fragments HERE — nothing imported from the production reader — so a transform,
 // pagination, enum-ordering, or field-mapping bug in the reader cannot hide inside a shared
@@ -104,7 +115,7 @@ describe.skipIf(!LIVE)("2.1.0 registry — live parity vs an independent raw-rea
     const { resolveMarketRegistry } = await import("@cork/core");
     const { marketRegistry: mr } = await resolveMarketRegistry(42161, undefined, FLAT_GEN);
     expect(mr?.registry).toBeDefined();
-    const r = await resolveRpc(42161, undefined);
+    const r = await resolveConfiguredRpc(42161);
     expect(r).not.toBeNull();
     return { registry: mr!.registry as `0x${string}`, contractsVersion: mr!.contractsVersion, client: r!.client };
   };
@@ -404,7 +415,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
     expect(mr?.controller).toBeDefined();
     const cfg = await resolveConfig();
     const pm = generationsOf(cfg.defaults, 8453).find((g) => g.marketRegistry?.registry === mr!.registry)?.phoenix?.poolManager as `0x${string}`;
-    const r = await resolveRpc(8453, undefined);
+    const r = await resolveConfiguredRpc(8453);
     expect(r).not.toBeNull();
     const creator = mr!.marketCreator as `0x${string}`;
     const [boundPm, boundController, boundRegistry, version] = await Promise.all([
@@ -432,7 +443,7 @@ describe.skipIf(!LIVE)("CorkMarketCreator — live parity (Base)", () => {
     expect(env.state).toBe("ok");
     const d = env.data as { to: `0x${string}`; calldata: `0x${string}`; pool: { poolId: string; exists: boolean }; shares: { corkSwapToken: string | null; corkPrincipalToken: string | null } | undefined };
     expect(d.pool?.poolId).toBeDefined();
-    const r = await resolveRpc(8453, undefined);
+    const r = await resolveConfiguredRpc(8453);
     const res = await r!.client.call({ to: d.to, data: d.calldata });
     expect(res.data).toBeDefined();
     const poolId = res.data!.slice(0, 66);
@@ -486,7 +497,7 @@ describe.skipIf(!LIVE)("0.5.0 registry (nested wire, the primary) — live parit
     expect(generation?.wire).toBe("nested"); // no generation passed = the PRIMARY, and the primary speaks the nested wire
     // phoenix/v0.5 since 2026-10-09; it shares the 0.5.0 registry with phoenix/v0.4-rc.1.
     expect(generation?.label).toBe("phoenix/v0.5");
-    const r = await resolveRpc(42161, undefined);
+    const r = await resolveConfiguredRpc(42161);
     expect(r).not.toBeNull();
     return { registry: mr!.registry as `0x${string}`, client: r!.client };
   };
@@ -679,7 +690,7 @@ describe.skipIf(!LIVE)("cover readings — live parity vs raw reads (Base, the p
     const { marketRegistry: mr, generation } = await resolveMarketRegistry(8453);
     // phoenix/v0.5 since 2026-10-09; it shares the 0.5.0 registry with phoenix/v0.4-rc.1.
     expect(generation?.label).toBe("phoenix/v0.5");
-    const r = await resolveRpc(8453, undefined);
+    const r = await resolveConfiguredRpc(8453);
     expect(r).not.toBeNull();
     return { registry: mr!.registry as `0x${string}`, recipes: mr!.recipes as Record<string, `0x${string}`>, client: r!.client };
   };

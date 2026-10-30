@@ -85,6 +85,9 @@ jobs:
       - name: RPC resolver + registry parity + venue negotiation contract against the real network
         env:
           CORK_RPC_LIVE: "1"
+          CORK_TEST_RPC_URL_1: ${{ secrets.CORK_TEST_RPC_URL_1 }}
+          CORK_TEST_RPC_URL_42161: ${{ secrets.CORK_TEST_RPC_URL_42161 }}
+          CORK_TEST_RPC_URL_8453: ${{ secrets.CORK_TEST_RPC_URL_8453 }}
         # venue-spec-live is the OpenAPI tripwire: the venue changed its contract under one version
         # label once already (0.4.1 gained an rfqs `underwriter` parameter, 2026-09-04) while this job
         # stayed green because the tripwire was not in it. It self-skips without CORK_RPC_LIVE.

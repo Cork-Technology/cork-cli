@@ -17,6 +17,7 @@ Human-readable text and log formats are not covered.
 ### Added
 
 - Private per-chain RPC environment settings (`CORK_RPC_URL_<decimal chainId>`) let one CLI/MCP process serve multiple chains. Selection is explicit `--rpc-url`/`ctx.rpcUrl`, then nonblank chain env, then legacy `CORK_RPC_URL`, then automatic public resolution. Env values are trimmed; blank values are absent. Existing explicit chain-ID verification, no automatic fallback for configured endpoints, and per-(chain, endpoint) verification caching remain intact.
+- CI live RPC identity and registry/rollover parity checks can use private, chain-specific Actions secrets (`CORK_TEST_RPC_URL_1`, `CORK_TEST_RPC_URL_42161`, `CORK_TEST_RPC_URL_8453`). Missing/blank values fail closed; private diagnostics are redacted only after the test body, preserving actual viem error classification inside core readers. Existing automatic discovery/cache and offline failover coverage remains; this does not fix or waive the observed automatic Ethereum discovery timeout.
 
 ### Changed
 
