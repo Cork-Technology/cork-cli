@@ -6,7 +6,7 @@
 //     from the binary's line config branch, config/<major>.<minor> (config-remote.ts). Partners read it; it never carries a
 //     non-canonical deployment set (a public file is a partner-facing projection).
 //   - `config.json` is the OPERATOR's local document, never fetched from GitHub. Operator-only
-//     sets (staging, dark-launch, a vnet), an operator RPC book, or an emergency address fix live
+//     sets (staging, dark-launch, a vnet) or an emergency address fix live
 //     here — the escape hatch tag pinning removed. The public tree ships no `config.json`.
 //
 // Merge rule (`mergeConfig`): the override wins, at the granularity of a WHOLE SET. A set in

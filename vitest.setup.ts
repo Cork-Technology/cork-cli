@@ -22,6 +22,12 @@ import { beforeAll, expect } from "vitest";
 // own env object and never read this one.
 process.env["DO_NOT_TRACK"] = "1";
 
+// SDK handlers now inherit RPC env too. Never let an operator's shell endpoint activate
+// chain reads in an unrelated test file; env-specific cases opt in and restore their values.
+for (const key of Object.keys(process.env)) {
+  if (key === "CORK_RPC_URL" || key.startsWith("CORK_RPC_URL_")) delete process.env[key];
+}
+
 beforeAll(() => {
   const file = expect.getState().testPath ?? "unknown";
   const tag = createHash("sha256").update(file).digest("hex").slice(0, 12);

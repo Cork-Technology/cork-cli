@@ -269,15 +269,15 @@ claude mcp add --transport http cork-defi http://localhost:8080/mcp
 claude mcp add --transport http cork-defi https://your-deployment/mcp --header "Authorization: Bearer <token>"
 ```
 
-The server reads all env at process start, and clients cannot override any of it per call. This
-is deliberate: server reads use the server's own RPC configuration, and signing and broadcasting
-always stay client-side (see `cork_capabilities topic:"signing"`).
+Clients cannot override server RPC environment configuration per call. RPC env is read when
+resolving the requested chain; recreate a container to change its environment. Server reads use
+the server's own endpoints; signing and broadcasting stay client-side (see `cork_capabilities topic:"signing"`).
 
 | Env | Effect |
 |---|---|
 | `CORK_MCP_TOKEN` | When set, `/mcp` requires `Authorization: Bearer <token>`. Unset, `/mcp` is open: put auth and rate limits at your ingress. Never logged. Also unlocks the full `/readyz` view. |
 | `CORK_MCP_DIAGNOSTICS_TOKEN` | A read-only bearer that unlocks the full `/readyz` view (RPC hosts, breakers, venue outcome, in-flight counts, bounds, trust posture) without gating `/mcp`. Without a bearer, `/readyz` answers the summary: one `degraded` flag per subsystem. Never logged. |
-| `CORK_RPC_URL` | Explicit RPC endpoint override for chain reads (else built-in defaults + chainlist fallback). |
+| `CORK_RPC_URL_<chainId>` / `CORK_RPC_URL` | RC4: nonblank chain-specific env wins over legacy global env; explicit CLI/context overrides both. Otherwise unkeyed public defaults + chainlist fallback. Configured endpoints verify chain ID and never automatically fall back. |
 | `ENVIO_API_TOKEN` / `ENVIO_HYPERSYNC_TOKEN` / `ENVIO_HYPERRPC_TOKEN` | HyperSync/HyperRPC access for the event-derived reads (`full-decentralized` mode, whitelisted-addresses, order-history legs). Release binaries, the apk, and the container image embed the HyperSync native binding for their target. Envio deprecated its Windows bindings at client 1.1.0 and never built linux-arm64-musl; those builds say so. `ch version` shows which binding a binary carries. |
 | `CORK_VENUE_URL` | Overrides the venue API base (default api-phoenix.cork.tech). Together with a `CORK_CONFIG_FILE` that names a staging set, it is the whole staging switch. See "Point one install at staging" in docs/cli.md. |
 | `CORK_CONFIG_FILE` / `CORK_CONFIG_NO_OVERRIDE` | A local `config.json` that adds or replaces whole deployment sets, moves a chain's primary, or restricts the visible sets (`only`). `=1` on the second turns the layer off. Each result that the override shaped warns `config_override_active`. |
@@ -468,28 +468,43 @@ The monorepo behind the binary:
 
 ## How RPC endpoints are resolved
 
-Chain-backed reads pick an endpoint in this order. The tools "just work" on public chains, and
-you can still override them:
+Chain-backed reads select an endpoint in this order:
 
-1. **Explicit** — `CORK_RPC_URL` (env) or `--rpc-url` (CLI). The tool first proves, with one
-   `eth_chainId` call, that the endpoint serves the requested chain, and refuses it otherwise. It
-   never falls back.
-2. **Built-in default** — a committed endpoint for the chain (Ethereum mainnet, Arbitrum,
-   Base). The tool tries it with retries and exponential backoff. A per-endpoint **circuit
-   breaker** stops calls to an endpoint that is down.
-3. **chainlist.org fallback** — for public chains (mainnet, Arbitrum, Base, Sepolia), the tool
-   fetches candidate public RPCs just-in-time. It latency-probes them in parallel, **verifies
-   that each reports the right chainId**, and uses the fastest healthy one. The private staging
-   vnet (49222) is not on chainlist, so it needs an explicit RPC.
+1. **Explicit caller** — `--rpc-url` (CLI) or `ctx.rpcUrl` (SDK).
+2. **Private per-chain env** — `CORK_RPC_URL_<decimal chainId>`, e.g. `CORK_RPC_URL_8453`
+   or `CORK_RPC_URL_42161` for one hosted process serving both Base and Arbitrum.
+3. **Legacy global env** — `CORK_RPC_URL`, when the requested chain has no nonblank suffix.
+4. **Automatic public selection** — a current cached choice, then an unkeyed public default
+   from pinned viem (mainnet, Arbitrum, Base), then existing chainlist fallback for eligible
+   public chains (also Sepolia). The private vnet 49222 still requires explicit configuration.
+
+Every configured endpoint first proves the requested chain with `eth_chainId`. Wrong-chain
+or unverifiable endpoints refuse; they **never** fall back to a different provider. A global
+endpoint cannot serve another chain merely because its suffix is absent. Automatic public
+endpoints retain retries, the circuit breaker and bounded chainlist probes; public availability
+and method support are not guaranteed.
+
+Per-chain env is new in RC4. Env values are trimmed; blank values are absent. Explicit CLI/context
+values retain their existing semantics. SDK `runTool` now also inherits RPC env (RC3 core did
+not). Resolution reads env per chain; verification caches remain per (chain, endpoint).
+
+Private runtime env example — placeholders only, never commit real values or bake them into images:
+
+```text
+CORK_RPC_URL_1=<PRIVATE_ENDPOINT_FOR_CHAIN_1>
+CORK_RPC_URL_42161=<PRIVATE_ENDPOINT_FOR_CHAIN_42161>
+CORK_RPC_URL_8453=<PRIVATE_ENDPOINT_FOR_CHAIN_8453>
+```
 
 The tool caches the chosen endpoint and the breaker state in-process and on disk
 (`~/.cache/cork-helper-cli/`, override with `CORK_RPC_CACHE_FILE`), so repeated calls skip
 re-probing. When a read falls back to a community RPC, the result envelope carries an
 `rpc_fallback` warning that names the host.
 
-> Note: the built-in default endpoints embed access tokens, and we commit them intentionally.
-> This is a deliberate exception to the "never commit an RPC URL" rule. The rule still applies
-> to `CORK_RPC_URL` / `CORK_TEST_RPC`: those stay environment-only.
+RC4 discards cached default choices that no longer match the current default map, so a warm
+cache cannot retain a removed paid default. Configured private endpoints are not persisted by
+the automatic resolver. Removing source literals does not revoke credentials in old immutable
+releases or local backups: provider-owner rotation/revocation remains independent.
 
 ### When your network blocks the default endpoints
 

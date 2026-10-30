@@ -24,8 +24,26 @@ ch <command> --explain                                                  # print 
   plain digit strings.
 - **Idempotency.** Every prepare and submit takes `--client-request-id`. Reuse the id when you retry
   the same request. Use a new id for a new intent.
-- **RPC.** Chain-backed commands pick a public endpoint themselves. `--rpc-url` overrides it. An
-  explicit endpoint must answer for the requested chain, or the command refuses.
+- **RPC.** `--rpc-url` remains the highest-priority override. Otherwise reads select nonblank
+  `CORK_RPC_URL_<chainId>`, then legacy `CORK_RPC_URL`, then unkeyed public defaults and
+  chainlist fallback. A configured endpoint must prove the requested chain ID; failure refuses
+  without automatic fallback. Env values are trimmed; blank values are absent. A different
+  chain's suffix is never reused. RPC env is read when resolving a chain; recreate containers
+  to change their environment.
+
+For one multichain MCP process, keep these in the operator's **private** environment, never
+in a committed project MCP config or public address document (RC4 names, not RC3 support):
+
+```text
+CORK_RPC_URL_1=<PRIVATE_ENDPOINT_FOR_CHAIN_1>
+CORK_RPC_URL_42161=<PRIVATE_ENDPOINT_FOR_CHAIN_42161>
+CORK_RPC_URL_8453=<PRIVATE_ENDPOINT_FOR_CHAIN_8453>
+```
+
+Pass the private env at container runtime, not as image build arguments. Public defaults can
+throttle or lack required methods; configure your own endpoints for hosted operation.
+Removing embedded paid defaults does not revoke credentials in old artifacts; provider-owner
+rotation/revocation is separate. No signing, broadcasting or deployment is implied.
 - **Output.** Prose by default. `--json` (bare) or `CORK_JSON=1` prints the result envelope.
 
 Every result is one envelope: `{ state, data, warnings[], provenance }`. Read `state` first. `ok`

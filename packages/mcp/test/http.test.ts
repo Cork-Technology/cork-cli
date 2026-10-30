@@ -9,7 +9,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DOC_TOPICS } from "@cork/schemas";
-import { DEFAULT_RPCS } from "@cork/core";
 import { createCorkServer, createHttpHandler, MCP_HTTP_LIMITS, MCP_SECURITY_HEADERS, readyzBody, withSecurityHeaders } from "@cork/mcp";
 
 const NOW = 1_800_000_000n;
@@ -153,12 +152,12 @@ describe("Streamable HTTP MCP endpoint (stateless)", () => {
 
 describe("/readyz diagnostics", () => {
   it("serves a 200 degradation snapshot without auth, and NEVER leaks a full RPC URL — hosts only", async () => {
-    // Seed the resolver's disk state with entries for the tokened default URL, then prove the
-    // snapshot redacts to hosts. The cache path is env-switchable per process (documented), so
-    // this drives the REAL realDeps() load path, not a stub.
+    // Seed real persisted state with a synthetic credential-bearing endpoint. Privacy must
+    // hold regardless of today's public defaults; no real provider credential belongs here.
+    // The cache path is env-switchable, so this drives the real load path rather than a stub.
     const dir = mkdtempSync(join(tmpdir(), "cork-readyz-"));
     const file = join(dir, "rpc-state.json");
-    const tokened = DEFAULT_RPCS[1]!;
+    const tokened = "https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@fixture.invalid/SYNTHETIC_PATH?key=SYNTHETIC_QUERY";
     writeFileSync(file, JSON.stringify({ version: 1, breaker: { [tokened]: { failures: 3, openedAt: Date.now() } }, chosen: { 1: { url: tokened, source: "default", ts: Date.now() } }, candidates: {} }));
     const prev = process.env.CORK_RPC_CACHE_FILE;
     process.env.CORK_RPC_CACHE_FILE = file;
@@ -184,9 +183,8 @@ describe("/readyz diagnostics", () => {
       expect(body.subsystems.venue.host).toBe("api-phoenix.cork.tech");
       // CORK_CONFIG_NO_FETCH=1 (vitest config) → deliberate offline mode, bundled + not degraded.
       expect(body.subsystems.config).toMatchObject({ source: "bundled", degraded: false });
-      // The redaction guarantee: the access token embedded in the default URL's PATH must not
-      // appear anywhere in the payload.
-      const tokenSegment = tokened.split("/").pop()!;
+      // Neither path/query credentials nor userinfo may reach the full or summary view.
+      const tokenSegment = "SYNTHETIC_";
       expect(JSON.stringify(body)).not.toContain(tokenSegment);
       // The PUBLIC view, same process, same seeded state: the degraded flags survive, the host
       // does not — not as a redaction of the full body, but because the summary never carried it.

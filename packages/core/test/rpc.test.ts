@@ -35,13 +35,6 @@ const CFG: RpcConfig = {
 
 const MAINNET_DEFAULT = DEFAULT_RPCS[1]!;
 
-describe("committed defaults — the executable form of the 'never commit an RPC URL' exception", () => {
-  it("exactly the three committed chains (1 + 42161 on 2026-07-17, 8453 on 2026-08-12), all Tenderly gateways", () => {
-    expect(Object.keys(DEFAULT_RPCS).map(Number).sort((a, b) => a - b)).toEqual([1, 8453, 42161]);
-    for (const url of Object.values(DEFAULT_RPCS)) expect(url).toMatch(/^https:\/\/[a-z]+\.gateway\.tenderly\.co\/\w+$/);
-  });
-});
-
 function harness(opts: {
   now?: number;
   probe: (url: string) => ProbeResult;
@@ -170,6 +163,21 @@ describe("resolveRpc precedence", () => {
     const r = await resolveRpc(1, undefined, CFG, h.deps);
     expect(r?.source).toBe("default");
     expect(h.calls.probe).toHaveLength(0); // served from cache, no probe
+  });
+
+  it("drops a retired default from a warm cache without disturbing another chain", async () => {
+    const retired = "https://retired.fixture.invalid/SYNTHETIC_OLD_SECRET";
+    const h = harness({ probe: okOn([MAINNET_DEFAULT]) });
+    h.state.chosen[1] = { url: retired, source: "default", ts: h.deps.now() };
+    h.state.breaker[retired] = { failures: 1, openedAt: null };
+    const arb = { url: DEFAULT_RPCS[42161]!, source: "default" as const, ts: h.deps.now() };
+    h.state.chosen[42161] = arb;
+    const result = await resolveRpc(1, undefined, CFG, h.deps);
+    expect(result?.url).toBe(MAINNET_DEFAULT);
+    expect(h.calls.probe).toEqual([MAINNET_DEFAULT]);
+    expect(h.state.breaker[retired]).toBeUndefined();
+    expect(h.state.chosen[42161]).toEqual(arb);
+    expect(JSON.stringify(rpcDiagnostics(CFG, h.deps))).not.toContain("SYNTHETIC_OLD_SECRET");
   });
 });
 
@@ -439,16 +447,16 @@ describe("disk cache (real deps): corrupt-read reset + atomic write", () => {
 });
 
 describe("rpcDiagnostics (the /readyz feed)", () => {
-  it("reports hosts only — never the full URL (the committed defaults embed tokens in their PATH)", () => {
+  it("reports hosts only even when persisted state contains credentials in path/query/userinfo", () => {
     const h = harness({ probe: () => ({ ok: false, latencyMs: 1 }) });
-    h.state.chosen[1] = { url: MAINNET_DEFAULT, source: "default", ts: h.deps.now() };
-    h.state.breaker[MAINNET_DEFAULT] = { failures: 3, openedAt: h.deps.now() };
+    const privateUrl = "https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@fixture.invalid/SYNTHETIC_PATH?key=SYNTHETIC_QUERY";
+    h.state.chosen[1] = { url: privateUrl, source: "default", ts: h.deps.now() };
+    h.state.breaker[privateUrl] = { failures: 3, openedAt: h.deps.now() };
     const d = rpcDiagnostics(CFG, h.deps);
     const raw = JSON.stringify(d);
-    const tokenSegment = MAINNET_DEFAULT.split("/").pop()!;
-    expect(raw).not.toContain(tokenSegment);
-    expect(d.chosen[1]?.host).toBe(new URL(MAINNET_DEFAULT).host);
-    expect(d.breakers).toEqual([{ host: new URL(MAINNET_DEFAULT).host, failures: 3, open: true, remainingCooldownMs: CFG.cooldownMs }]);
+    expect(raw).not.toContain("SYNTHETIC_");
+    expect(d.chosen[1]?.host).toBe("fixture.invalid");
+    expect(d.breakers).toEqual([{ host: "fixture.invalid", failures: 3, open: true, remainingCooldownMs: CFG.cooldownMs }]);
   });
 });
 

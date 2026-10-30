@@ -22,8 +22,8 @@
 //                            reconnaissance map (which RPC vendor, when a breaker is open, how
 //                            loaded the server is right now), and a public endpoint should not
 //                            hand it to whoever asks. Hosts only, never full URLs, even in the
-//                            full view: the committed default RPC URLs embed access tokens in
-//                            their PATH, and CORK_RPC_URL may too.
+//                            full view: operator-configured endpoints may embed credentials in
+//                            their path, query or userinfo.
 //   GET /docs/<topic>      — any DOC_TOPICS body as text/markdown, resolved by name OR alias
 //                            through the same findDocTopic the capabilities tool uses (same
 //                            constant as the topic lookup and the initialize instructions — zero

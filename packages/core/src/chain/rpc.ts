@@ -1,7 +1,7 @@
 // RPC endpoint resolution with committed defaults, a per-endpoint circuit breaker (retry + backoff),
 // and a just-in-time chainlist.org fallback that picks the best-performing public RPC.
 //
-// Precedence: an explicit URL (CORK_RPC_URL / --rpc-url) always wins — no fallback — but it FAILS
+// Precedence: an explicit URL selected by the caller always wins — no fallback — but it FAILS
 // CLOSED: one eth_chainId probe must prove it serves the requested chain before any client is
 // exposed. Otherwise: a committed default for the chain →
 // retried with backoff; if it stays down (breaker opens), fall back to chainlist for eligible public
@@ -31,15 +31,12 @@ export interface ResolvedRpc {
   failedOverInCall?: boolean;
 }
 
-// Committed defaults. NOTE: these Tenderly gateway URLs embed access tokens and are intentionally
-// committed (mainnet + Arbitrum 2026-07-17; Base added 2026-08-12 — chainlist.org was previously
-// the ONLY automatic path for 8453, a single point of failure) — unlike
-// CORK_RPC_URL/CORK_TEST_RPC, which stay env-only. All three are one provider: a Tenderly-wide
-// outage degrades every chain to the chainlist fallback at once (accepted; disclosed in /readyz).
+// Unkeyed public defaults from the already-pinned viem chain definitions. Operator endpoints
+// belong in private environment configuration, never in this map or a public address document.
 export const DEFAULT_RPCS: Readonly<Record<number, string>> = {
-  1: "https://mainnet.gateway.tenderly.co/680LWYrzQFiGUyJKWf05oo",
-  42161: "https://arbitrum.gateway.tenderly.co/5xUnQJ7Qylkv7D0wQfSynT",
-  8453: "https://base.gateway.tenderly.co/5SUsK15GXzYm4MP8bjDJTN",
+  1: mainnet.rpcUrls.default.http[0],
+  42161: arbitrum.rpcUrls.default.http[0],
+  8453: base.rpcUrls.default.http[0],
 };
 
 // Chains eligible for the chainlist.org fallback (real public networks). The private staging vnet
@@ -310,7 +307,7 @@ export function reportEndpointFailure(chainId: number, url: string, cfg: RpcConf
  *  through it would be wrong-chain data stamped with the requested chainId. */
 export class RpcChainMismatchError extends Error {
   constructor(url: string, expected: number, got: number) {
-    super(`explicit RPC endpoint (${hostOf(url)}) reports chainId ${got}, but chainId ${expected} was requested — every read through it would be wrong-chain data wearing the requested chain's label. Fix CORK_RPC_URL/--rpc-url, or pass the chainId that endpoint actually serves`);
+    super(`explicit RPC endpoint (${hostOf(url)}) reports chainId ${got}, but chainId ${expected} was requested — every read through it would be wrong-chain data wearing the requested chain's label. Fix CORK_RPC_URL_${expected}/CORK_RPC_URL/--rpc-url, or pass the chainId that endpoint actually serves`);
     this.name = "RpcChainMismatchError";
   }
 }
@@ -325,7 +322,7 @@ export class RpcChainVerificationError extends Error {
     super(
       `explicit RPC endpoint (${hostOf(url)}) could not prove it serves chainId ${expected} — ${
         failure === "probe_failed" ? "its eth_chainId probe failed or timed out" : "its eth_chainId answer was missing or malformed"
-      }. No client was exposed: reads through an unverified endpoint would carry the requested chain's label whatever chain answered. Check connectivity and CORK_RPC_URL/--rpc-url, then retry`,
+      }. No client was exposed: reads through an unverified endpoint would carry the requested chain's label whatever chain answered. Check connectivity and CORK_RPC_URL_${expected}/CORK_RPC_URL/--rpc-url, then retry`,
     );
     this.name = "RpcChainVerificationError";
   }
@@ -415,7 +412,14 @@ async function resolveAuto(chainId: number, cfg: RpcConfig, deps: RpcDeps): Prom
   const now = deps.now();
 
   // 2. a recently-chosen, still-trusted RPC (skips re-probing in steady state).
-  const chosen = st.chosen[chainId];
+  let chosen: Chosen | undefined = st.chosen[chainId];
+  // An upgrade must not reuse a retired paid default from the warm on-disk cache.
+  if (chosen?.source === "default" && chosen.url !== DEFAULT_RPCS[chainId]) {
+    delete st.breaker[chosen.url];
+    delete st.chosen[chainId];
+    chosen = undefined;
+    deps.saveState(st);
+  }
   if (chosen && now - chosen.ts < cfg.chosenTtlMs && !isOpen(st, chosen.url, now, cfg)) {
     return mkFailoverResolved(chainId, chosen.url, chosen.source, cfg, deps);
   }
@@ -517,8 +521,8 @@ function mkFailoverResolved(chainId: number, url: string, source: "default" | "c
 }
 
 /** Host-only snapshot of resolver health for the /readyz diagnostics surface. HOSTS ONLY by
- *  construction: committed default URLs embed access tokens in their PATH, so full URLs must
- *  never leave this module through a diagnostics channel. */
+ *  construction: configured endpoints may embed credentials in their path, query or userinfo.
+ *  Full URLs must never leave this module through a diagnostics channel. */
 export function rpcDiagnostics(cfg: RpcConfig = DEFAULT_CONFIG, deps: RpcDeps = realDeps()): {
   chosen: Record<string, { host: string; source: "default" | "chainlist"; ageMs: number }>;
   breakers: Array<{ host: string; failures: number; open: boolean; remainingCooldownMs: number }>;

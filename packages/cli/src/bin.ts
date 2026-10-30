@@ -31,9 +31,8 @@ process.on("unhandledRejection", (err) => {
   die(err);
 });
 
-const ctx = {
-  ...(process.env.CORK_RPC_URL ? { rpcUrl: process.env.CORK_RPC_URL } : {}),
-};
+// RPC env selection is shared with SDK/MCP at resolution time; flags remain explicit overrides.
+const ctx = {};
 
 // `ch mcp` — the MCP stdio server must own stdout from process start (any stray byte corrupts
 // the protocol stream), so it is intercepted BEFORE the commander projection ever loads. The

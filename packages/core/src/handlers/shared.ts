@@ -27,7 +27,7 @@ export class ToolInputError extends Error {
 export interface HandlerContext {
   /** Deterministic clock (seconds) for deadlines + fetchedAt; defaults to wall clock. */
   nowSeconds?: bigint;
-  /** RPC URL enabling chain-backed compute (else those return `unavailable`). */
+  /** Explicit endpoint; wins over per-chain/global env and automatic public RPC selection. */
   rpcUrl?: string;
   /** Address overrides; defaults to the built-in deployment for the chainId (the SDK override —
    *  wins over `generation`). */
@@ -40,9 +40,9 @@ export interface HandlerContext {
   /** Pin all chain reads to this block (else latest). Makes chain-backed compute reproducible. */
   atBlock?: bigint;
   /**
-   * Override the RPC resolver. Defaults to the built-in resolver (explicit rpcUrl → committed
-   * default → chainlist fallback, with a circuit breaker). Tests inject a stub for offline
-   * determinism; a caller may inject a custom endpoint policy.
+   * Override the RPC resolver. Receives the selected explicit/context or environment endpoint,
+   * else undefined for automatic public defaults + chainlist. Tests inject offline transports;
+   * a caller may inject a custom endpoint policy.
    */
   resolveRpc?: (chainId: ChainId, explicitUrl: string | undefined) => Promise<ResolvedRpc | null>;
   /** Override the venue fetch implementation (tests inject a stub for offline determinism). */
@@ -126,11 +126,17 @@ export function venueFailed(chainId: ChainId, err: unknown, ctx: HandlerContext)
   throw err;
 }
 
+/** Select only this chain's private environment endpoint; never promote the global env into
+ *  ctx.rpcUrl, which would mask per-chain settings and explicit caller precedence. */
+export function rpcUrlForChain(ctx: HandlerContext, chainId: ChainId): string | undefined {
+  return ctx.rpcUrl || process.env[`CORK_RPC_URL_${chainId}`]?.trim() || process.env.CORK_RPC_URL?.trim() || undefined;
+}
+
 /** Resolve a chain client via the ctx hook (default = built-in defaults + chainlist resolver).
  *  A wrong-chain EXPLICIT endpoint surfaces as teachable invalid input, not a raw throw. */
 export async function getRpc(ctx: HandlerContext, chainId: ChainId): Promise<ResolvedRpc | null> {
   try {
-    return await (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, ctx.rpcUrl);
+    return await (ctx.resolveRpc ?? resolveRpcBuiltin)(chainId, rpcUrlForChain(ctx, chainId));
   } catch (err) {
     // Both failures are about the endpoint the caller explicitly configured, so both surface as
     // teachable input errors naming `rpcUrl` rather than degrading to "no RPC resolved" — which

@@ -93,7 +93,7 @@ Copy those local archives into your consumer and use the dependency and override
 Locally packed bytes are not attested release assets. The release proves reproducibility
 separately, with its own gates: a checksum comparison of independent builds, and provenance.
 
-The `0.8.0-rc.3` candidate uses the emitted core package's stamped version for SDK/MCP build
+The `0.8.0-rc.4` candidate uses the emitted core package's stamped version for SDK/MCP build
 metadata and the default config line: an installed `0.8.x` package reads `config/0.8`.
 An explicit `CH_BUILD_VERSION` still takes precedence; source runs remain `dev` and read `main`.
 Previously published archives retain their original behavior. This is package identity, not
@@ -386,7 +386,7 @@ kills the other. To share a bit on purpose, name an `ocoGroup`.
 await runTool(name, input, {
   nowSeconds: 1_800_000_000n,   // pin the clock; deadlines become reproducible
   atBlock: 20_000_000n,         // pin chain reads to one block
-  rpcUrl: "https://…",          // explicit endpoint; skips resolution
+  rpcUrl: "<PRIVATE_ENDPOINT>", // explicit endpoint; verified, never automatic fallback
   generation: "previous",       // the default generation for this call
 });
 ```
@@ -400,18 +400,31 @@ bundles, or pin `nowSeconds`.
 <details>
 <summary><b>Deeper: RPC endpoints and environment variables</b></summary>
 
-Chain reads resolve an endpoint in this order: explicit (`ctx.rpcUrl` or `CORK_RPC_URL`), then the
-committed defaults (mainnet, Arbitrum One, Base), then the chainlist.org fallback. An explicit
-endpoint must prove that it serves the requested chain, or the call refuses. When an
-automatic endpoint fails, it trips a per-endpoint circuit breaker, and the call fails over to
-another endpoint. An explicit endpoint never fails over. With `format: "full"`,
-`provenance.rpc` names the endpoint that served you.
+`runTool` and programmatic MCP servers select `ctx.rpcUrl` first, then nonblank
+`CORK_RPC_URL_<chainId>`, then legacy `CORK_RPC_URL`, then automatic public RPC selection.
+For example, `CORK_RPC_URL_8453` and `CORK_RPC_URL_42161` let one process serve Base and
+Arbitrum without sharing endpoints. Environment values are trimmed; blank values are absent.
+Context values retain their explicit semantics. Selection reads env at resolution time.
 
-You need configuration only for a private node, a chain outside the defaults (a staging vnet, for
-example), or the event-archive tier (`ENVIO_HYPERSYNC_TOKEN` for full-decentralized reads).
-Everything else works out of the box.
+SDK ambient-env inheritance is new in RC4: RC3 core did not read `CORK_RPC_URL`, despite
+the previous documentation claiming it did. The CLI/MCP entrypoints already supported that
+global setting. Embedders should remove unwanted ambient RPC env or set `ctx.rpcUrl`.
+A custom `ctx.resolveRpc` receives the selected endpoint as its second argument and retains
+its policy; the low-level `resolveRpc(chainId, explicitUrl, ...)` remains environment-agnostic.
 
-One rule: never commit an RPC URL. Pass endpoints through the environment.
+Configured endpoints must prove the requested chain ID and never automatically fail over.
+Successful verification is memoized per (chain, endpoint); failed verification is re-tried on
+the next call. Automatic selection uses unkeyed public viem defaults (mainnet, Arbitrum, Base)
+and existing chainlist fallback. Public availability and method support are not guaranteed.
+Retired default cache choices are discarded on resolution. With `format: "full"`,
+`provenance.rpc` names only the endpoint host and source, not credentials.
+
+Private chains require explicit transport configuration. Public chains have automatic
+discovery, but hosted services should configure their own endpoints and verify provider method
+support and quotas. The event-archive tier still uses `ENVIO_HYPERSYNC_TOKEN`.
+
+Never commit private RPC values or bake them into an image. Use private runtime environment
+configuration; replacing source defaults does not revoke credentials in old artifacts.
 </details>
 
 <details>

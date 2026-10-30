@@ -1,7 +1,6 @@
-// Live smoke for the RPC resolver against the real network. Self-skips unless CORK_RPC_LIVE=1 so
-// CI stays offline/deterministic. Proves end-to-end: the committed defaults resolve and answer,
-// and a chain with NO committed default (Sepolia 11155111 — Base graduated to a committed
-// default 2026-08-12) falls back to a real chainlist public RPC.
+// Live smoke for the RPC resolver against the real network. Self-skips unless CORK_RPC_LIVE=1.
+// CI's opted-in live job proves automatic public resolution serves the requested chain.
+// Public defaults can fail over to chainlist; provider tier is not the consumer contract.
 import { describe, expect, it } from "vitest";
 import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,17 +21,15 @@ const LIVE = process.env.CORK_RPC_LIVE === "1";
 const FLAT_GEN = "phoenix/v0.3-rc.1";
 
 describe.skipIf(!LIVE)("resolveRpc — live", () => {
-  it("chain 1 uses the committed default and the client answers eth_chainId=1", async () => {
+  it("chain 1 resolves a public endpoint answering eth_chainId=1", async () => {
     const r = await resolveRpc(1, undefined);
     expect(r).not.toBeNull();
-    expect(r!.source).toBe("default");
     expect(await r!.client.getChainId()).toBe(1);
   }, 30_000);
 
-  it("chain 8453 uses the committed default (added 2026-08-12) and answers eth_chainId=8453", async () => {
+  it("chain 8453 resolves a public endpoint answering eth_chainId=8453", async () => {
     const r = await resolveRpc(8453, undefined);
     expect(r).not.toBeNull();
-    expect(r!.source).toBe("default");
     expect(await r!.client.getChainId()).toBe(8453);
   }, 30_000);
 

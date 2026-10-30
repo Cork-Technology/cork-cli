@@ -12,6 +12,22 @@ Human-readable text and log formats are not covered.
 
 - Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
 
+## [0.8.0-rc.4] — release preparation
+
+### Added
+
+- Private per-chain RPC environment settings (`CORK_RPC_URL_<decimal chainId>`) let one CLI/MCP process serve multiple chains. Selection is explicit `--rpc-url`/`ctx.rpcUrl`, then nonblank chain env, then legacy `CORK_RPC_URL`, then automatic public resolution. Env values are trimmed; blank values are absent. Existing explicit chain-ID verification, no automatic fallback for configured endpoints, and per-(chain, endpoint) verification caching remain intact.
+
+### Changed
+
+- SDK `runTool` and programmatic MCP factories now inherit global/per-chain RPC env at resolution time. RC3 core did not inherit the global value, despite earlier SDK documentation saying it did; CLI/MCP entrypoints already supported it. A custom context resolver receives the selected endpoint, while direct low-level `resolveRpc` remains environment-agnostic. Explicit-only approval annotations recognize the same selected configuration; no-config order building stays chain-silent.
+- Replace the three publicly embedded paid-token defaults with unkeyed public defaults from pinned viem chain definitions. A warm cached default that differs from the current map is discarded before reuse. Public-provider availability, archive/method support and quotas are not guaranteed; existing bounded discovery/fallback remains for automatic endpoints only.
+- Remove the intentional credential-commit exception. Removing source literals cannot revoke copied credentials in old immutable releases or local backups: provider-owner reconciliation and rotation/revocation remain separate. No fresh credentials, tag, release, deployment or live-provider acceptance is implied.
+
+### Release preparation
+
+- Synchronize all four package manifests and all four workspace lock versions to `0.8.0-rc.4`, without dependency-resolution changes. Code, regressions, environment documentation and release preparation belong to this same source commit. Existing native/package/apk identity stamping and gated release workflows are unchanged.
+
 ## [0.8.0-rc.3] — release preparation
 
 ### Release preparation

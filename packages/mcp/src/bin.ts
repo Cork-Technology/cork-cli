@@ -16,9 +16,8 @@ process.on("unhandledRejection", (err) => {
   process.exit(1);
 });
 
-const ctx = {
-  ...(process.env.CORK_RPC_URL ? { rpcUrl: process.env.CORK_RPC_URL } : {}),
-};
+// Resolve chain-specific/global RPC env in core, without masking an explicit caller override.
+const ctx = {};
 
 const server = createCorkServer(ctx);
 const transport = new StdioServerTransport();

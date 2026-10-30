@@ -12,7 +12,7 @@ import { activeSettlersTeaching, buildRolloverIntent, checkRolloverOrderTerms, c
 import { verificationDigest } from "../rollover-verify.ts";
 import { type AuctionPriceReport, auctionPhase, buildAuctionAmountData, type DecodedFusionOrder, decodeFusionOrder, fusionRateBump, fusionTakerPays, fusionTotalFee, isGetterWhitelisted, NotAFusionOrder } from "../fusion.ts";
 import { getLopOrderbook, parseSignedLopOrder, type SignedLopOrder, VENUE_OPEN_ORDERS_PER_POOL } from "../datasources/venue.ts";
-import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
+import { envelope, getDep, getMarketRegistry, getRpc, type HandlerContext, nowSecondsOf, revertReason, rpcUrlForChain, ToolInputError, unavailable, venueDepsOf, venueFailed } from "./shared.ts";
 import { fillRange, openRangeViolation, readRollPools, type RollPoolFacts, sameCollateralMinFill } from "./rollover-ranges.ts";
 import { collectVenuePages, venueNoticeWarnings } from "./query.ts";
 import { resolveListingPremium } from "./submit.ts";
@@ -62,11 +62,11 @@ type MakerJitReport = {
 };
 
 /** Best-effort approval-status annotation for the maker/finalize paths: runs ONLY with an
- *  explicit RPC context (ctx.rpcUrl / ctx.resolveRpc) — same policy as funding-leg resolution —
+ *  configured RPC (ctx.rpcUrl / chain or global env / ctx.resolveRpc) — same policy as funding-leg resolution —
  *  so pure offline order building stays chain-silent. The requirement entries always ride;
  *  this may only ADD satisfied/current fields, never block the artifact. */
 async function annotateIfExplicitRpc(ctx: HandlerContext, chainId: PrepareOrdersInput["chainId"], entries: ApprovalRequirement[]): Promise<ApprovalRequirement[]> {
-  if (!ctx.resolveRpc && !ctx.rpcUrl) return entries;
+  if (!ctx.resolveRpc && !rpcUrlForChain(ctx, chainId)) return entries;
   const resolved = await getRpc(ctx, chainId);
   if (!resolved) return entries;
   return annotateApprovalStatus(resolved.client, { entries, nowSeconds: nowSecondsOf(ctx), ...(ctx.atBlock !== undefined ? { atBlock: ctx.atBlock } : {}) });

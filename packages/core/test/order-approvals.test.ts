@@ -2,8 +2,8 @@
 // the unsigned approve payload per grant. Calldata assertions are hand-assembled words (never
 // encodeFunctionData) so an argument-order mutant cannot hide; the satisfied comparators are
 // pinned at their boundaries (mutation-probed: sdk-approval-* in scripts/mutation-probes.ts).
-import { describe, expect, it } from "vitest";
-import { toFunctionSelector, zeroAddress } from "viem";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeAbiParameters, toFunctionSelector, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   annotateApprovalStatus,
@@ -16,6 +16,11 @@ import {
 import { hashLopOrder, LOP_ADDRESSES, type LopOrder } from "../src/orders.ts";
 import { runTool } from "../src/handlers.ts";
 import { stubRpc } from "./helpers.ts";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 const LOP = LOP_ADDRESSES[1]!;
 const MAKER = "0x00000000000000000000000000000000000000ee" as const;
@@ -225,6 +230,35 @@ describe("handler wiring: data.approvals across the order lifecycle", () => {
     expect(approvals[0]).toMatchObject({ role: "maker", token: TOKEN, spender: LOP, mechanism: "erc20-approve" });
     expect(approvals[0]!.satisfied).toBeUndefined();
     expect(env.warnings.some((w) => w.code === "approval_missing")).toBe(false);
+  });
+
+  it.each(["CORK_RPC_URL", "CORK_RPC_URL_1"])("maker-order annotates allowance from configured %s", async (key) => {
+    vi.stubEnv(key, "https://approval.fixture.invalid/private");
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (new URL(req.url).hostname !== "approval.fixture.invalid") throw new Error("External transport denied");
+      const body = await req.json() as { id: number; method: string; params?: Array<{ data?: string }> };
+      const allowance = `0x${word(AMOUNT)}` as `0x${string}`;
+      const result = body.method === "eth_chainId" ? "0x1" :
+        body.params?.[0]?.data?.startsWith("0x82ad56cb") ?
+          encodeAbiParameters([{ type: "tuple[]", components: [{ name: "success", type: "bool" }, { name: "returnData", type: "bytes" }] }], [[{ success: true, returnData: allowance }]]) :
+          allowance;
+      return Response.json({ jsonrpc: "2.0", id: body.id, result });
+    });
+    const env = await runTool("cork_prepare_orders", makerOrderInput(), { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    expect(env.data).toMatchObject({ approvals: [{ satisfied: true, currentAllowance: AMOUNT.toString() }] });
+  });
+
+  it("an unrelated chain suffix does not activate offline maker approval reads", async () => {
+    vi.stubEnv("CORK_RPC_URL_8453", "https://unrelated.fixture.invalid/private");
+    const fetch = vi.fn(() => { throw new Error("Offline maker must not contact transport"); });
+    vi.stubGlobal("fetch", fetch);
+    const env = await runTool("cork_prepare_orders", makerOrderInput(), { nowSeconds: NOW });
+    expect(env.state).toBe("ok");
+    const { approvals } = env.data as { approvals: ApprovalRequirement[] }; // Known maker-order fixture result.
+    expect(approvals[0]!.satisfied).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("maker-order usePermit2: both Permit2 layers ride, expiration bound to the order expiry", async () => {
