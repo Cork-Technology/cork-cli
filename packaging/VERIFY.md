@@ -13,6 +13,56 @@ image digest ──(GitHub attestation)──▶ ghcr.io/cork-technology/cork-cl
 image digest ──(compose pin + RTMR3 measurement)──▶ the running CVM
 ```
 
+## Runtime security and rollout
+
+[GHSA-26q8-h657-pf84](https://github.com/oven-sh/bun/security/advisories/GHSA-26q8-h657-pf84)
+affects Bun <1.4.4, including the runtime and trust store embedded by `bun build --compile`.
+The exact build pin is in `mise.toml`; APK preparation derives `bun~<pin>` and the native
+melange build checks `bun --version` for equality. Both Wolfi architectures must resolve the
+pin: stop rather than fall back to an older runtime. Production apko installs that rebuilt
+APK and runs `/usr/bin/ch`. The root Dockerfile is a separately pinned source-run sandbox.
+
+**Do not run `ch self-update` from compiled Bun <1.4.4 or an unknown embedded runtime,
+even if `gh` is installed.** This overrides generic old notifier/help advice; ordinary
+self-update is only for an already-patched runtime. Use this manual migration instead:
+
+1. Acquire the intended **actually published patched clean release** and exact platform asset
+   with a trusted non-Bun system HTTPS downloader/browser. Do not use old `ch`, affected Bun
+   `fetch`, the Bun installer, `bunx` or affected Bun package installation to fetch the patch.
+2. Independently establish and authenticate `Cork-Technology/cork-cli`, builder workflow
+   `.github/workflows/build-binaries.yml`, intended clean source ref/tag, full source commit
+   and exact asset digest **before chmod, execution or replacement**. External GitHub
+   attestation verification is one method; see the [binary procedure](../README.md#install).
+   A SHA-256 value is acceptable only when the expected value comes through an independently
+   trusted/authenticated path, not the affected executable/channel. Checksum integrity alone
+   is not independent provenance. Stop if verification is unavailable or mismatched.
+3. Only after authentication, replace the old bytes, then verify installed release/source
+   identity and embedded **Bun 1.4.4** before normal use. This source preparation does not
+   establish that patched assets are published; proceed only after the intended genuine clean
+   patched release is actually published and independently authenticated, otherwise STOP; local
+   dirty/base-`7dd` qualification binaries are not clean, attested or publishable replacements.
+   Do not assume future assets exist; stop until a genuine patched release is available.
+
+Bootstrap the pinned Bun toolchain with the same trusted non-Bun acquisition and independently
+authenticated official release/source identity and archive checksum before execution.
+Rebuild all native assets and both APK/image architectures under separate release authority.
+A host Bun upgrade, OS certificate update, system-CA flag or restart of the same image does
+not fix old binaries. Ordinary invalid-certificate rejection proves TLS validation, not the
+compromised-key blocklist specifically; keep that distinction in qualification evidence.
+
+Under separate publication/deployment authority, verify exact source, embedded runtime
+(`ch version --json`), checksums, APK build provenance, image digest and attestations. RC
+images do not auto-deploy. Roll out the rebuilt immutable digest to staging first, then
+production only after acceptance. Preserve `CORK_RPC_URL_1`, `CORK_RPC_URL_42161`,
+`CORK_RPC_URL_8453` and all non-RPC settings without copying secret values into evidence.
+At each stage check CLI/MCP health and authenticated tool behavior, explicit chain identity
+for Ethereum/Arbitrum/Base, representative read results and TLS failures before promotion.
+Keep the last verified **patched** digest/config for interruption recovery; an old vulnerable
+digest is not a security-safe rollback. Stop promotion on failure, reconcile the actual
+running digest and settings, and restore only a qualified patched artifact (or contain the
+affected service). Source tests and local mocks do not establish deployed-provider or
+rollout acceptance.
+
 ## Quick run
 
 ```sh

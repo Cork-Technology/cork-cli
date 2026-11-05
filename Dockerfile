@@ -10,7 +10,7 @@
 # CORK_CONFIG_NO_FETCH=1 is load-bearing on a sandbox: config is remote-first from the PUBLIC
 # repo's cork-defaults.json, which trails this tree (e.g. no `marketCreator` until the port
 # lands) — the sandbox must serve the bundled copy of the tree it was built from.
-FROM oven/bun:1.3.14-slim
+FROM oven/bun:1.4.4-slim
 WORKDIR /app
 COPY . .
 RUN bun install --frozen-lockfile

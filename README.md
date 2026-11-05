@@ -17,8 +17,22 @@ on-chain reads on Ethereum mainnet and Arbitrum One.
 You need one file: the `ch` binary. It contains the CLI **and** the MCP server (`ch mcp`).
 You need no runtime, no clone and no package manager.
 
-1. Open the [Releases page](https://github.com/Cork-Technology/cork-cli/releases) and download
-   the asset for your platform:
+> **Bun TLS security migration:** do **not** run `ch self-update` from a compiled `ch`
+> embedding Bun **<1.4.4**, or whose embedded runtime is unknown — **even if `gh` is installed**.
+> This overrides generic advice printed by an old notifier/help. Use the trusted manual
+> replacement below, not the old executable or affected Bun, to obtain the patch.
+>
+> This source preparation does not establish that patched assets are published. Proceed
+> **only after** the intended genuine clean patched release is actually published and
+> independently authenticated; otherwise **STOP**.
+> Local qualification binaries stamped with base `7dd` plus a dirty-source fingerprint
+> are not clean, attested or publishable release assets. Examples below do not establish
+> that a named binary or image is patched.
+
+1. Using a trusted **non-Bun** system HTTPS downloader/browser, open the
+   [Releases page](https://github.com/Cork-Technology/cork-cli/releases), select the intended
+   patched release and download its exact platform asset. Do not fetch it with old `ch`,
+   affected Bun `fetch`, the Bun installer, `bunx` or affected Bun package installation:
 
    | Platform | Asset |
    |---|---|
@@ -28,40 +42,49 @@ You need no runtime, no clone and no package manager.
    | macOS Intel | `ch-darwin-x64` |
    | Windows x86-64 | `ch-windows-x64.exe` |
 
-2. Make it executable and put it on your `PATH`:
+2. **Authenticate the downloaded bytes before chmod, execution or replacement.** Independently
+   establish the intended clean release tag/ref, full source commit and asset digest through
+   a trusted/authenticated path, not the old affected executable/channel. With an independently
+   trusted [GitHub CLI](https://cli.github.com), verify the file's build attestation:
 
    ```sh
-   chmod +x ch-linux-x64
-   mv ch-linux-x64 ~/.local/bin/ch      # any directory on your PATH works
+   # ASSET, INTENDED_TAG and INTENDED_COMMIT must identify the authenticated intended release.
+   gh attestation verify "$ASSET" \
+     --repo Cork-Technology/cork-cli \
+     --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml \
+     --source-ref "refs/tags/$INTENDED_TAG" \
+     --source-digest "$INTENDED_COMMIT"
    ```
 
-3. Check it. A healthy install lists **9 tools**:
+   Require successful verification of the exact file digest, repository, builder workflow,
+   intended source ref/tag and full commit. A SHA-256 comparison is acceptable only when its
+   expected value comes through an **independently trusted/authenticated** path; a checksum
+   fetched beside the binary by the affected executable is not independent provenance.
+   Stop on unavailable verification or any mismatch; do not run the download to identify it.
+
+3. **Only after authentication**, make the verified asset executable and replace the old
+   file on your `PATH` (Unix example; `ASSET` is the exact platform file verified above):
 
    ```sh
+   chmod +x "$ASSET"
+   mv "$ASSET" ~/.local/bin/ch      # any directory on your PATH works
+   ```
+
+4. Verify the installed release, source commit and embedded runtime with `ch version --json`
+   against the authenticated identity. This remediation expects **Bun 1.4.4**. Only then use
+   the replacement normally. A healthy install lists **9 tools**:
+
+   ```sh
+   ch version --json
    ch capabilities
    ```
 
-To update in place later, run `ch self-update`. It finds the newest release and verifies its
-provenance. Then it runs the staged binary's own `version --json` to confirm that it is that
-build. Only then does it swap the binary atomically. It never installs an older release unless
-you pass `--allow-downgrade`.
-
-<details>
-<summary><b>Verify a download before you trust it</b></summary>
-
-Releases are immutable, and every asset carries a GitHub build attestation. A release publishes
-only when two independent builds produce byte-identical binaries. Verify any asset with the
-[GitHub CLI](https://cli.github.com):
-
-```sh
-gh attestation verify ch-linux-x64 \
-  --repo Cork-Technology/cork-cli \
-  --signer-workflow Cork-Technology/cork-cli/.github/workflows/build-binaries.yml
-```
-
-The check proves that the exact bytes came from this repository's build workflow at a specific
-tag.
-</details>
+For later updates, **only an already-patched compiled binary with established embedded
+Bun >=1.4.4** may use `ch self-update`. It uses cryptographic GitHub attestation verification when
+`gh` is available; without it, the fallback is checksum **integrity only**, not independent
+provenance. It then runs the staged binary's identity check and swaps atomically; an older
+release requires `--allow-downgrade`. None of these inherited mechanics authorizes using an
+affected or unknown-runtime binary for this security migration.
 
 <details>
 <summary><b>Alpine Linux: install from the apk repository</b></summary>
@@ -602,7 +625,9 @@ run yourself with `ch mcp --http` sends nothing.
 ## Develop (run from source)
 
 **[Bun](https://bun.sh)** runs the TypeScript sources directly. Node's native type-stripping
-cannot run this code, because it uses TypeScript parameter properties. `mise.toml` pins Bun 1.3.
+cannot run this code, because it uses TypeScript parameter properties. `mise.toml` pins Bun
+**1.4.4**, including the TLS trust-store fix in
+[GHSA-26q8-h657-pf84](https://github.com/oven-sh/bun/security/advisories/GHSA-26q8-h657-pf84).
 
 ```sh
 git clone git@github.com:Cork-Technology/cork-cli.git
@@ -619,8 +644,23 @@ ch capabilities
 claude mcp add cork-defi -- "$(mise which bun)" "$(pwd)/packages/mcp/src/bin.ts"
 ```
 
-Prefer not to use mise? Install Bun 1.3+ directly (`curl -fsSL https://bun.sh/install | bash`),
-skip the `mise` commands, and run `bun install`.
+Prefer not to use mise? Acquire the exact Bun version in `mise.toml` from the
+[official release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.4), using a trusted
+non-Bun system HTTPS downloader/browser. Authenticate the intended upstream release/source
+identity and archive SHA-256 through an independently trusted/authenticated path **before
+execution**; never take the expected checksum from an affected executable/channel. Do not
+use old `ch`, affected Bun `fetch`, the Bun installer, `bunx` or affected Bun package
+installation to bootstrap the patch. Confirm `bun --version` is `1.4.4`, then run `bun install`.
+
+Previously compiled `ch` binaries embed their own Bun runtime and trust store. Do **not**
+run `ch self-update` with embedded Bun <1.4.4 or unknown, even if `gh` is installed; follow
+the [manual binary migration](#install), authenticating the intended patched clean release's
+repo/workflow/ref/commit and file digest before chmod/execution/replacement, then verify its
+installed release/source/runtime. Host Bun or OS CA updates do not patch old binaries.
+This source preparation does not establish that patched assets are published; proceed only
+after the intended genuine clean patched release is actually published and independently
+authenticated, otherwise STOP. Local dirty/base-`7dd` qualification binaries are not publishable
+replacement assets. See [runtime security and rollout](packaging/VERIFY.md#runtime-security-and-rollout).
 
 ```sh
 bun run typecheck          # tsc --noEmit, strict (noUncheckedIndexedAccess, exactOptionalPropertyTypes)
