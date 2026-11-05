@@ -24,7 +24,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 
-const SOURCE_REPO = "Cork-Technology/cork-cli";
+const PUBLIC_REPO = "Cork-Technology/cork-cli";
 const RELEASE_TARGETS = [
   "bun-linux-x64",
   "bun-linux-arm64",
@@ -68,8 +68,8 @@ export function hyperSyncBindingForTarget(target) {
 }
 
 /** The `--define` pairs a target is compiled with: build identity plus the embedded binding. */
-export function compileDefines({ version, commit, target, repo = SOURCE_REPO }) {
-  if (!["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"].includes(repo)) throw new Error("unsupported --repo identity");
+export function compileDefines({ version, commit, target, repo = PUBLIC_REPO }) {
+  if (repo !== PUBLIC_REPO) throw new Error("unsupported --repo identity");
   const binding = hyperSyncBindingForTarget(target);
   return [
     "--define", `process.env.CH_BUILD_VERSION=${JSON.stringify(version)}`,
@@ -83,7 +83,7 @@ export function compileDefines({ version, commit, target, repo = SOURCE_REPO }) 
 }
 
 function parseArgs(argv) {
-  const out = { targets: RELEASE_TARGETS, outdir: "dist", commit: "unknown", repo: SOURCE_REPO, native: false };
+  const out = { targets: RELEASE_TARGETS, outdir: "dist", commit: "unknown", repo: PUBLIC_REPO, native: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--version") out.version = argv[++i];
@@ -94,7 +94,7 @@ function parseArgs(argv) {
     else if (a === "--native") out.native = true;
     else throw new Error(`unknown argument: ${a}`);
   }
-  if (!["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"].includes(out.repo)) throw new Error("--repo must name a supported repository");
+  if (out.repo !== PUBLIC_REPO) throw new Error("--repo must name the public repository");
   if (!out.version || !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(out.version)) {
     throw new Error(`--version is required and must look like v1.2.3[-rc.N] (got: ${out.version ?? "<absent>"})`);
   }

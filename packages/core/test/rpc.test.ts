@@ -1,10 +1,14 @@
-// Offline unit tests for the RPC resolver + circuit breaker. All network/fs/clock access is
-// injected, so nothing here touches the wire — we assert the resolution *logic*: precedence,
-// retry/backoff, the breaker state machine, the chainId guard, and fallback scope.
+// Offline tests for the RPC resolver + circuit breaker. Most dependencies are injected to
+// exercise resolution logic; the real-transport regression uses only an owned loopback server.
+// No test contacts an external endpoint.
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decodeFunctionData, encodeFunctionResult, parseAbi, toFunctionSelector, type Hex } from "viem";
+import { erc1271Abi } from "../src/orders.ts";
+import { checkContractMakerSignature } from "../src/handlers/order-auth.ts";
 import {
   DEFAULT_RPCS,
   FALLBACK_CHAINS,
@@ -393,6 +397,52 @@ describe("same-call failover (the failover-wrapped client)", () => {
     expect(h.calls.probe.filter((u) => u === MAINNET_DEFAULT)).toHaveLength(1);
   });
 
+  it("the real HTTP transport gives automatic failover one attempt per endpoint", async () => {
+    const reads = { a: 0, b: 0 };
+    const server = createServer(async (req, res) => {
+      if (req.url === "/a") {
+        reads.a++;
+        res.writeHead(503, { "Content-Type": "text/plain" });
+        res.end("temporarily unavailable");
+        return;
+      }
+      reads.b++;
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      const { id } = JSON.parse(body);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: "0x2a" }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("loopback server did not bind");
+      const a = `http://127.0.0.1:${address.port}/a`;
+      const b = `http://127.0.0.1:${address.port}/b`;
+      const h = harness({ probe: okOn([b]), candidates: { 1: [b] } });
+      h.state.chosen[1] = { url: a, source: "chainlist", ts: h.deps.now() };
+      const request = realDeps().request;
+      if (request === undefined) throw new Error("real HTTP request factory is unavailable");
+      h.deps.request = request;
+      const resolved = await resolveRpc(1, undefined, CFG, h.deps);
+      expect(await resolved!.client.getBlockNumber({ cacheTime: 0 })).toBe(42n);
+      expect({
+        reads,
+        url: resolved?.url,
+        source: resolved?.source,
+        failedOverInCall: resolved?.failedOverInCall,
+        chosen: h.state.chosen[1]?.url,
+      }).toEqual({ reads: { a: 1, b: 1 }, url: b, source: "chainlist", failedOverInCall: true, chosen: b });
+    } finally {
+      const closePromise = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      server.closeAllConnections();
+      await closePromise;
+    }
+  });
+
   it("a NON-transport error (contract revert) does NOT fail over and does NOT feed the breaker", async () => {
     const h = failoverHarness();
     h.deps.request = () => async () => {
@@ -484,5 +534,177 @@ describe("CORK_RPC_NO_FAILOVER kill-switch", () => {
     } finally {
       delete process.env.CORK_RPC_NO_FAILOVER;
     }
+  });
+});
+
+describe("real HTTP numeric recovery at the ERC1271 consumer", () => {
+  const multicallAbi = parseAbi(["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) payable returns ((bool success,bytes returnData)[] returnData)"]);
+  type Reply = { code: number } | { httpStatus: number } | { magic: Hex } | { block: Hex };
+
+  function signatureResult(data: Hex, magic: Hex): Hex {
+    if (data.slice(0, 10) === toFunctionSelector(multicallAbi[0])) {
+      const decoded = decodeFunctionData({ abi: multicallAbi, data });
+      return encodeFunctionResult({
+        abi: multicallAbi,
+        functionName: "aggregate3",
+        result: decoded.args[0].map((call) => ({ success: true, returnData: signatureResult(call.callData, magic) })),
+      });
+    }
+    decodeFunctionData({ abi: erc1271Abi, data });
+    return encodeFunctionResult({ abi: erc1271Abi, functionName: "isValidSignature", result: magic });
+  }
+
+  async function withNumericRpc(
+    reply: (endpoint: "a" | "b", attempt: number) => Reply,
+    run: (ctx: {
+      resolved: NonNullable<Awaited<ReturnType<typeof resolveRpc>>>;
+      h: ReturnType<typeof harness>;
+      reads: { a: number; b: number };
+      a: string;
+      b: string;
+      fixtureErrors: string[];
+    }) => Promise<void>,
+  ): Promise<void> {
+    const reads = { a: 0, b: 0 };
+    const fixtureErrors: string[] = [];
+    const server = createServer(async (req, res) => {
+      try {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        const q: { id: number; method: string; params?: [{ data?: Hex }] } = JSON.parse(body);
+        const endpoint = req.url === "/a" ? "a" : "b";
+        const answer = reply(endpoint, ++reads[endpoint]);
+        if ("httpStatus" in answer) {
+          res.writeHead(answer.httpStatus, { "Content-Type": "text/plain" });
+          res.end("temporarily unavailable");
+          return;
+        }
+        let response;
+        if ("code" in answer) {
+          response = { jsonrpc: "2.0", id: q.id, error: { code: answer.code, message: `provider error ${answer.code}` } };
+        } else {
+          let result: Hex;
+          if ("magic" in answer) {
+            const data = q.params?.[0]?.data;
+            if (q.method !== "eth_call" || data === undefined) throw new Error("signature fixture requires an encoded eth_call");
+            result = signatureResult(data, answer.magic);
+          } else {
+            result = answer.block;
+          }
+          response = { jsonrpc: "2.0", id: q.id, result };
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(response));
+      } catch (error) {
+        fixtureErrors.push(String(error));
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("fixture failed");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("loopback server did not bind");
+      const a = `http://127.0.0.1:${address.port}/a`;
+      const b = `http://127.0.0.1:${address.port}/b`;
+      const h = harness({ probe: okOn([b]), candidates: { 1: [b] } });
+      h.state.chosen[1] = { url: a, source: "chainlist", ts: h.deps.now() };
+      const request = realDeps().request;
+      if (request === undefined) throw new Error("real HTTP request factory is unavailable");
+      h.deps.request = request;
+      const resolved = await resolveRpc(1, undefined, CFG, h.deps);
+      if (!resolved) throw new Error("cached fixture RPC did not resolve");
+      await run({ resolved, h, reads, a, b, fixtureErrors });
+      expect(fixtureErrors).toEqual([]);
+    } finally {
+      const closePromise = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      server.closeAllConnections();
+      await closePromise;
+    }
+  }
+
+  const verify = (client: NonNullable<Awaited<ReturnType<typeof resolveRpc>>>["client"]) =>
+    checkContractMakerSignature(client, {
+      maker: "0x00000000000000000000000000000000000005af",
+      orderHash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+      signature: "0x1234",
+    });
+
+  it.each([-1, -32005, -32603, 429])("recovers a valid contract signature after one numeric error %s", async (code) => {
+    let transient = false;
+    await withNumericRpc(
+      (_endpoint, attempt) => transient && attempt === 1 ? { code } : { magic: "0x1626ba7e" },
+      async ({ resolved, h, reads, a, fixtureErrors }) => {
+        const positive = await verify(resolved.client);
+        expect({ positive, reads: { ...reads }, fixtureErrors }).toEqual({ positive: { kind: "erc1271" }, reads: { a: 1, b: 0 }, fixtureErrors: [] });
+        reads.a = 0;
+        transient = true;
+        const recovered = await verify(resolved.client);
+        expect({
+          positive,
+          recovered,
+          reads,
+          url: resolved.url,
+          source: resolved.source,
+          failedOver: resolved.failedOverInCall,
+          chosen: h.state.chosen[1]?.url,
+          probes: h.calls.probe,
+          fixtureErrors,
+        }).toEqual({
+          positive: { kind: "erc1271" },
+          recovered: { kind: "erc1271" },
+          reads: { a: 2, b: 0 },
+          url: a,
+          source: "chainlist",
+          failedOver: undefined,
+          chosen: a,
+          probes: [],
+          fixtureErrors: [],
+        });
+      },
+    );
+  });
+
+  it.each([-1, -32005, -32603, 429])("bounds persistent numeric error %s to four attempts without failover", async (code) => {
+    await withNumericRpc(() => ({ code }), async ({ resolved, h, reads, a }) => {
+      await expect(resolved.client.request({ method: "eth_blockNumber" })).rejects.toMatchObject({ code });
+      expect(reads).toEqual({ a: 4, b: 0 });
+      expect(resolved.url).toBe(a);
+      expect(resolved.failedOverInCall).toBeUndefined();
+      expect(h.calls.probe).toEqual([]);
+      expect(h.state.breaker[a]).toBeUndefined();
+    });
+  });
+
+  it("does not retry an unlisted numeric error or a genuine contract rejection", async () => {
+    await withNumericRpc(() => ({ code: -32602 }), async ({ resolved, reads }) => {
+      await expect(resolved.client.request({ method: "eth_blockNumber" })).rejects.toMatchObject({ code: -32602 });
+      expect(reads).toEqual({ a: 1, b: 0 });
+    });
+    await withNumericRpc(() => ({ magic: "0xffffffff" }), async ({ resolved, reads }) => {
+      expect(await verify(resolved.client)).toEqual({ kind: "erc1271_rejected", isValidSignatureAnswer: "0xffffffff" });
+      expect(reads).toEqual({ a: 1, b: 0 });
+    });
+    await withNumericRpc(() => ({ code: 3 }), async ({ resolved, reads }) => {
+      expect(await verify(resolved.client)).toEqual({ kind: "erc1271_rejected", isValidSignatureAnswer: null });
+      expect(reads).toEqual({ a: 1, b: 0 });
+    });
+  });
+
+  it("sends an HTTP failure immediately to outer failover after an earlier numeric error", async () => {
+    await withNumericRpc(
+      (endpoint, attempt) => endpoint === "b" ? { block: "0x2a" } : attempt === 1 ? { code: -32005 } : { httpStatus: 503 },
+      async ({ resolved, h, reads, b }) => {
+        expect(await resolved.client.getBlockNumber({ cacheTime: 0 })).toBe(42n);
+        expect(reads).toEqual({ a: 2, b: 1 });
+        expect(resolved.url).toBe(b);
+        expect(resolved.source).toBe("chainlist");
+        expect(resolved.failedOverInCall).toBe(true);
+        expect(h.state.chosen[1]?.url).toBe(b);
+      },
+    );
   });
 });

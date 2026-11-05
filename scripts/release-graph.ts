@@ -25,10 +25,8 @@ export type ReleaseWorkflows = z.infer<typeof ReleaseWorkflowsSchema>;
 // Executed before a cut and on main. This is policy over parsed workflow graphs, not a lint
 // approximation: adding a covered channel without making it an ancestor of publish is refused.
 export function validateReleaseGraph(workflows: ReleaseWorkflows, repo: string, tag?: string): void {
-  if (repo !== "Cork-Technology/cork-cli" && repo !== "Cork-Technology/cork-cli-private") throw new Error("unknown release component");
-  const privateRepo = repo === "Cork-Technology/cork-cli-private";
+  if (repo !== "Cork-Technology/cork-cli") throw new Error("unknown release component");
   if (tag && !/^v\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(tag)) throw new Error("unsupported release tag");
-  if (privateRepo && tag && !/-rc\.\d+$/.test(tag)) throw new Error("private stable publication is unsupported");
   for (const [name, workflow] of Object.entries(workflows)) {
     const active = new Set<string>(), done = new Set<string>();
     function visit(id: string): void {
@@ -89,7 +87,7 @@ export function validateReleaseGraph(workflows: ReleaseWorkflows, repo: string, 
   const expectedSmoke: Record<string, string> = { "ubuntu-latest": "ch-linux-x64", "ubuntu-24.04-arm": "ch-linux-arm64", "macos-latest": "ch-darwin-arm64", "windows-latest": "ch-windows-x64.exe" };
   if (smoke.length !== 4 || smoke.some((row) => row.os === undefined || expectedSmoke[row.os] !== row.asset) || new Set(smoke.map((row) => row.os)).size !== 4) throw new Error("complete four-platform smoke matrix required");
   const deployIf = (jobs["deploy-cvm"].if ?? "").replace(/\s/g, "").replace(/^\$\{\{|\}\}$/g, "");
-  if (deployIf !== "github.repository=='Cork-Technology/cork-cli'&&needs.apk-repo.outputs.candidate=='false'") throw new Error("deployment must exclude private and candidate channels");
+  if (deployIf !== "github.repository=='Cork-Technology/cork-cli'&&needs.apk-repo.outputs.candidate=='false'") throw new Error("deployment must require the public repository and exclude candidates");
   const builder = workflows.build.jobs.build;
   if (!builder) throw new Error("missing reusable builder");
   const attest = builder.steps?.find((step) => step.uses?.startsWith("actions/attest-build-provenance@"));
@@ -104,15 +102,13 @@ export function validateReleaseGraph(workflows: ReleaseWorkflows, repo: string, 
   if (JSON.stringify(archs) !== JSON.stringify(["aarch64", "x86_64"])) throw new Error("both package architectures required");
   const imageAttest = apkJobs.publish.steps?.find((step) => step.uses?.startsWith("actions/attest-build-provenance@"));
   if (imageAttest?.with?.["subject-name"] !== "${{ env.IMAGE_NAME }}" || imageAttest.with["subject-digest"] !== "${{ env.IMAGE_DIGEST }}" || imageAttest.with["push-to-registry"] !== true) throw new Error("image identity/digest registry attestation required");
-  if (privateRepo) {
-    requireAncestor(workflows.toolchain.jobs, "preflight", "rehearsal-build");
-    const rehearsal = workflows.toolchain.jobs["rehearsal-build"];
-    const rehearsalIf = (rehearsal?.if ?? "").replace(/\s/g, "").replace(/^\$\{\{|\}\}$/g, "");
-    if (rehearsalIf !== "(github.repository=='Cork-Technology/cork-cli'||github.repository=='Cork-Technology/cork-cli-private')&&github.event_name!='pull_request'") throw new Error("private complete rehearsal must not be skipped");
-    const rehearsalArchs = rehearsal.strategy?.matrix?.include?.map((row) => row.arch).sort();
-    if (JSON.stringify(rehearsalArchs) !== JSON.stringify(["aarch64", "x86_64"])) throw new Error("private rehearsal requires both architectures");
-    requireAncestor(workflows.toolchain.jobs, "rehearsal-build", "rehearsal-image");
-  }
+  requireAncestor(workflows.toolchain.jobs, "preflight", "rehearsal-build");
+  const rehearsal = workflows.toolchain.jobs["rehearsal-build"];
+  const rehearsalIf = (rehearsal?.if ?? "").replace(/\s/g, "").replace(/^\$\{\{|\}\}$/g, "");
+  if (rehearsalIf !== "github.repository=='Cork-Technology/cork-cli'&&github.event_name!='pull_request'") throw new Error("complete public rehearsal must not be skipped");
+  const rehearsalArchs = rehearsal.strategy?.matrix?.include?.map((row) => row.arch).sort();
+  if (JSON.stringify(rehearsalArchs) !== JSON.stringify(["aarch64", "x86_64"])) throw new Error("rehearsal requires both architectures");
+  requireAncestor(workflows.toolchain.jobs, "rehearsal-build", "rehearsal-image");
 }
 
 if (import.meta.main) {

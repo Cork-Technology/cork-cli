@@ -135,7 +135,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     envelope: "unavailable",
     contract:
       "well-formed input breaking a domain rule the venue or chain would also reject — refused locally with the same complaint (exit 3, never exit 2); private_order is taker-fill's exclusivity refusal (the signed allowed-sender suffix is not this fill's sender — the LOP would revert PrivateOrder); settler_not_recognized and citation_unresolved are the two INFO siblings that relay with a caution instead; fee_view_mismatch is INFO on an ok pool read of a 10-field manager whose market() tuple (the identity) and swapFee/unwindSwapFee views disagree — a chain fact to branch on, the tuple is what the result carries",
-    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance", "private_order", "fee_view_mismatch"],
+    codes: ["invalid_order_terms", "invalid_pair", "invalid_state", "settler_mode_mismatch", "settler_retired", "settler_not_recognized", "quote_ref_unverifiable", "citation_unresolved", "recipe_refused", "unsafe_shared_balance", "private_order", "fee_view_mismatch", "jit_permit_binding_unverified", "jit_permit_conflict"],
   },
   {
     family: "jit & prediction",
@@ -145,6 +145,7 @@ export const WARNING_FAMILIES: readonly WarningFamily[] = [
     codes: [
       "jit_market_notice", "jit_pool_mismatch", "jit_side_mismatch", "oracle_already_deployed", "pool_already_exists",
       "oracle_not_deployable", "oracle_not_deployed", "oracle_rate_unreadable", "stale_share_prediction", "share_prediction_unavailable",
+      "jit_permit_unavailable",
       "rate_drift_notice", "constraint_window_notice", "oco_group_notice", "contract_maker_pre_rest", "expiry_far_future", "roles_not_granted", "implementation_not_approved", "implementation_gate_bypassed", "maker_not_ready",
       "recipe_generation_notice", "rollover_contract_exists", "premium_cap_estimated", "cover_mode_mismatch", "reference_loss_unreported", "fixed_rate_in_the_money", "module_identity_unverified",
     ],
@@ -222,6 +223,43 @@ refresh-order and answer-rfq (1inch LOP v4 domain), rollover-intent (CorkSettler
 rfq-write (the venue's \`Cork RFQ\` domain). The result carries the full \`typedData\`
 (domain/types/primaryType/message).
 
+Maker cST permit preparation is a **separate first signature**. For a JIT maker-order or
+answer-rfq, inspect \`data.jit.permitPreparation\` and \`data.orderSignable\` before signing:
+
+- \`awaiting-signature\`: sign \`data.jit.permitTypedData\` (ERC-2612 **token** domain, not
+  the LOP domain). Insert that signature into the unsigned row in
+  \`data.jit.reprepareInput.action.jitMarket.permits\`, then re-prepare the **complete**
+  input unchanged. It pins the recipe, constraint, token, amounts, account, generation,
+  deadline and request identity. Keep both \`nonce\` and \`typedDataHash\`.
+- Re-preparation checks the current token domain/nonce and verifies the signature.
+  A stale or mismatched binding refuses; prepare and sign a fresh permit rather than
+  editing its metadata to conceal the mismatch. Only then sign the **new**
+  \`data.typedData\` LOP order: inserting the permit changes its extension and hash.
+- \`unavailable\`: no signable permit; \`orderSignable:false\` and execution steps prohibit
+  signing/submitting the preliminary order. A returned unsigned order is not proof of
+  fillability. Restore readable token state/simulation, or create the pool and approve
+  cST to the LOP first. Failed reads never mean a nonexistent token or nonce zero.
+- \`satisfied\` means a deployed cST allowance covers this pull. \`verified\` means a pinned
+  permit passed these checks; \`supplied\` preserves an existing unpinned signed row
+  without additional qualification. None guarantees future fillability.
+
+The helper returns one cST permit, owner = account, spender = LOP, value = makingAmount
+(cST base units), finite absolute deadline. \`jitMarket.permitDeadline\` pins that deadline;
+by default it is the initial requested order expiry, or ten minutes when TTL is omitted.
+The helper-dependent order cannot outlive that pin, even after a signing delay or
+with omitted TTL; the signed permit is not extended. RFQ freshness and relative
+expiry echoes come from the decoded order. Cited RFQ inputs retain citations without
+adding uncited premium/expiry fields.
+Existing token domain and owner nonce are read at one block; a newborn's are read after
+successful pool creation in the same bounded simulation. No token-name guessing is used.
+Pinned EOA permits need exactly 65 bytes, canonical v=27/28 and low-S, not compact or
+parity-0/1 signatures. Exact EIP-7702 designators remain ECDSA-capable on v/r/s;
+bytes-wire coded owners, including delegated EOAs, still require ERC-1271. Existing
+unpinned rows retain their unqualified path; standing allowance requires no added
+permit row. The legacy route rejects helper pins rather than discarding them.
+Ordinary/unpinned/standing-allowance lifetime semantics stay unchanged. Collateral
+approval to the adapter is separate. BUY-maker and Permit2 paths receive no helper.
+
 - Sign with \`eth_signTypedData_v4\` over the returned domain and message, client-side.
 - **Maker orders** then go through \`cork_prepare_orders\` finalize-maker-order (signature
   recovery + exact-bytes reconstruction check); its \`submitInput\` passes VERBATIM to
@@ -233,8 +271,9 @@ rfq-write (the venue's \`Cork RFQ\` domain). The result carries the full \`typed
   including \`salt = keccak256(UTF-8(canonical selected venue origin))\`. Never
   omit the salt or reuse a proof on another venue. Upgrading requires a matching
   salt-bound API and client; old pending proofs must be re-prepared and re-signed.
-- **answer-rfq** signs twice, in order: the maker order, then the rfq-write of the answer that
-  carries it. Its \`data.execution.then\` lists every step.
+- **answer-rfq** signs the verified final maker order, then the rfq-write of the answer that
+  carries it. When a cST permit is needed, complete that extra signature/re-preparation
+  FIRST. Its \`data.execution.then\` lists the ordering.
 - \`cork_submit\` relays only — it recomputes every commitment locally before relaying and
   never signs.
 

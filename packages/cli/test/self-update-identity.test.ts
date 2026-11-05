@@ -9,7 +9,7 @@
 //     resolved, offline and bounded, before the swap.
 // The staged "binary" here is a REAL executable script, run as a real child process: the identity
 // gate's whole job is to execute the artifact, so mocking that away would test nothing.
-import { beforeEach, afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +17,6 @@ import { resolveTagCommit, verifyStagedIdentity } from "../src/self-update.ts";
 
 const COMMIT = "a".repeat(40);
 const TAG = "v9.9.9";
-const priorToken = process.env.CORK_GITHUB_TOKEN;
-beforeEach(() => { process.env.CORK_GITHUB_TOKEN = "fixture-authorized-token"; });
-afterEach(() => { if (priorToken === undefined) delete process.env.CORK_GITHUB_TOKEN; else process.env.CORK_GITHUB_TOKEN = priorToken; });
 
 /** Write an executable shell script and return its path — a stand-in release artifact. */
 function stagedBinary(body: string): string {
@@ -107,13 +104,9 @@ describe("verifyStagedIdentity: the artifact must BE the build we resolved", () 
     const bin = stagedBinary('echo "boom: not a ch binary" >&2\nexit 3');
     expect(await verifyStagedIdentity(bin, expected)).toMatchObject({ ok: false, error: expect.stringContaining("boom: not a ch binary") });
   });
-  it("does not echo private artifact stdout/stderr in refusal diagnostics", async () => {
-    const secret = "fixture-read-credential";
-    const privateExpected = { ...expected, repository: "Cork-Technology/cork-cli-private" };
-    const stderr = await verifyStagedIdentity(stagedBinary(`echo '${secret}' >&2\nexit 3`), privateExpected);
-    const stdout = await verifyStagedIdentity(stagedBinary(`echo '${identityJson({ version: secret })}'`), privateExpected);
-    expect(stderr.ok).toBe(false); expect(stdout.ok).toBe(false);
-    expect(JSON.stringify([stderr, stdout])).not.toContain(secret);
+  it("refuses an exposed foreign repository while accepting the public identity", async () => {
+    expect(await verifyStagedIdentity(stagedBinary(`echo '${identityJson({ repository: "other/foreign" })}'`), expected)).toMatchObject({ ok: false, error: expect.stringContaining("another repository") });
+    expect(await verifyStagedIdentity(stagedBinary(`echo '${identityJson({ repository: "Cork-Technology/cork-cli" })}'`), expected)).toEqual({ ok: true });
   });
 
   it("refuses output that is not JSON, and JSON that is not an object", async () => {

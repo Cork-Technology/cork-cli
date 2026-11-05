@@ -46,9 +46,9 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/release-graph.ts
-      - name: Admit the authenticated component release
+      - name: Admit the public component release
         env:
-          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: sh scripts/release-preflight.sh release
 
@@ -66,8 +66,6 @@ jobs:
   build-primary:
     needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
-    secrets:
-      CORK_GITHUB_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN }}
     permissions:
       contents: read
       packages: read
@@ -82,8 +80,6 @@ jobs:
   build-shadow:
     needs: version-gate
     uses: ./.github/workflows/build-binaries.yml
-    secrets:
-      CORK_GITHUB_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN }}
     permissions:
       contents: read
       packages: read
@@ -250,7 +246,7 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ needs.apk-repo.outputs.image-digest }}
           PUBLISHED_IMAGE: ${{ needs.apk-repo.outputs.image-name }}
-          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           # The release attestation covers the tag and the release ASSETS; the image has its own
@@ -265,7 +261,7 @@ jobs:
           cat dist/image.txt
       - name: Create the (immutable) release from the attested primary bytes
         env:
-          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           GH_RELEASE_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           PUBLISHED_IMAGE: ${{ needs.apk-repo.outputs.image-name }}
@@ -278,11 +274,7 @@ jobs:
           # first audited/production line) drops the flag. An -rc is always pre-release. Version is the
           # sole signal; no external flag.
           case "${{ github.ref_name }}" in v0.*|*-*) PRE="--prerelease";; *) PRE="";; esac
-          LATEST=""
-          case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) LATEST="--latest=false" ;; esac
           # A release names the channels its claims cover. A candidate publishes the ghcr image
-          VERIFY_PREFIX=""
-          case "$GITHUB_REPOSITORY" in Cork-Technology/cork-cli-private) VERIFY_PREFIX="GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" " ;; esac
           # only; a stable also publishes the apk repository. :latest moves only from a bare v1.0.0+
           # tag (apk-repo.yml) — the v0.5.0 body claimed it and was wrong (2026-09-04). The
           # two bodies must therefore not claim the same set, and neither may claim :latest below 1.0.
@@ -293,7 +285,7 @@ jobs:
           - the \`cork-*.tgz\` SDK packages,
           - the ghcr image \`$IMAGE_NAME:${{ github.ref_name }}\`.
 
-          Every binary and tarball is attested and listed in \`checksums.txt\`. \`image.txt\` names the image by digest; the image was pushed and attested before this release was published. A candidate does not publish the apk repository or the \`:latest\` image — those are production only." ;;
+          Every binary and tarball is attested and listed in \`checksums.txt\`. \`image.txt\` names the image by digest; the image was pushed and attested before this release was published. A candidate does not publish the apk repository or the \`:latest\` image — those are production only. Hosted MCP deployment is excluded: verify it separately by image digest." ;;
             *)      CHANNELS="This release covers four:
 
           - the \`ch-*\` binaries,
@@ -303,38 +295,7 @@ jobs:
 
           Every binary and tarball is attested and listed in \`checksums.txt\`. \`image.txt\` names the image by digest; the image and the apk channel were published before this release was. Each apk carries its own signature and SLSA provenance. One channel is excluded: the hosted MCP deployment is not covered by these checksums — verify it by its own image digest." ;;
           esac
-          case "$GITHUB_REPOSITORY" in
-            Cork-Technology/cork-cli-private)
-              SDK_INSTALL="These assets are private. Set an explicit least-privilege CORK_GITHUB_TOKEN that can read this repository, then download, verify, and install local tarballs (never put a credential in a package URL):
-
-          \`\`\`sh
-          GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" gh release download $GITHUB_REF_NAME --repo $GITHUB_REPOSITORY --pattern 'cork-*.tgz'
-          for asset in cork-*.tgz; do GH_HOST=github.com GH_DEBUG= GH_TOKEN=\"\$CORK_GITHUB_TOKEN\" gh attestation verify \"\$asset\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/build-binaries.yml\" --source-ref refs/tags/$GITHUB_REF_NAME --source-digest $GITHUB_SHA; done
-          \`\`\`
-
-          Merge these local-file entries into your existing \`package.json\` (the overrides prevent transitive Cork dependencies from falling through to the unpublished npm versions):
-
-          \`\`\`json
-          {
-            \"dependencies\": {
-              \"@cork/schemas\": \"file:./cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
-              \"@cork/core\": \"file:./cork-core-${GITHUB_REF_NAME#v}.tgz\",
-              \"@cork/mcp\": \"file:./cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
-            },
-            \"overrides\": {
-              \"@cork/schemas\": \"file:./cork-schemas-${GITHUB_REF_NAME#v}.tgz\",
-              \"@cork/core\": \"file:./cork-core-${GITHUB_REF_NAME#v}.tgz\",
-              \"@cork/mcp\": \"file:./cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
-            }
-          }
-          \`\`\`
-
-          \`\`\`sh
-          bun install --ignore-scripts
-          \`\`\`
-
-          Set \`CORK_GITHUB_TOKEN\` for authenticated private config and release reads; install \`gh\` for private self-update provenance verification, which uses the same explicit token. Log your container client into GHCR with read:packages access before pulling \`$IMAGE_NAME:$GITHUB_REF_NAME\`. This candidate has no Pages channel, latest alias, or hosted deployment." ;;
-            *) SDK_INSTALL="The \`cork-*.tgz\` assets are the npm packages, attested and pinned by your lockfile's sha512. Verify the downloaded archives against this repository, builder, tag and source commit before installation. Merge dependencies AND overrides into your \`package.json\` so transitive Cork dependencies do not fall through to unpublished npm versions:
+          SDK_INSTALL="The \`cork-*.tgz\` assets are the npm packages, attested and pinned by your lockfile's sha512. Verify the downloaded archives against this repository, builder, tag and source commit before installation. Merge dependencies AND overrides into your \`package.json\` so transitive Cork dependencies do not fall through to unpublished npm versions:
 
           \`\`\`json
           {
@@ -349,9 +310,20 @@ jobs:
               \"@cork/mcp\": \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cork-mcp-${GITHUB_REF_NAME#v}.tgz\"
             }
           }
-          \`\`\`" ;;
+          \`\`\`"
+          CHANGE_SUMMARY="Read this tag's CHANGELOG.md for functionality, migration instructions, review status and limits."
+          case "$GITHUB_REF_NAME" in
+            v0.8.0-rc.5)
+              CHANGE_SUMMARY="JIT maker-order and answer-rfq now return a separate cST ERC-2612 permit signing payload and complete pinned re-preparation input. Domain and owner nonce come from actual existing-token state or post-creation reads in a bounded simulation. Sign the permit first, insert it, re-prepare, then sign the NEW LOP order: the extension/hash changes. A preliminary order with orderSignable:false is not ready to sign. RFQ derivation honors its carried constraint under resolver drift. Standing allowances, existing unpinned signed rows, adapter signature variants, BUY-maker and Permit2 behavior are preserved. Collateral approval remains separate.
+
+          This candidate also includes bounded venue attribution and opt-in privacy-filtered hosted HTTP MCP analytics; CLI/stdio MCP collect no analytics. Salted RFQ signing, API 0.5 compatibility and RC/production gate separation are unchanged.
+
+          Delivery in this candidate is public-only: config, updates, compiler, packaging and release helpers use the public repository, with unsupported repository identities refused. Public provenance, integrity, staged identity and publication-last gates remain intact.
+
+          These source changes and local fixture checks do not establish deployed provider/simulation support, EVM execution, hosted deployment or future fillability. Release artifacts/channels are qualified separately by this tag's workflow; historical exceptions are not renewed by this text. See the tagged changelog and signing guides before upgrading."
+              ;;
           esac
-          GH_TOKEN="$GH_RELEASE_TOKEN" gh release create "${{ github.ref_name }}" $PRE $LATEST --repo "$GITHUB_REPOSITORY" \
+          GH_TOKEN="$GH_RELEASE_TOKEN" gh release create "${{ github.ref_name }}" $PRE --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "${{ github.ref_name }}" \
             --notes "A frozen record of one version. Living docs: https://docs.cork.tech · other versions: the Releases page.
@@ -379,6 +351,12 @@ jobs:
 
           Guide: [docs/sdk.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/sdk.md).
 
+          ### Changes and signing compatibility
+
+          $CHANGE_SUMMARY
+
+          Signing sequence: [JIT permit guide](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/jit-order-anatomy.md#3-the-permit-rule).
+
           ### Channels
 
           $CHANNELS
@@ -386,7 +364,7 @@ jobs:
           ### Verify
 
           \`\`\`
-          ${VERIFY_PREFIX}gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml --source-ref refs/tags/${{ github.ref_name }} --source-digest ${{ github.sha }}
+          gh attestation verify <asset> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/build-binaries.yml --source-ref refs/tags/${{ github.ref_name }} --source-digest ${{ github.sha }}
           \`\`\`
 
           Reproduce it with the same commit and the Bun pinned by mise.toml:
@@ -399,7 +377,7 @@ jobs:
 
           ### Compatibility
 
-          The covered surface is the JSON output, the tool names, the input schemas, and the exit codes. This release can change that surface. The \`${GITHUB_REF_NAME#v}\` section of CHANGELOG.md lists every change under Breaking and Changed. Read those entries, then rebuild before you upgrade.
+          The covered surface is JSON output, tool names, input schemas, exit codes and the released public SDK contract. The \`${GITHUB_REF_NAME#v}\` section of [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) records additions, fixes and any breaking changes. Read its migration/signing instructions before upgrading all Cork packages together.
 
           Cork runs no on-chain deployment of this tool. This is a partner-preview release — unaudited; pin the Distribution you integrate against for its stream. See this version's [changelog](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for its review status and recorded exceptions. A \`-rc\` tag is a release candidate; we flag it pre-release." \
             dist/ch-* dist/cork-*.tgz dist/checksums.txt dist/image.txt

@@ -162,6 +162,71 @@ const T = {
 };
 
 const CATALOG: Mutant[] = [
+  // Reviewed permit bug classes: these alter reachable signing/expiry/input behavior,
+  // not prose. Keep the existing catalogue unfiltered and the wording-only retirement.
+  {
+    id: "permit-cited-rfq-exclusivity-lost",
+    file: "packages/core/src/handlers/prepare-orders-sugars.ts",
+    find: '...(cited ? {} : { expiryTimestamp: String(expiryTimestamp) })',
+    replace: '...{ expiryTimestamp: String(expiryTimestamp) }',
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-unpinned-duplicates-refused",
+    file: "packages/core/src/handlers/jit-permit.ts",
+    find: "matching.length > 1 && matching.some(p => p.nonce !== undefined || p.typedDataHash !== undefined)",
+    replace: "matching.length > 1",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-eight-rows-hide-standing-allowance",
+    file: "packages/core/src/handlers/jit-permit.ts",
+    find: "if (allowance >= args.amount)",
+    replace: "if (allowance >= args.amount && args.permits.length < 8)",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-eoa-wire-criteria-skipped",
+    file: "packages/core/src/handlers/jit-permit.ts",
+    find: "    if (!contractOwner) {",
+    replace: "    if (false) {",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-legacy-pins-discarded",
+    file: "packages/core/src/handlers/jit.ts",
+    find: "  if ((jm.permits ?? []).some(p => p.nonce !== undefined || p.typedDataHash !== undefined)) {",
+    replace: "  if (false) {",
+    tests: [T.mrLegacy],
+  },
+  {
+    id: "permit-final-order-outlives-deadline",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: "const expiry = cstPermitDeadline !== undefined && (requestedExpiry === undefined || requestedExpiry > cstPermitDeadline) ? cstPermitDeadline : requestedExpiry;",
+    replace: "const expiry = requestedExpiry;",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-delegated-vrs-helper-refused",
+    file: "packages/core/src/handlers/jit-permit.ts",
+    find: '!(args.wire === "vrs" && isEip7702Designator(ownerCode))',
+    replace: "true",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-delegated-bytes-bypasses-1271",
+    file: "packages/core/src/handlers/jit-permit.ts",
+    find: 'args.wire === "vrs" && isEip7702Designator(ownerCode)',
+    replace: "isEip7702Designator(ownerCode)",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
+  {
+    id: "permit-delegated-newborn-pre-rest-refused",
+    file: "packages/core/src/handlers/prepare-orders.ts",
+    find: '!(permitWire === "vrs" && isEip7702Designator(code))',
+    replace: "true",
+    tests: ["packages/core/test/jit-permit.test.ts"],
+  },
   { id: "forself-jit-creator-pool-unbound", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: 'if (!creatorCode || creatorCode === "0x" || !isAddressEqual(creatorPool, phoenix.poolManager))', replace: 'if (!creatorCode || creatorCode === "0x")', tests: ["packages/core/test/rollover-fill.test.ts"] },
   { id: "forself-jit-signed-extra-data-dropped", file: "packages/core/src/handlers/prepare-rollover-fill.ts", find: "extraData: jitParams.additionalData, oracleSalt:", replace: 'extraData: "0x", oracleSalt:', tests: ["packages/core/test/rollover-fill.test.ts"] },
   { id: "forself-jit-decoded-market-hidden", file: "packages/core/src/bundle/decode.ts", find: '...(functionName === "rolloverForSelfWithMarket" ? { market: args[1] } : {})', replace: "...{}", tests: ["packages/core/test/rollover-fill.test.ts"] },
@@ -2851,8 +2916,8 @@ const CATALOG: Mutant[] = [
     // answer-rfq's handler moves family without the topic moving (read in the eval stub world).
     id: "docs-signing-family-answer-rfq-tx",
     file: "packages/core/src/handlers/prepare-orders-sugars.ts",
-    find: "      execution: executionAnswerRfq(cited),",
-    replace: "      execution: { ...executionAnswerRfq(cited), kind: \"eth-transaction\" as const },",
+    find: "        : executionAnswerRfq(cited),",
+    replace: "        : { ...executionAnswerRfq(cited), kind: \"eth-transaction\" as const },",
     tests: [T.docTopics],
   },
   {
@@ -4267,8 +4332,8 @@ const CATALOG: Mutant[] = [
     // live 2026-08-07 (v1.3.0-rc.1 default + v1.1-bound registry) that predicts nothing.
     id: "predict-shares-controller-binding-dropped",
     file: "packages/core/src/market-registry.ts",
-    find: "    poolManager = getAddress(\n      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }),\n    );",
-    replace: "    void (await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\" }));",
+    find: "    poolManager = getAddress(\n      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\", ...(args.blockNumber !== undefined ? { blockNumber: args.blockNumber } : {}) }),\n    );",
+    replace: "    void (await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: \"CORK_POOL_MANAGER\", ...(args.blockNumber !== undefined ? { blockNumber: args.blockNumber } : {}) }));",
     tests: [T.mr],
   },
 
@@ -5170,15 +5235,6 @@ const CATALOG: Mutant[] = [
     file: "packages/core/src/handlers/jit.ts",
     find: "        else if (v.status === \"reverted\") warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
     replace: "        else if (false) warnings.push({ code: \"would_revert\", message: `recipe.verify REVERTS",
-    tests: ["packages/core/test/answer-rfq.test.ts"],
-  },
-  {
-    // A FixedRateOracle is keyed on the rate alone: the pair-oracle notice (salt, sources,
-    // live rate) describes a different contract.
-    id: "jit-fixed-oracle-notice",
-    file: "packages/core/src/handlers/jit.ts",
-    find: "      warnings.push(source === \"fixed\"\n        ? { code: \"oracle_not_deployed\", message: `the FixedRateOracle",
-    replace: "      warnings.push(false\n        ? { code: \"oracle_not_deployed\", message: `the FixedRateOracle",
     tests: ["packages/core/test/answer-rfq.test.ts"],
   },
   {
@@ -8809,10 +8865,10 @@ const CATALOG: Mutant[] = [
     tests: [T.releaseWorkflows],
   },
   {
-    id: "release-graph-private-stable-admitted",
+    id: "release-graph-foreign-component-admitted",
     file: "scripts/release-graph.ts",
-    find: 'if (privateRepo && tag && !/-rc\\.\\d+$/.test(tag))',
-    replace: 'if (false && tag)',
+    find: 'if (repo !== "Cork-Technology/cork-cli")',
+    replace: 'if (false)',
     tests: [T.releaseWorkflows],
   },
   {

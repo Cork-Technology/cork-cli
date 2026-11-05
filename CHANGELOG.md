@@ -5,12 +5,39 @@ change on covered surface bumps the **minor**. The covered surface for this comp
 output, tool names, input schemas, exit codes, and the released public SDK contract.
 Human-readable text and log formats are not covered.
 
-## [Unreleased]
+## [0.8.0-rc.5] — release preparation
 
 ### Added
 
+- JIT maker cST preparation returns a separate `data.jit.permitTypedData` ERC-2612 payload and complete `jit.reprepareInput` for `maker-order` and `answer-rfq`. The token's actual EIP-712 domain and owner nonce come from one pinned-block read for an existing token, or post-creation reads in one bounded simulation for a newborn token. No token-name or nonce-zero inference is used.
+- Optional `jitMarket.permitDeadline` pins a finite deadline. Helper-generated permit rows carry `nonce` and `typedDataHash`; re-preparation checks current domain/nonce and the EOA or supported ERC-1271 signature before the final LOP order is signed. Inserting the permit changes the extension and order hash. Collateral approval to the adapter is separate.
+- Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. RC/production gate separation, salted RFQ signing and API 0.5 compatibility are unchanged. No hosted deployment is implied.
 
-- Venue requests carry bounded client attribution (`X-Cork-Client` and `User-Agent`); hosted HTTP MCP also carries attribution-only session tokens. Opt-in hosted MCP analytics use privacy-filtered events, queue/day bounds, kill switches and bounded shutdown. CLI and stdio MCP collect no analytics. This exports the canonical private tracking implementation without changing the RC/production gate split, salted RFQ signing or API0.5 compatibility. No hosted deployment or release is implied.
+### Fixed
+
+- RFQ preparation honors a carried constraint during its initial pool derivation, keeping answer metadata, maker cST, signed JIT identity and re-preparation material consistent when live resolution changes.
+- Successful viem empty-account-code reads classify an EOA correctly; rejected code reads remain unavailable, and nonempty contract-account bytecode still requires the supported signature adapter.
+- Cited RFQ permit re-preparation retains citation-only quote fields, so the returned complete input can be signed and re-prepared without conflicting uncited expiry/premium fields.
+- Preserve existing unpinned permit arrays, including duplicate token rows, and adequate standing allowances even with eight existing rows. Legacy JIT refuses unsupported helper pins rather than silently discarding them.
+- Qualify the actual encoded EOA permit signature: 65 bytes, canonical `v=27/28` and low-S. Delegated EOAs can use v/r/s for existing or newborn cST; bytes-wire coded owners still follow the token's ERC-1271 checks.
+- Bound helper-dependent final order lifetime by the signed permit's finite deadline, including signing delays and omitted TTL. RFQ freshness and expiry echoes follow the actual decoded order; ordinary, unpinned and standing-allowance lifetimes are unchanged.
+- Automatic RPC clients let HTTP/transport failures reach the existing outer failover after one attempt, without nested HTTP retries. Retryable numeric JSON-RPC codes `-1`, `-32005`, `-32603` and `429` retain up to three same-endpoint retries with the predecessor's 150/300/600ms backoff; exhaustion or a non-retryable error preserves existing error handling. A transport failure after a numeric error still reaches outer failover immediately. Explicit and kill-switch clients, providers, discovery and timeouts are unchanged. This restores transient numeric recovery without claiming to repair persistent-error attribution, prove the hosted Ethereum timeout's phase/provider cause, or guarantee a 30-second end-to-end read.
+
+### Changed
+
+- Public-only release identity and delivery: defaults, update discovery, asset downloads, native compilation, APK/image helpers and release workflows accept only the public component repository. Optional authenticated-channel routing, credential configuration, prerelease-feed selection and separate package/image branches are removed from this public source. Unsupported build or release repository inputs fail closed; custom config remains credential-free.
+- Preserve public cache/resource scoping, redirect restrictions, provenance-first self-update with explicitly weaker checksum fallback only when `gh` is unavailable, peeled source/ref binding, staged identity checks and atomic replacement. Public signing, attestations, immutable Release readback, release-environment review and candidate/stable deployment guards remain required. No other repository or existing release is modified.
+
+### Compatibility and signing
+
+- The helper adds fields without replacing `data.typedData`, which remains the LOP order. An `awaiting-signature` or `unavailable` permit status reports `orderSignable:false`; do not sign or submit that preliminary order. A failed metadata/simulation read is explicit, never evidence of token absence. Mismatched or stale pinned permits refuse. Existing standing allowances and unpinned pre-signed permit inputs remain supported; BUY-maker and Permit2 paths do not gain token-domain/nonce reads. Generation/address selection, adapter signature variants and partial-fill allowance skipping are unchanged.
+- `ch sign` refuses a preliminary `orderSignable:false` envelope before accessing a keystore or prompting. Sign the separate permit payload first; it never silently signs the preliminary LOP order instead.
+- See [the signing sequence](docs/jit-order-anatomy.md#3-the-permit-rule), [SDK](docs/sdk.md#jit-maker-permit-signing) and [CLI/MCP](docs/cli.md#jit-maker-permit-signing). A permit signature is an extra prerequisite before the final maker-order signature and any RFQ-write signature.
+
+### Release preparation and limits
+
+- Synchronize all four package manifests and all four workspace lock versions to `0.8.0-rc.5`, without dependency-resolution changes. Code, regressions, signing documentation and release-body preparation belong to this same candidate.
+- Local deterministic fixture and cryptographic checks do not prove deployed provider support, EVM execution, hosted deployment, final attested release assets, independent review or human release approval. Those remain separate exact-candidate gates. This entry does not renew historical exceptions or assert they have been resolved.
 
 ## [0.8.0-rc.4] — release preparation
 

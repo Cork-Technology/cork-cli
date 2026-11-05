@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { compareVersions } from "@cork/core";
 import { envFlag } from "./env.ts";
 
-import { BUILD_REPO, latestReleaseTag, channelCacheKey, type ReleaseRepo } from "../../core/src/release-channel.ts";
+import { BUILD_REPO, latestReleaseTag, channelCacheKey } from "../../core/src/release-channel.ts";
 export const RELEASE_REPO = BUILD_REPO;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NOTIFY_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -65,10 +65,10 @@ export function updateDecision(opts: {
   return { notice, refresh, cacheUpdate };
 }
 
-function readUpdateCache(path: string, repo: ReleaseRepo = RELEASE_REPO): UpdateCache | null {
+function readUpdateCache(path: string): UpdateCache | null {
   try {
     const cache = JSON.parse(readFileSync(path, "utf8")) as UpdateCache;
-    return cache.scope === channelCacheKey(repo, "releases/latest") ? cache : null;
+    return cache.scope === channelCacheKey("releases/latest") ? cache : null;
   } catch {
     return null;
   }
@@ -87,13 +87,12 @@ function writeUpdateCache(path: string, cache: UpdateCache): void {
 export async function refreshUpdateCache(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
-  repo: ReleaseRepo = RELEASE_REPO,
 ): Promise<void> {
   const path = updateCachePath(env);
-  const prior = readUpdateCache(path, repo) ?? {};
-  const next: UpdateCache = { ...prior, scope: channelCacheKey(repo, "releases/latest"), checkedAt: new Date().toISOString() };
+  const prior = readUpdateCache(path) ?? {};
+  const next: UpdateCache = { ...prior, scope: channelCacheKey("releases/latest"), checkedAt: new Date().toISOString() };
   try {
-    next.latest = await latestReleaseTag(repo, env, fetchImpl);
+    next.latest = await latestReleaseTag(fetchImpl);
   } catch {
     // failure is cached via checkedAt so we back off a full interval rather than hammering
   }

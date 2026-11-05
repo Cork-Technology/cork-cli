@@ -1129,10 +1129,10 @@ export async function readForeignSharePool(client: PublicClient, addr: `0x${stri
  *    CARRIES its constraint the poolId — and hence these addresses once created — is pinned at
  *    signing; before creation they are still conditioned on the oracle ADDRESS resolution.
  *  - `unavailable`: the RPC lacks eth_simulateV1/state overrides or the simulation reverted.
- *  cST/cPT are deployed via plain `new PoolShare(...)` (nonce CREATE, NOT CREATE2 — see
- *  SharesFactory.sol), so there is no off-chain address derivation: simulation is the only
- *  predictor. On the 8-field wire fees are NOT part of market identity (callers that only want
- *  the tokens pass 0); on the 10-field wire they ride inside `market` and ARE the identity. */
+ *  The selected phoenix/v0.5 factory deploys deterministic CREATE2 share clones. This helper
+ *  does not generalize a factory derivation across generations: it observes the actual
+ *  creation result. On the 8-field wire fees are NOT part of market identity (callers that
+ *  only want tokens pass 0); on the 10-field wire they ride inside `market` and ARE identity. */
 export interface PredictSharesResult {
   cst?: `0x${string}` | undefined;
   cpt?: `0x${string}` | undefined;
@@ -1145,6 +1145,8 @@ export interface PredictSharesResult {
    *  on a market the FILL rejected while this result said only "unsupported, or config missing" —
    *  a simulated revert is a fact about the market, and the caller must see it. */
   reason?: string | undefined;
+  /** Optional reads executed after creation in the SAME simulated state. */
+  postResults?: readonly { status: string; data?: `0x${string}` | undefined }[] | undefined;
 }
 
 /** The pool manager's creation-time refusals (phoenix IPoolManager, both wires) — the errors a
@@ -1209,6 +1211,10 @@ export async function predictShares(
      *  the state-override grant (cache-read only — no extra RPC on this hot path); omitted =
      *  the compiled fallback, the pre-cache behavior. */
     chainId?: number;
+    /** Permit metadata must be observed at one block, never at an inferred newborn nonce. */
+    blockNumber?: bigint | undefined;
+    /** Re-run creation with metadata reads after the already-predicted token exists in memory. */
+    afterCreateCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[] | undefined;
   },
 ): Promise<PredictSharesResult> {
   // 0. Generation consistency: shares must be read from the pool manager THIS controller
@@ -1221,7 +1227,7 @@ export async function predictShares(
   let poolManager = args.poolManager;
   try {
     poolManager = getAddress(
-      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: "CORK_POOL_MANAGER" }),
+      await client.readContract({ address: args.controller, abi: controllerViewsAbi, functionName: "CORK_POOL_MANAGER", ...(args.blockNumber !== undefined ? { blockNumber: args.blockNumber } : {}) }),
     );
   } catch {
     /* keep the configured fallback */
@@ -1233,8 +1239,9 @@ export async function predictShares(
       abi: sharesAbi,
       functionName: "shares",
       args: [args.poolId],
+      ...(args.blockNumber !== undefined ? { blockNumber: args.blockNumber } : {}),
     })) as readonly [`0x${string}`, `0x${string}`];
-    if (swapToken !== ZERO_ADDRESS) {
+    if (swapToken !== ZERO_ADDRESS && !args.afterCreateCalls) {
       return { cst: getAddress(swapToken), cpt: principalToken === ZERO_ADDRESS ? undefined : getAddress(principalToken), exists: true, status: "read" };
     }
   } catch {
@@ -1255,7 +1262,9 @@ export async function predictShares(
         ...pre.map((c) => ({ to: c.to, data: c.data })),
         { to: args.controller, data: createData },
         { to: poolManager, data: buildSharesCall(args.poolId) },
+        ...(args.afterCreateCalls ?? []),
       ],
+      ...(args.blockNumber !== undefined ? { blockNumber: args.blockNumber } : {}),
       stateOverrides: [
         { address: args.controller, stateDiff: [{ slot: roleMemberSlot(creatorRole, args.adapter), value: toHex(1n, { size: 32 }) }] },
         // The simulating account is a CONTRACT (the role holder) and holds no ETH; an endpoint
@@ -1281,7 +1290,7 @@ export async function predictShares(
       const cpt = getAddress(`0x${last.data.slice(2 + 24, 2 + 64)}`);
       const cst = getAddress(`0x${last.data.slice(2 + 64 + 24, 2 + 128)}`);
       if (cst !== ZERO_ADDRESS) {
-        return { cst, cpt: cpt === ZERO_ADDRESS ? undefined : cpt, exists: false, status: "simulated" };
+        return { cst, cpt: cpt === ZERO_ADDRESS ? undefined : cpt, exists: false, status: "simulated", ...(args.afterCreateCalls ? { postResults: simulated.results.slice(pre.length + 2) } : {}) };
       }
       return { exists: false, status: "unavailable", reason: "the creation leg succeeded but shares(poolId) read a zero cST — the pool the controller created is not the pool id derived here (identity inputs disagree)" };
     }

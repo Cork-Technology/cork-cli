@@ -8,15 +8,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
-const repo = "Cork-Technology/cork-cli-private";
+const repo = "Cork-Technology/cork-cli";
 const token = "fixture-authorized-token";
 const config = '{"schemaVersion":2,"generations":{}}\n';
 let server: Server;
 let origin: string;
-let plan: string | null;
-let visibility: string;
-let packageRepository: { full_name: string; private: boolean } | undefined;
-let immutable: { enabled?: boolean; enforced_by_owner?: boolean };
+let repositoryIdentity: { full_name: string; private: boolean; visibility: string };
 let publishedRelease: { tag_name: string; draft: boolean; prerelease: boolean; immutable?: boolean | string };
 let failure: { path: string; status: number } | undefined;
 let seen: { method: string; path: string; auth: string | undefined }[];
@@ -24,12 +21,12 @@ let liveCommit: string;
 let annotated: boolean;
 const dir = mkdtempSync(join(tmpdir(), "release-preflight-"));
 
-async function run(mode = "release", opts: { repo?: string; tag?: string; token?: string; branch?: string; origin?: string; event?: string; workflowRef?: string } = {}) {
+async function run(mode = "release", opts: { repo?: string; tag?: string; token?: string; branch?: string; origin?: string } = {}) {
   const output = join(dir, "served.json");
   return await new Promise<{ status: number | null; out: string; err: string; output: string }>((resolve) => {
     const child = spawn("sh", [join(root, "scripts/release-preflight.sh"), mode, opts.branch ?? "config/0.7", output], {
       cwd: root,
-      env: { PATH: process.env.PATH, GITHUB_SHA: "a".repeat(40), GITHUB_REPOSITORY: opts.repo ?? repo, RELEASE_TAG: opts.tag ?? "v0.7.0-rc.1", GH_TOKEN: opts.token ?? token, CORK_RELEASE_API_URL: opts.origin ?? origin, GITHUB_EVENT_NAME: opts.event ?? "push", GITHUB_WORKFLOW_REF: opts.workflowRef ?? `${repo}/.github/workflows/release.yml@refs/tags/v0.7.0-rc.1` },
+      env: { PATH: process.env.PATH, GITHUB_SHA: "a".repeat(40), GITHUB_REPOSITORY: opts.repo ?? repo, RELEASE_TAG: opts.tag ?? "v0.7.0-rc.1", GH_TOKEN: opts.token ?? token, CORK_RELEASE_API_URL: opts.origin ?? origin },
     });
     let out = "", err = "";
     child.stdout.on("data", (data) => { out += data; });
@@ -45,16 +42,9 @@ beforeAll(async () => {
     res.setHeader("Content-Type", "application/json");
     if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401).end(JSON.stringify({ message: token })); return; }
     if (failure?.path === path) { res.writeHead(failure.status).end(JSON.stringify({ message: token })); return; }
-    if (path.endsWith("/immutable-releases")) { res.end(JSON.stringify(immutable)); return; }
     if (path.includes("/releases/tags/")) { res.end(JSON.stringify(publishedRelease)); return; }
-    if (path.startsWith("/repos/") && !path.includes("/git/") && !path.includes("/contents/")) {
-      const name = path.slice("/repos/".length);
-      const privateRepo = name.endsWith("-private");
-      res.end(JSON.stringify({ full_name: name, private: privateRepo, visibility: privateRepo ? "private" : "public" }));
-    } else if (path === "/orgs/Cork-Technology") {
-      res.end(JSON.stringify(plan === null ? {} : { plan: { name: plan } }));
-    } else if (path === "/orgs/Cork-Technology/packages/container/cork-cli-private") {
-      res.end(JSON.stringify({ name: "cork-cli-private", package_type: "container", visibility, repository: packageRepository }));
+    if (path === `/repos/${repo}`) {
+      res.end(JSON.stringify(repositoryIdentity));
     } else if (path.includes("/git/ref/tags/")) {
       res.end(JSON.stringify({ object: { type: annotated ? "tag" : "commit", sha: annotated ? "c".repeat(40) : liveCommit } }));
     } else if (path.includes("/git/tags/")) {
@@ -70,7 +60,7 @@ beforeAll(async () => {
   if (!address || typeof address === "string") throw new Error("fixture server has no TCP address");
   origin = `http://127.0.0.1:${address.port}`;
 });
-beforeEach(() => { plan = "enterprise"; visibility = "private"; immutable = { enabled: true, enforced_by_owner: false }; publishedRelease = { tag_name: "v0.7.0-rc.1", draft: false, prerelease: true, immutable: true }; packageRepository = { full_name: repo, private: true }; failure = undefined; seen = []; liveCommit = "a".repeat(40); annotated = false; });
+beforeEach(() => { repositoryIdentity = { full_name: repo, private: false, visibility: "public" }; publishedRelease = { tag_name: "v0.7.0-rc.1", draft: false, prerelease: true, immutable: true }; failure = undefined; seen = []; liveCommit = "a".repeat(40); annotated = false; });
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(dir, { recursive: true, force: true }); });
 
 describe("release admission and authenticated config readback", () => {
@@ -80,39 +70,13 @@ describe("release admission and authenticated config readback", () => {
     expect(r.err).toContain("malformed authentication token");
     expect(seen).toEqual([]);
   });
-  it("requires read-only proof that immutable releases are enabled before private side effects", async () => {
-    for (const value of [{ enabled: false, enforced_by_owner: false }, {}, { enabled: true }]) {
-      immutable = value;
+  it("refuses mismatched repository identity or nonpublic visibility before proceeding", async () => {
+    for (const value of [{ full_name: "other/foreign" }, { private: true }, { visibility: "internal" }]) {
+      repositoryIdentity = { full_name: repo, private: false, visibility: "public", ...value };
       const r = await run("publish");
       expect(r.status).not.toBe(0);
-      expect(r.err).toContain("not confirmed enabled");
+      expect(seen.at(-1)?.path).toBe(`/repos/${repo}`);
     }
-    immutable = { enabled: true, enforced_by_owner: false };
-    for (const status of [401, 403, 404, 500]) {
-      failure = { path: `/repos/${repo}/immutable-releases`, status };
-      const r = await run("publish");
-      expect(r.status).not.toBe(0);
-      expect(r.err).toContain("Administration read required");
-    }
-    expect(seen.every((request) => request.method === "GET")).toBe(true);
-  });
-  it("refuses an unassociated package or a package linked to a different/public repository", async () => {
-    for (const repository of [undefined, { full_name: "Cork-Technology/cork-cli", private: false }, { full_name: repo, private: false }]) {
-      packageRepository = repository;
-      const r = await run("publish");
-      expect(r.status).not.toBe(0);
-      expect(r.err).toContain("associated with the intended private repository");
-    }
-  });
-  it("admits the private image only from the release tag-push graph, never direct backfills", async () => {
-    expect((await run("image")).status).toBe(0);
-    for (const event of ["workflow_dispatch", "release", "workflow_call"]) {
-      const r = await run("image", { event });
-      expect(r.status).not.toBe(0);
-      expect(r.err).toContain("tag-push graph");
-    }
-    expect((await run("image", { workflowRef: `${repo}/.github/workflows/apk-repo.yml@refs/tags/v0.7.0-rc.1` })).status).not.toBe(0);
-    expect((await run("image", { repo: "Cork-Technology/cork-cli", event: "workflow_dispatch", tag: "v1.0.0" })).status).toBe(0);
   });
   it("peels annotated tags and refuses a live tag that moved away from the artifact commit", async () => {
     annotated = true;
@@ -144,45 +108,20 @@ describe("release admission and authenticated config readback", () => {
     expect(r.status).not.toBe(0);
     expect(r.out).not.toContain("exists=false");
   });
-  it("admits only the private component destination, with authorized GETs and no token in output", async () => {
+  it("admits only the public component destination, with authorized GETs and no token in output", async () => {
     const r = await run("publish");
     expect(r.status, r.err).toBe(0);
-    expect(r.out).toContain("image=ghcr.io/cork-technology/cork-cli-private\n");
-    expect(r.out).toContain("private=true\n");
+    expect(r.out).toContain("image=ghcr.io/cork-technology/cork-cli\n");
     expect(r.out).toContain("candidate=true\n");
     expect(r.out + r.err).not.toContain(token);
     expect(seen.every((r) => r.method === "GET" && r.auth === `Bearer ${token}`)).toBe(true);
   });
-  it.each(["team", null, "free"])("refuses unsupported or unreadable private attestation entitlement: %s", async (value) => {
-    plan = value;
-    const r = await run();
-    expect(r.status).not.toBe(0);
-    expect(r.err).toContain("Enterprise Cloud");
-    expect(seen.some((r) => r.path.includes("/packages/"))).toBe(false);
+  it("refuses unknown repository identities before any request", async () => {
+    expect((await run("release", { repo: "Cork-Technology/other" })).status).not.toBe(0);
+    expect(seen).toEqual([]);
   });
-  it.each(["public", "internal"])("refuses a package with visibility %s, without changing it", async (value) => {
-    visibility = value;
-    const r = await run("image");
-    expect(r.status).not.toBe(0);
-    expect(r.err).toContain("not confirmed private");
-    expect(seen.every((r) => r.method === "GET")).toBe(true);
-  });
-  it.each([401, 403, 404, 429, 500])("fails closed when package read returns HTTP %s", async (status) => {
-    failure = { path: "/orgs/Cork-Technology/packages/container/cork-cli-private", status };
-    const r = await run("publish");
-    expect(r.status).not.toBe(0);
-    expect(r.err).toContain(`HTTP ${status}`);
-    expect(r.out + r.err).not.toContain(token);
-  });
-  it("refuses private stable and CVM cuts, and unknown repository identities", async () => {
-    for (const opts of [{ tag: "v0.7.0" }, { tag: "v1.0.0" }, { repo: "Cork-Technology/other" }]) {
-      expect((await run("release", opts)).status).not.toBe(0);
-    }
-    expect((await run("deploy")).status).not.toBe(0);
-  });
-  it("preserves public stable admission without requiring private plan/package credentials", async () => {
-    plan = "team";
-    const r = await run("release", { repo: "Cork-Technology/cork-cli", tag: "v1.0.0" });
+  it("preserves public stable admission with bounded repository and source-tag reads", async () => {
+    const r = await run("release", { tag: "v1.0.0" });
     expect(r.status, r.err).toBe(0);
     expect(r.out).toContain("image=ghcr.io/cork-technology/cork-cli\n");
     expect(r.out).toContain("candidate=false\n");
@@ -195,7 +134,7 @@ describe("release admission and authenticated config readback", () => {
     expect(unauthorized.err).not.toContain(token);
     expect((await run("publish", { origin: "https://untrusted.example" })).status).not.toBe(0);
   });
-  it("reads private config contents with authentication, preserving exact published bytes", async () => {
+  it("reads config contents with authorization, preserving exact published bytes", async () => {
     const r = await run("config-readback");
     expect(r.status, r.err).toBe(0);
     expect(readFileSync(r.output, "utf8")).toBe(config);
@@ -236,7 +175,7 @@ describe.skipIf(spawnSync("yq", ["--version"]).status !== 0)("publication shell 
     expect(extracted.status, extracted.stderr).toBe(0);
     const command = extracted.stdout.replaceAll("${{ github.repository }}", repository).replaceAll("${{ github.ref_name }}", tag).replaceAll("${{ github.sha }}", "a".repeat(40));
     const result = await new Promise<{ status: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn("sh", ["-eu", "-c", command], { cwd: work, env: { PATH: `${join(work, "bin")}:${process.env.PATH}`, GH_TOKEN: token, GH_RELEASE_TOKEN: "fixture-write-token", RELEASE_TAG: tag, GITHUB_REF_NAME: tag, GITHUB_SHA: "a".repeat(40), GITHUB_REPOSITORY: repository, CORK_RELEASE_API_URL: origin, PUBLISHED_IMAGE: publishedImage ?? "ghcr.io/cork-technology/cork-cli-private" } });
+      const child = spawn("sh", ["-eu", "-c", command], { cwd: work, env: { PATH: `${join(work, "bin")}:${process.env.PATH}`, GH_TOKEN: token, GH_RELEASE_TOKEN: "fixture-write-token", RELEASE_TAG: tag, GITHUB_REF_NAME: tag, GITHUB_SHA: "a".repeat(40), GITHUB_REPOSITORY: repository, CORK_RELEASE_API_URL: origin, PUBLISHED_IMAGE: publishedImage ?? "ghcr.io/cork-technology/cork-cli" } });
       let out = "", err = "";
       child.stdout.on("data", (data) => { out += data; });
       child.stderr.on("data", (data) => { err += data; });
@@ -245,11 +184,8 @@ describe.skipIf(spawnSync("yq", ["--version"]).status !== 0)("publication shell 
     return { ...result, args: existsSync(join(work, "called.argv")) ? readFileSync(join(work, "called.argv"), "utf8").split("\0").filter(Boolean) : [] };
   }
 
-  it("never reaches even the intercepted publication boundary on unsupported private entitlements or wrong image identity", async () => {
-    plan = "team";
-    expect((await publication()).args).toEqual([]);
-    plan = "enterprise";
-    const wrongImage = await publication("ghcr.io/cork-technology/cork-cli");
+  it("never reaches the intercepted publication boundary with a substituted image identity", async () => {
+    const wrongImage = await publication("ghcr.io/other/foreign");
     expect(wrongImage.status).not.toBe(0);
     expect(wrongImage.args).toEqual([]);
   });

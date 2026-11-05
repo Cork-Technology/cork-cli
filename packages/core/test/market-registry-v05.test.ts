@@ -211,13 +211,10 @@ describe("a CONTRACT maker (a Safe) with a JIT order whose pool does not exist y
     runTool("cork_prepare_orders", { chainId: 42161, account: DEMO_ACCOUNT, clientRequestId: id, ...input, action: { type: "maker-order", poolId: `0x${"ce".repeat(32)}`, side: "SELL", makerAsset: CST, takerAsset: JIT_TASK_PAIR.collateralAsset, makingAmount: "1000000000000000000", takingAmount: "50000000000000000", jitMarket: { ...JIT_TASK_PAIR, expiryTimestamp: EXPIRY, recipe: LIQUIDITY_RECIPE, permits } } }, ctx);
   type Data = { extension: `0x${string}`; execution: unknown; approvals: Array<{ mechanism: string; wallets: string }> };
 
-  it("phoenix/v0.5, no permit yet: contract_maker_pre_rest names BOTH paths (ERC-1271 permit, or create-pool first)", async () => {
+  it("phoenix/v0.5 contract maker: the permit-free non-mint path retains ERC-1271 approval support", async () => {
     const env = await makerJit(contractMaker(), "v05-contract-maker-0001", []);
     expect(env.state, JSON.stringify(env.warnings)).toBe("ok");
-    const pre = env.warnings.find((w) => w.code === "contract_maker_pre_rest");
-    expect(pre?.message).toContain("ERC-1271");
-    expect(pre?.message).toContain("create-pool");
-    expect(JSON.stringify((env.data as Data).execution)).toContain("create-pool");
+    expect(env.data).not.toHaveProperty("jit.permitPreparation");
     expect((env.data as Data).approvals.find((a) => a.mechanism === "erc2612-permit")?.wallets).toBe("eoa+contract");
   });
 

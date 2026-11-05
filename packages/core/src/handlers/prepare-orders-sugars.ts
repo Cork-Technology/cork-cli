@@ -312,6 +312,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const derive = await handleQuery(
     { resource: "derive-cork-pool", chainId, format: "concise", pageSize: 25, maxPages: 10, filters: { collateralAsset, referenceAsset, expiry: expiryTimestamp.toString(), recipe, swapFeePercentage, unwindSwapFeePercentage, ...(oracleSalt !== undefined ? { oracleSalt } : {}), ...(extraData !== undefined ? { args: extraData } : {}), ...(rateOverride !== undefined ? { rate: rateOverride.toString() } : {}) } } as Parameters<typeof handleQuery>[0],
     ctx,
+    action.jitMarket?.constraint ? { carriedConstraint: { rateMin: BigInt(action.jitMarket.constraint.rateMin), rateMax: BigInt(action.jitMarket.constraint.rateMax), rateChangePerDayMax: BigInt(action.jitMarket.constraint.rateChangePerDayMax), rateChangeCapacityMax: BigInt(action.jitMarket.constraint.rateChangeCapacityMax) } } : undefined,
   );
   // A gated derive keeps its reason FIRST (the envelope contract) — but the warnings gathered
   // before it (an incomplete inline block, an undeclared fill sender, an out-of-window expiry)
@@ -465,7 +466,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
   const env = await sugar.prepare({ ...input, action: makerAction }, ctx);
   if (env.state !== "ok") return { ...env, warnings: [...warnings, ...env.warnings] };
   // The envelope serialises the order's integers as decimal strings.
-  const makerData = env.data as { typedData: { message: Record<keyof LopOrder, string | bigint> }; orderHash: `0x${string}` };
+  const makerData = env.data as { typedData: { message: Record<keyof LopOrder, string | bigint> }; orderHash: `0x${string}`; execution: { then: string[] }; jit?: { permitPreparation?: { status: string }; reprepareInput?: PrepareOrdersInput } };
   const m = makerData.typedData.message;
   const signedOrder: LopOrder = { salt: BigInt(m.salt), maker: m.maker as `0x${string}`, receiver: m.receiver as `0x${string}`, makerAsset: m.makerAsset as `0x${string}`, takerAsset: m.takerAsset as `0x${string}`, makingAmount: BigInt(m.makingAmount), takingAmount: BigInt(m.takingAmount), makerTraits: BigInt(m.makerTraits) };
   const orderExpiry = decodeMakerTraits(signedOrder.makerTraits).expiry;
@@ -486,6 +487,11 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
     order: quotedOrderWire(signedOrder),
   };
   const impliedWad = impliedPremiumWad(takingAmount, notional, tenorSeconds);
+  const makerReprepare = makerData.jit?.reprepareInput;
+  if (makerReprepare?.action.type === "maker-order" && makerReprepare.action.jitMarket) {
+    const { collateralAsset: _ca, referenceAsset: _ref, expiryTimestamp: _expiry, mode: _mode, legacy: _legacy, ...pinnedMarket } = makerReprepare.action.jitMarket;
+    makerData.jit!.reprepareInput = { ...input, ...(makerReprepare.generation ? { generation: makerReprepare.generation } : {}), action: { ...action, useRequestedRate: false, ...(cited ? {} : { expiryTimestamp: String(expiryTimestamp) }), expirySeconds, jitMarket: pinnedMarket } };
+  }
   return {
     ...env,
     warnings: [...warnings, ...env.warnings],
@@ -513,7 +519,7 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         formula: "takingAmount = ceil(premium × notional × tenorSeconds / 31536000) in collateral base units (ACT/365, rounded toward the maker — the venue's premium_amount); makingAmount = notional rescaled to the 18-decimal cST",
         reservedFor: allowedSender ?? null,
         reach: allowedSender !== undefined ? "reserved" : "open",
-        expirySeconds,
+        expirySeconds: Number(orderExpiry - nowSecs),
         expiryRule: action.expirySeconds !== undefined ? "caller" : "venue re-rest rule: max(90 s, min(600 s, remaining RFQ validity / 2))",
         ocoGroup,
         // The cover this order DELIVERS, from the recipe (not from any label), against the
@@ -541,7 +547,9 @@ export async function handleAnswerRfq(input: PrepareOrdersInput, action: AnswerR
         ...(notRead.length > 0 ? { notRead } : {}),
         scales: { premiumAnnualized: "annualized decimal-fraction STRING (\"0.041\" = 4.1%)", impliedPremiumWad: "the amounts decoded back to an annualized fraction, 1e18 = 1.0", takingAmount: "base units of the collateral asset", makingAmount: "base units of the cST (18 decimals)", unitsTopic: UNITS_TOPIC_REFERENCE },
       },
-      execution: executionAnswerRfq(cited),
+      execution: ["awaiting-signature", "unavailable"].includes(makerData.jit?.permitPreparation?.status ?? "")
+        ? { ...executionAnswerRfq(cited), then: [...makerData.execution.then, "only AFTER completing the permit/allowance prerequisite above, continue with the final RFQ order and answer:", ...executionAnswerRfq(cited).then] }
+        : executionAnswerRfq(cited),
     },
   };
 }

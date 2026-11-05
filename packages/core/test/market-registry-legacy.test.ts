@@ -162,3 +162,42 @@ describe("deprecation gate (CORK_ENABLE_DEPRECATED)", () => {
     expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(true);
   });
 });
+
+describe("A2 unsupported legacy permit bindings", () => {
+  const signature = `0x${"11".repeat(32)}${"22".repeat(32)}1b`;
+  const input = {
+    chainId: 42161, account: ACCT, clientRequestId: "a2-legacy-pins-0001",
+    action: {
+      type: "maker-order", poolId: `0x${"11".repeat(32)}`, side: "SELL", makerAsset: CA, takerAsset: REF,
+      makingAmount: String(WAD), takingAmount: "1000000",
+      jitMarket: { collateralAsset: CA, referenceAsset: REF, expiryTimestamp: "1795000000", mode: "liquidity", legacy: true, enableJitMint: true,
+        permits: [{ token: CA, value: String(WAD), deadline: "1795000000", signature }] },
+    },
+  };
+  const ctx: HandlerContext = { nowSeconds: 1_790_000_000n, resolveRpc: async () => null };
+  it.each([
+    { name: "nonce only", pins: { nonce: "0" } },
+    { name: "hash only", pins: { typedDataHash: `0x${"00".repeat(32)}` } },
+    { name: "both pins", pins: { nonce: "0", typedDataHash: `0x${"00".repeat(32)}` } },
+    { name: "stale complete pins", pins: { nonce: "99", typedDataHash: `0x${"ff".repeat(32)}` } },
+  ])("R4 rejects $name through the public schema and enabled legacy handler", async ({ pins }) => {
+    process.env["CORK_ENABLE_DEPRECATED"] = "1";
+    const request = structuredClone(input);
+    Object.assign(request.action.jitMarket.permits[0]!, pins);
+    await expect(runTool("cork_prepare_orders", request, ctx)).rejects.toMatchObject({
+      issues: [{ path: ["action", "jitMarket", "permits"] }],
+    });
+  });
+  it("R4 preserves unpinned legacy permit bytes and the deprecation opt-in", async () => {
+    const gated = await runTool("cork_prepare_orders", input, ctx);
+    expect(gated.state).toBe("unavailable");
+    expect(gated.warnings[0]?.code).toBe("deprecated_gated");
+    process.env["CORK_ENABLE_DEPRECATED"] = "1";
+    const env = await runTool("cork_prepare_orders", input, ctx);
+    expect(env.state).toBe("ok");
+    // In-process maker output; the legacy decoder validates the encoded extension.
+    const d = env.data as { extension: `0x${string}` };
+    const decoded = decodeJitExtension(d.extension);
+    expect(decoded.permits).toEqual([{ token: CA, value: WAD, deadline: 1795000000n, r: `0x${"11".repeat(32)}`, s: `0x${"22".repeat(32)}`, v: 27 }]);
+  });
+});

@@ -218,6 +218,8 @@ export interface PermitWireRow {
   token: `0x${string}`;
   value: string;
   deadline: string;
+  nonce?: string | undefined;
+  typedDataHash?: `0x${string}` | undefined;
   signature?: `0x${string}` | undefined;
   v?: number | undefined;
   r?: `0x${string}` | undefined;
@@ -249,7 +251,10 @@ export function permitSignatureOfWire(p: PermitWireRow, path: Array<string | num
 
 /** Parse the ERC-2612 permit wire rows into bigint params — ONE spelling for the maker and
  *  taker encode sites (the legacy path keeps its own copy: generation isolation by rule). */
-export function parsePermitWires(permits: JitMarketWireParams["permits"], permitWire: JitPermitWire = "vrs"): PermitParams[] {
+export function parsePermitWires(permits: JitMarketWireParams["permits"], permitWire: JitPermitWire = "vrs", bindingVerified = false): PermitParams[] {
+  if (!bindingVerified && (permits ?? []).some(p => p.nonce !== undefined || p.typedDataHash !== undefined)) {
+    throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "permits"], message: "nonce/typedDataHash pins require the maker cST permit verification path; they cannot be ignored on another action" }]);
+  }
   return (permits ?? []).map((p, i) => ({ token: p.token, value: BigInt(p.value), deadline: BigInt(p.deadline), signature: permitSignatureOfWire(p, ["action", "jitMarket", "permits", i], permitWire) }));
 }
 
@@ -621,6 +626,9 @@ export async function prepareJitLegacy(args: {
     return { gate: unavailable(chainId, "deprecated_gated", deprecatedGateMessage("jitMarket.legacy (the pre-2.1.0 mode-string JIT flow against the old adapter)", "The 2.1.0 flow carries a recipe ADDRESS and the resolved constraint — drop `legacy`, pass jitMarket.recipe (+ constraint or an RPC to auto-resolve it)."), ctx) };
   }
   if (jm.mode === undefined) return { gate: unavailable(chainId, "missing_filter", "legacy JIT orders need jitMarket.mode (the old registry's exact case-sensitive mode string)", ctx) };
+  if ((jm.permits ?? []).some(p => p.nonce !== undefined || p.typedDataHash !== undefined)) {
+    throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "jitMarket", "permits"], message: "nonce/typedDataHash helper pins are unsupported on the legacy JIT route; they must not be silently discarded" }]);
+  }
   const mode = jm.mode;
   // The legacy lane is the generation whose marketRegistry block declares `wire: "legacy"`
   // (generations.ts) — there is no separate legacy config block since 0.6.

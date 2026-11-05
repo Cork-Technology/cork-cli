@@ -819,7 +819,7 @@ async function resolveAfterDeploy(
  *  Chain-native (no dependency on the read API); the pool id is computed LOCALLY. Like the HTTP
  *  endpoint, market/shares are null while the pair oracle is undeployed — without a live rate
  *  the identity would be an invention. */
-export async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext): Promise<Envelope> {
+export async function handleQueryMarketPredict(input: QueryInput, filters: QueryFilters, chainId: ChainId, ctx: HandlerContext, carriedConstraint?: ResolvedConstraint): Promise<Envelope> {
   if (!filters.collateralAsset || !filters.referenceAsset || filters.expiry === undefined || (filters.recipe === undefined && filters.mode === undefined)) {
     return unavailable(chainId, "missing_filter", "derive-cork-pool requires filters.collateralAsset, filters.referenceAsset (ORDER MATTERS: collateral first), filters.expiry (unix seconds), and filters.recipe (the approved recipe CONTRACT ADDRESS — discover with cork_query resource:\"registry-recipes\"; filters.mode survives as deprecated sugar). Optional: filters.args (recipe extraData hex), filters.rate (FIXED recipes: the rateOverride), filters.rateOracle (explicit oracle), filters.swapFeePercentage + filters.unwindSwapFeePercentage (1e18 = 1%, default 0 — part of the id on a 10-field generation), filters.oracleSalt (nested wire only)", ctx);
   }
@@ -849,7 +849,7 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
     if (bindingWarn) {
       return envelope({ state: "conflict", data: { resource: input.resource, chainId, registry: mr.registry, adapter: mr.adapter }, chainId, source: "chain", warnings: [...rpcWarn(resolved), ...warnings, bindingWarn], ...rpc(), ctx });
     }
-    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, extraData: filters.args, oracleSalt, wire, wantConstraint: true });
+    const res = await resolveRecipeOracleConstraint({ client, ctx, chainId, mr, recipe: filters.recipe, mode: filters.mode, collateralAsset: ca, referenceAsset: ref, fixedRate: filters.rate, rateOracle: filters.rateOracle, extraData: filters.args, oracleSalt, wire, wantConstraint: carriedConstraint === undefined });
     warnings.push(...res.warnings);
     if (res.gate) {
       // A refusal at uint256's maximum is the helper's, not pool creation's (cork-cli#5): say so.
@@ -858,7 +858,8 @@ export async function handleQueryMarketPredict(input: QueryInput, filters: Query
       if (boundary !== undefined && first?.code === "recipe_refused") return unavailable(chainId, "recipe_refused", `${first.message} ${boundary}`, ctx);
       return res.gate;
     }
-    const { recipe, source, oracle, constraint } = res;
+    const { recipe, source, oracle } = res;
+    const constraint = carriedConstraint ?? res.constraint;
     const oracleEcho = { address: oracle.address, deployed: oracle.deployed, deployable: oracle.deployable, ...(oracle.mode ? { mode: oracle.mode } : {}), ...(oracle.deployed ? oracleRateEcho(oracle) : {}), ...(oracle.reason ? { reason: oracle.reason } : {}) };
     // Identity needs an oracle ADDRESS, not a deployed oracle: the pool id's only oracle-derived
     // input is the address (already predicted via the simulated deploy — the same one the fill

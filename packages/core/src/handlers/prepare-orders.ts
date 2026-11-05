@@ -19,13 +19,14 @@ import { resolveListingPremium } from "./submit.ts";
 import { buildTakerJitInteraction, diagnoseStaleSidePrediction, farFutureExpiryWarning, type JitLadderResult, jitValueGate, type LegacyJitReport, parsePermitWires, prepareJitLegacy, resolveFeeRule, resolveJitBytesInput, runJitPreflightLadder, type TakerJitReport, verifyExtraDataLayout } from "./jit.ts";
 import { oracleRateEcho, resolveRecipeOracleConstraint } from "./registry.ts";
 import { prepareForSelfTakerFill } from "./forself.ts";
-import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
+import { assessMakerReadiness, decodeMakerExtensionContext, gatherMakerReadinessFacts, isEip7702Designator, type MakerReadiness, makerReadinessTargetOf } from "./maker-readiness.ts";
 import { handleAnswerRfq, handleRefreshOrder, type SugarDeps } from "./prepare-orders-sugars.ts";
 import { handleDeployRolloverContract, handleRolloverFill } from "./prepare-rollover-fill.ts";
 import { handleRfqWrite } from "./rfq-write.ts";
 import { deriveJitDestination, readRolloverQuote } from "./rfq-rollover.ts";
 import { rolloverQuoteDefaults, rolloverQuoteRefMismatch, rolloverQuoteSigner } from "../rfq-rollover.ts";
 import { readNativeApiCapability } from "./native-history-capability.ts";
+import { prepareCstPermit, type CstPermitPreparation, type CstPermitTypedData } from "./jit-permit.ts";
 
 type RolloverIntentAction = Extract<PrepareOrdersInput["action"], { type: "rollover-intent" }>;
 /** A rollover-intent's terms once a cited quote has filled the ones the caller left out. */
@@ -59,6 +60,9 @@ type MakerJitReport = {
   identity?: string;
   predictedCorkSwapToken?: `0x${string}`;
   permitNote?: string;
+  permitPreparation?: Omit<CstPermitPreparation, "typedData" | "permit">;
+  permitTypedData?: CstPermitTypedData;
+  reprepareInput?: PrepareOrdersInput;
 };
 
 /** Best-effort approval-status annotation for the maker/finalize paths: runs ONLY with an
@@ -260,6 +264,8 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
     // create-pool and the two allowances; on the bytes row (phoenix/v0.5) it may sign via ERC-1271. Decided from chain facts (pool existence from the share prediction, maker code
     // from getCode); silent when either is unknown.
     let contractMakerPreRest = false;
+    let cstPermit: CstPermitPreparation | undefined;
+    let cstPermitDeadline: bigint | undefined;
     if (action.jitMarket) {
       if (action.extension !== undefined && action.extension !== "0x") {
         throw new ToolInputError("cork_prepare_orders", [{ path: ["action", "extension"], message: "extension and jitMarket are mutually exclusive — jitMarket BUILDS the extension" }]);
@@ -336,7 +342,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
                   // On the bytes permit row (phoenix/v0.5) a contract maker signs the permit through
                   // ERC-1271, so one that already carries a permit over the cST rests as is.
                   const permitCoversCst = cst !== undefined && cst !== null && (jm.permits ?? []).some((p) => p.token.toLowerCase() === cst.toLowerCase());
-                  if (code !== undefined && code !== "0x" && !(permitWire === "bytes" && permitCoversCst)) {
+                  if (code !== undefined && code !== "0x" && !(permitWire === "vrs" && isEip7702Designator(code)) && !(permitWire === "bytes" && permitCoversCst)) {
                     contractMakerPreRest = true;
                     const allowances = `the cST → LOP allowance${jm.enableJitMint ? " and the collateral → JIT adapter allowance" : ""}`;
                     warnings.push({
@@ -355,6 +361,25 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
               }
               if (cst) {
                 jitData = { ...jitData, predictedCorkSwapToken: cst, permitNote: "for a NEW pool, sign an ERC-2612 permit over this cST (owner = maker, spender = the LOP, value >= the cST amount) and pass it in jitMarket.permits — a fresh token has no prior allowance for the LOP's pull. On that re-prepare, pass jitMarket.constraint = this result's jit.constraint (same clientRequestId): the constraint is part of the pool's identity, and a single oracle tick between the two prepares otherwise re-derives a different pool and cST than the permit was signed over (jit_side_mismatch)" };
+                if (jm.enableJitMint && isAddressEqual(action.makerAsset, cst) && !action.usePermit2 && !(contractMakerPreRest && permitWire !== "bytes")) {
+                  const permitDeadline = jm.permitDeadline !== undefined ? BigInt(jm.permitDeadline) : nowSecs + BigInt(action.expirySeconds ?? 600);
+                  cstPermit = await prepareCstPermit({
+                    client, chainId, owner: input.account, spender: lop, token: cst, poolManager: jitDep.poolManager, poolId: derived.poolId,
+                    amount: BigInt(action.makingAmount), deadline: permitDeadline, now: nowSecs, wire: permitWire, permits: jm.permits ?? [],
+                    observeCreated: (blockNumber, afterCreateCalls) => predictShares(client, {
+                      adapter: codec.roleHolder === "creator" ? ladder.marketCreator! : ladder.adapter, controller: boundController, poolManager: jitDep.poolManager!,
+                      market: derived.market, poolId: derived.poolId, wire: phoenixWire, unwindSwapFeePercentage: unwindFee, swapFeePercentage: swapFee, preCalls, chainId, blockNumber, afterCreateCalls,
+                    }),
+                  });
+                  if (cstPermit.status === "awaiting-signature" || cstPermit.status === "verified") cstPermitDeadline = permitDeadline;
+                  const { typedData, permit, ...permitPreparation } = cstPermit;
+                  jitData = { ...jitData, permitPreparation };
+                  if (typedData && permit) {
+                    jitData.permitTypedData = typedData;
+                    jitData.reprepareInput = { ...input, ...(ladder.generation ? { generation: ladder.generation.label } : {}), action: { ...action, jitMarket: { ...jm, recipe, constraint: { rateMin: String(constraint.rateMin), rateMax: String(constraint.rateMax), rateChangePerDayMax: String(constraint.rateChangePerDayMax), rateChangeCapacityMax: String(constraint.rateChangeCapacityMax) }, permitDeadline: permit.deadline, permits: [...(jm.permits ?? []), permit] } } };
+                    jitData.permitNote = "Sign ONLY jit.permitTypedData first. Insert signature (or v/r/s for that adapter) into the unsigned cST row in jit.reprepareInput and re-prepare that complete input. Only after permit verification sign the NEW LOP data.typedData: inserting the permit changes the extension and order hash. Collateral approval to the adapter is separate.";
+                  }
+                }
                 const cstLc = cst.toLowerCase();
                 if (action.makerAsset.toLowerCase() !== cstLc && action.takerAsset.toLowerCase() !== cstLc) {
                   warnings.push({ code: "jit_side_mismatch", message: `NEITHER order side is the derived pool's cST ${cst} — the fill WILL revert OrderNotForPool. Set makerAsset (selling coverage) or takerAsset (buying coverage) to the predicted cST. If that side came from an EARLIER prepare, the oracle rate has moved since and the constraint re-derived a different pool: pass that prepare's jit.constraint in jitMarket.constraint to pin the identity the permit was signed over` });
@@ -367,7 +392,18 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
             warnings.push({ code: "chain_read_failed", message: `JIT share-prediction reads failed (${revertReason(err)}) — the extension is built but the cST side-match is unverified` });
           }
         }
-        const permits = parsePermitWires(jm.permits, permitWire);
+        if (jm.enableJitMint && !cstPermit && !contractMakerPreRest && action.side === "SELL" && !action.usePermit2 && !(jm.permits?.length)) {
+          cstPermit = { status: "unavailable", reason: "cannot produce a signable maker cST permit without a verified share prediction and readable token state; re-prepare when that state is available, or create the pool and approve the LOP first" };
+          jitData = { ...jitData, permitPreparation: cstPermit };
+        }
+        if ((jm.permits ?? []).some(p => p.nonce !== undefined || p.typedDataHash !== undefined) && cstPermit?.status !== "verified" && cstPermit?.status !== "satisfied") {
+          return unavailable(chainId, "jit_permit_binding_unverified", cstPermit?.reason ?? "cannot verify the supplied cST permit binding from chain state", ctx);
+        }
+        if (cstPermit?.status === "unavailable") warnings.push({ code: "jit_permit_unavailable", message: cstPermit.reason ?? "permit signing state could not be verified; this preliminary order is not ready to sign" });
+        if (cstPermit?.status === "conflict") {
+          return unavailable(chainId, "jit_permit_conflict", cstPermit.reason ?? "permit signing state conflicts with this order", ctx);
+        }
+        const permits = parsePermitWires(jm.permits, permitWire, cstPermit?.status === "verified" || cstPermit?.status === "satisfied");
         const jitParams: JITMarketParams = { collateralAsset: jm.collateralAsset, referenceAsset: jm.referenceAsset, expiryTimestamp, recipe, rateOverride, constraint, extraData: recipeBytes, oracleSalt, swapFeePercentage: swapFee, unwindSwapFeePercentage: unwindFee, enableJitMint: jm.enableJitMint };
         const extraData = codec.encodeExtraData(jitParams, permits, permitWire);
         if (ladder.verified) {
@@ -417,6 +453,10 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
       warnings.push({ code: "decaying_price_notice", message: `the taker price DECAYS from +${auction.initialRateBump} (base 1e7) above the signed takingAmount down to the signed floor over ${auction.duration}s from ${startTime} — the signed takingAmount is the WORST case for the maker, not the expected price. The venue book lists a static premium (a decaying listing convention is an open venue question): list it honestly, and takers should re-price with cork_compute dutch-auction-price + simulate before filling` });
     }
 
+    const requestedExpiry = action.expirySeconds !== undefined ? nowSecs + BigInt(action.expirySeconds) : undefined;
+    // The signed permit deadline is absolute: re-preparing later must shorten the
+    // order, not extend its permit or leave an otherwise-unbounded order alive.
+    const expiry = cstPermitDeadline !== undefined && (requestedExpiry === undefined || requestedExpiry > cstPermitDeadline) ? cstPermitDeadline : requestedExpiry;
     let built: ReturnType<typeof buildMakerOrder>;
     try {
       built = buildMakerOrder({
@@ -428,7 +468,7 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         makingAmount: BigInt(action.makingAmount),
         takingAmount: BigInt(action.takingAmount),
         clientRequestId: input.clientRequestId,
-        ...(action.expirySeconds !== undefined ? { expiry: nowSecs + BigInt(action.expirySeconds) } : {}),
+        ...(expiry !== undefined ? { expiry } : {}),
         allowPartialFills: action.allowsPartialFills,
         allowMultipleFills: action.allowsMultipleFills,
         usePermit2: action.usePermit2,
@@ -508,7 +548,12 @@ export async function handlePrepareOrders(input: PrepareOrdersInput, ctx: Handle
         scales: { makingAmount: "base units of makerAsset (the token's own decimals)", takingAmount: "base units of takerAsset", approvalsAmount: "approvals[].amount is base units of that entry's own token", unitsTopic: UNITS_TOPIC_REFERENCE },
         ...(jitData ? { jit: jitData } : {}),
         ...(fusionData ? { fusion: fusionData } : {}),
-        execution: contractMakerPreRest ? executionMakerOrderContractMaker() : executionMakerOrder(),
+        ...(cstPermit ? { orderSignable: cstPermit.status !== "awaiting-signature" && cstPermit.status !== "unavailable" } : {}),
+        execution: cstPermit?.status === "awaiting-signature"
+          ? { ...executionMakerOrder(), then: ["sign data.jit.permitTypedData client-side (ERC-2612 token domain, NOT the LOP order domain)", "insert that signature into data.jit.reprepareInput.action.jitMarket.permits; re-prepare the complete pinned input", "after permit verification, sign the NEW data.typedData LOP order and finalize; do not sign or submit this preliminary order"] }
+          : cstPermit?.status === "unavailable"
+            ? { ...executionMakerOrder(), then: ["DO NOT sign or submit this preliminary LOP order: cST permit state is unavailable", "re-prepare with readable token state and supported creation simulation, or cork_prepare_market create-pool then approve its cST to the LOP first", "sign the LOP order only after its required permit or standing allowance has been prepared"] }
+            : contractMakerPreRest ? executionMakerOrderContractMaker() : executionMakerOrder(),
         clientRequestId: input.clientRequestId,
       },
       chainId,

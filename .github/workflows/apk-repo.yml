@@ -74,9 +74,6 @@ on:
     types: [published]
   workflow_call:
     secrets:
-      CORK_GITHUB_TOKEN:
-        description: "Owner-provisioned read-only repo/org/package token for private preflight; never used to publish"
-        required: false
       MELANGE_SIGNING_KEY:
         description: "Existing release-environment package signing key; environment reviewer gate still applies"
         required: false
@@ -121,7 +118,6 @@ jobs:
       candidate: ${{ steps.p.outputs.candidate }}
       apkver: ${{ steps.p.outputs.apkver }}
       image: ${{ steps.p.outputs.image }}
-      private: ${{ steps.p.outputs.private }}
       commit: ${{ steps.p.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,7 +126,7 @@ jobs:
       - id: p
         env:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
-          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           export RELEASE_TAG="$TAG"
           RELEASE_COMMIT="$GITHUB_SHA"
@@ -539,7 +535,7 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           CANDIDATE: ${{ needs.plan.outputs.candidate }}
           EXPECTED_IMAGE: ${{ needs.plan.outputs.image }}
-          GH_TOKEN: ${{ secrets.CORK_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           GHCR_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.plan.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
@@ -552,7 +548,7 @@ jobs:
           sh scripts/release-preflight.sh image > channel.txt
           image="$(grep '^image=' channel.txt | cut -d= -f2-)"
           [ "$image" = "$EXPECTED_IMAGE" ] || { echo '::error::image identity moved after planning'; exit 1; }
-          # Private preflight admits rc only. No private run can reach Pages or :latest.
+          # Candidates never reach Pages or :latest; only a bare v1.0.0+ tag moves :latest.
           tags="$image:$TAG"
           case "$TAG" in v0.*|*-*) : ;; *) tags="$tags $image:latest" ;; esac
           echo "publishing: $tags"

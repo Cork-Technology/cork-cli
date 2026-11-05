@@ -14,9 +14,8 @@
 // addresses, closed shape) — a malformed or tampered remote file is treated as a fetch failure and
 // the bundled fallback is used, with a warning.
 //
-// Public 404/410 means not published and serves the bundle silently. Private GitHub masks
-// unauthorized reads as 404: every private failure warns; never claim it is a current remote.
-// Both negative outcomes back off for ten minutes; caches bind the build repo and resource.
+// Public 404/410 means not published and serves the bundle silently. Other failures warn.
+// Both negative outcomes back off for ten minutes; caches bind the public repo and resource.
 import { z } from "zod";
 import { Address } from "@cork/schemas";
 import { readFileSync, mkdirSync } from "node:fs";
@@ -229,7 +228,7 @@ const FAILURE_TTL_MS = 600_000; // negative outcome: don't re-attempt for 10 min
 
 // Every disk entry (including an explicit cache-file override) binds repo + resource/ref.
 function cacheScope(): string {
-  return channelCacheKey(BUILD_REPO, process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL);
+  return channelCacheKey(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL);
 }
 function cachePath(): string {
   return process.env.CORK_CONFIG_CACHE_FILE ?? join(homedir(), ".cache", "cork-helper-cli", BUILD_REPO.split("/")[1]!, "cork-defaults.v2.json");
@@ -237,8 +236,8 @@ function cachePath(): string {
 
 async function realFetchRemote(): Promise<RemoteFetchResult> {
   const resource = configResource(process.env.CORK_DEFAULTS_URL ?? CORK_DEFAULTS_URL);
-  const res = await channelFetch(resource.url, { authenticated: resource.authenticated, accept: "application/vnd.github.raw+json" });
-  if (!resource.authenticated && (res.status === 404 || res.status === 410)) return { kind: "absent" };
+  const res = await channelFetch(resource, { accept: "application/vnd.github.raw+json" });
+  if (res.status === 404 || res.status === 410) return { kind: "absent" };
   if (!res.ok) throw new Error(`GitHub config HTTP ${res.status}`);
   return { kind: "ok", data: await res.json() };
 }
@@ -281,7 +280,7 @@ export const STALE_CACHE_WARNING = {
 export const FETCH_FAILED_WARNING = {
   code: "config_fetch_failed",
   message:
-    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale (private reads require an authorized CORK_GITHUB_TOKEN)",
+    "could not fetch the latest cork-defaults.v2.json from GitHub — serving the bundled copy; addresses may be stale",
 } as const;
 
 let memo: { at: number; ttl: number; scope: string; resolved: ResolvedConfig } | null = null;

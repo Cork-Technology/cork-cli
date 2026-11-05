@@ -168,6 +168,49 @@ The rule, in full:
     contract that needs the newborn-token allowance must `approve` mid-transaction instead, and
     only a contract *taker* can do that.
 
+
+### Preparing the maker's permit (RC5)
+
+Both `maker-order(jitMarket)` and `answer-rfq` use one maker producer. When cST is the
+maker asset, `data.jit.permitTypedData` is the token's **ERC-2612 Permit**, separate
+from the LOP `data.typedData`. The existing token's actual domain/owner nonce are read
+at one block. A newborn's are read after successful creation in the same bounded
+simulation. A failed read is not proof of absence, and the tool does not guess a name.
+
+Sign the permit first. Insert the signature into the unsigned cST row of the complete
+`data.jit.reprepareInput`, retaining `nonce` and `typedDataHash`, then re-prepare it.
+The input preserves the effective recipe/constraint/bytes/salt/fees, generation,
+account, original action and request identity, token, amounts, requested TTL and
+finite deadline. A cited RFQ retains citation-only quote fields; an uncited one
+retains its premium/pool expiry. Initial derivation honors the carried constraint.
+Re-preparation checks the current domain/nonce and signature; stale or mismatched
+pins refuse. Only then sign the **new** LOP order: its extension and hash change.
+
+An `awaiting-signature` or `unavailable` status means `orderSignable:false`, not a
+submit-ready order. For unavailable state, recover readable token state/simulation
+or create the pool and approve first. A sufficient deployed allowance satisfies the
+pull without a new signature; the adapter may also skip an already-used permit when
+allowance covers the actual fill. Unpinned pre-signed rows are preserved without new
+qualification. The helper does not add permits for unrelated tokens or BUY-maker/
+Permit2 paths. Collateral approval to the adapter is still a separate prerequisite.
+
+`jitMarket.permitDeadline` is an absolute finite timestamp. By default the helper
+uses the initial requested order expiry, or ten minutes when TTL is omitted. The
+returned input pins that deadline rather than extending the permit on each prepare.
+Every helper-dependent order is bounded by it, including after time spent signing
+and when the caller omitted TTL. The final RFQ freshness and relative-expiry echoes
+come from the decoded order. Ordinary, unpinned and standing-allowance lifetimes
+are unchanged.
+
+Helper-pinned EOA permits require the token's actual 65-byte canonical `v=27/28`,
+low-S representation, not merely an off-chain-recoverable signature. Arbitrary
+valid ERC-1271 bytes remain supported. Exact EIP-7702 delegated EOAs can use ECDSA
+on v/r/s; on the bytes wire the pinned token's `SignatureChecker` sends every coded
+owner, including a delegation designator, to ERC-1271. Existing unpinned rows,
+including duplicate token rows, retain their unqualified compatibility path;
+an adequate standing allowance needs no extra row even with eight existing rows.
+Legacy JIT rejects helper nonce/hash pins instead of discarding them.
+
 **Interaction with `fillOrderForSelf` (the ForSelf adapter route):** none, by design. The
 order-carried permit belongs to the *maker* and still names the LOP as spender. The ForSelf
 caller approves its taker asset to the ForSelf adapter, and that adapter grants the LOP a

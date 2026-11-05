@@ -8,9 +8,11 @@ import { assetForTarget, parseChecksums } from "../src/self-update.ts";
 import { updateDecision, type UpdateCache } from "../src/update-notify.ts";
 // The compile script must name assets exactly as self-update expects to find them.
 import { assetForTarget as scriptAssetForTarget, compileDefines, hyperSyncBindingForTarget } from "../../../scripts/compile-binaries.mjs";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SOURCE_REPO } from "../../core/src/release-channel.ts";
 
 describe("compareVersions", () => {
   it("orders releases numerically, not lexically", () => {
@@ -109,21 +111,25 @@ describe("embedded HyperSync binding per release target", () => {
     const mapped = new Set(expected.flatMap(([, b]) => (b ? [b.split("/").slice(0, 2).join("/")] : [])));
     expect([...mapped].sort()).toEqual([...declared].sort());
   });
-  it("compileDefines stamps identity plus the binding — the literal `undefined` where there is none", () => {
-    const withBinding = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-linux-x64" });
-    expect(withBinding.filter((a) => a === "--define")).toHaveLength(5);
-    expect(withBinding).toContain('process.env.CH_BUILD_VERSION="v1.2.3"');
-    expect(withBinding).toContain('process.env.CH_BUILD_COMMIT="abc"');
-    expect(withBinding).toContain('process.env.CH_BUILD_TARGET="bun-linux-x64"');
-    expect(withBinding).toContain(`process.env.CH_BUILD_REPO=${JSON.stringify(SOURCE_REPO)}`);
-    expect(withBinding).toContain(`process.env.CH_HYPERSYNC_BINDING="${spec("linux-x64-gnu")}"`);
-    const without = compileDefines({ version: "v1.2.3", commit: "abc", target: "bun-windows-x64" });
-    expect(without).toContain("process.env.CH_HYPERSYNC_BINDING=undefined");
+  it("refuses to stamp builds for unsupported repositories", () => {
+    expect(() => compileDefines({ version: "v0.8.0-rc.5", commit: "a".repeat(40), target: "bun-darwin-arm64", repo: "other/foreign" })).toThrow("unsupported");
   });
-  it("stamps the requested public/private channel and refuses foreign repositories", () => {
-    const identity = { version: "v0.7.0-rc.1", commit: "a".repeat(40), target: "bun-darwin-arm64" };
-    for (const repo of ["Cork-Technology/cork-cli", "Cork-Technology/cork-cli-private"]) expect(compileDefines({ ...identity, repo })).toContain(`process.env.CH_BUILD_REPO=${JSON.stringify(repo)}`);
-    expect(() => compileDefines({ ...identity, repo: "other/foreign" })).toThrow("unsupported");
+  it("compiled consumers retain supported HyperSync capability and refuse unsupported targets", () => {
+    const dir = mkdtempSync(join(tmpdir(), "release-capability-"));
+    const bun = process.versions.bun ? process.execPath : execFileSync("sh", ["-c", "command -v bun"], { encoding: "utf8" }).trim();
+    const source = join(dir, "capability.ts");
+    const bindingModule = fileURLToPath(new URL("../../core/src/datasources/hypersync.ts", import.meta.url));
+    const versionModule = fileURLToPath(new URL("../../core/src/version.ts", import.meta.url));
+    writeFileSync(source, `import { hyperSyncBindingGap } from ${JSON.stringify(bindingModule)};\nimport { BUILD_TARGET, HYPERSYNC_BINDING } from ${JSON.stringify(versionModule)};\nconsole.log(JSON.stringify({ supported: hyperSyncBindingGap(BUILD_TARGET, HYPERSYNC_BINDING) === null }));\n`);
+    try {
+      for (const [target, supported] of [["bun-darwin-arm64", true], ["bun-windows-x64", false]] as const) {
+        const output = join(dir, `${target}.mjs`);
+        // Only exercise the real compiled capability consumer; this does not load another OS's NAPI module.
+        execFileSync(bun, ["build", source, "--target=bun", "--external=@envio-dev/*", ...compileDefines({ version: "v0.8.0-rc.5", commit: "a".repeat(40), target }), "--outfile", output], { cwd: root, stdio: "pipe" });
+        const result = execFileSync(bun, [output], { encoding: "utf8", env: { PATH: process.env.PATH } });
+        expect(JSON.parse(result).supported, target).toBe(supported);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

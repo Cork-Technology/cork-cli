@@ -377,6 +377,9 @@ export function registerWalletCommands(program: Command, deps: { env: Record<str
         if ((artifact as { execution?: { kind?: unknown } } | null)?.execution?.kind === "account-call") {
           throw new SignRefusal("account_call_requires_session", "this artifact is a Safe/session account CALL, not an EOA transaction — use the verified Guard/account wallet SDK; ch sign cannot supply its session authorization");
         }
+        if ((artifact as { orderSignable?: unknown } | null)?.orderSignable === false) {
+          throw new SignRefusal("jit_permit_not_ready", "this is a preliminary JIT order, not the final LOP signing payload: sign data.jit.permitTypedData separately when available, insert its signature into data.jit.reprepareInput, then re-prepare; otherwise restore readable permit state or create the pool and approve first. Sign only the NEW final order");
+        }
         const name = String(opts["account"]);
         const td = typedDataOf(doc);
         if (td) {

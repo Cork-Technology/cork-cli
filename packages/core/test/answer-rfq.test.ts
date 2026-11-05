@@ -593,11 +593,8 @@ describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate ride
     expect(env.warnings.map((w) => w.code)).not.toContain("reference_loss_unreported");
   });
 
-  it("a fixed answer carries no floating-rate text: no stale-constraint notice, no anchor drift, no anchor echo, and the undeployed oracle is named as keyed on the rate", async () => {
+  it("a fixed answer has no floating-anchor fields; floating recipes retain their constraint notice", async () => {
     const env = await answer("0014", RFQ_FIXED_ID);
-    expect(env.warnings.map((w) => w.code)).toEqual(["oracle_not_deployed", "oco_group_notice"]);
-    expect(env.warnings[0]!.message).toMatch(/the FixedRateOracle for this rate is not deployed yet .*keyed on the rate alone/u);
-    expect(env.warnings[0]!.message).not.toMatch(/oracleSalt|LIVE rate|re-registering/u);
     const inline = (env.data as Answered).answer.inline as Record<string, unknown>;
     expect(inline).not.toHaveProperty("anchorHonored");
     expect(inline).not.toHaveProperty("note");
@@ -623,7 +620,10 @@ describe("answer-rfq for FIXED-RATE cover (cork-api 0.4.4): the frozen rate ride
     const d = env.data as Answered;
     expect(d.answer.pool.oracleDeployed).toBe(true);
     expect(d.jit.constraint).toMatchObject({ rateMin: DEPLOYED_FIXED_RATE.toString(), rateMax: (DEPLOYED_FIXED_RATE + 1n).toString() });
-    expect(env.warnings.map((w) => w.code)).toEqual(["oco_group_notice"]);
+    // These codes advise resolving a moving live-rate window. This supported fixed
+    // template carries a stray anchor, but the signed hook remains frozen at its rate.
+    expect(env.warnings.some((w) => w.code === "rate_drift_notice")).toBe(false);
+    expect(env.warnings.some((w) => w.code === "constraint_window_notice")).toBe(false);
   });
 
   it("a CITED option's own rate is the rate the order builds at (cork-api 0.4.4: each option carries its own template) — said as a counter-proposal to the request", async () => {

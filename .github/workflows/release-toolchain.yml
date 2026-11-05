@@ -63,10 +63,9 @@ jobs:
 
   # The apk build of the release, rehearsed: same job container, same install line, same
   # scripts (apk-spec-identity, apk-melange-build, apk-slice) as apk-repo.yml's melange-build.
-  # Private source is seeded from the authenticated checkout's pinned tracked tree; no
-  # credential enters melange's spec, sandbox or provenance. Pull requests remain excluded.
+  # Public source stays pinned to the tested commit. Pull requests remain excluded.
   rehearsal-build:
-    if: ${{ (github.repository == 'Cork-Technology/cork-cli' || github.repository == 'Cork-Technology/cork-cli-private') && github.event_name != 'pull_request' }}
+    if: ${{ github.repository == 'Cork-Technology/cork-cli' && github.event_name != 'pull_request' }}
     needs: preflight
     strategy:
       matrix:

@@ -3,9 +3,11 @@
 // (observed three times on 2026-08-21), so "git tag -s succeeded" proves nothing — only
 // `git tag -v` does. These tests use real git, a real throwaway ssh-ed25519 signing key, and a
 // real bare remote, inside an isolated git config (no user or system config is read).
+// Only the external remote-identity lookup is adapted to advertise the canonical public URL;
+// actual branch fetches, signing, verification and pushes still use the owned local bare repo.
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +35,7 @@ function world(opts: { trusted: boolean }) {
     config,
     `[user]\n\tname = tester\n\temail = tester@example.invalid\n\tsigningkey = ${signer}\n[gpg]\n\tformat = ssh\n[gpg "ssh"]\n\tallowedSignersFile = ${signers}\n[init]\n\tdefaultBranch = main\n`,
   );
-  const env = { ...process.env, HOME: dir, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: dir, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: "1" };
   const repo = join(dir, "repo");
   const remote = join(dir, "remote.git");
   sh("git", ["init", "-q", "--bare", remote], dir, env);
@@ -42,18 +44,21 @@ function world(opts: { trusted: boolean }) {
   sh("git", ["add", "f"], repo, env);
   sh("git", ["commit", "-q", "-m", "init"], repo, env);
   sh("git", ["remote", "add", "cork-cli", remote], repo, env);
-  // The script compares the remote by IDENTITY against CORK_RELEASE_REPO; a temp-dir bare repo
-  // has none, so the tests declare the throwaway remote's own normalised identity as canonical.
-  const canonical = remote.toLowerCase().replace(/\.git$/, "");
   const head = sh("git", ["rev-parse", "HEAD"], repo, env);
   // Public main must exist and advertise the candidate: pushing a tag pushes every object it
   // reaches, so the script refuses any commit that is not already the published head.
   sh("git", ["push", "-q", "cork-cli", "HEAD:refs/heads/main"], repo, env);
+  const realGit = sh("sh", ["-c", "command -v git"], dir, env);
+  const bin = join(dir, "bin"); mkdirSync(bin);
+  const adapter = join(bin, "git");
+  writeFileSync(adapter, '#!/bin/sh\nif [ "$1 $2 $3" = "remote get-url --push" ]; then\n  value="$("$FIXTURE_GIT" "$@")" || exit 2\n  if [ "$value" = "$FIXTURE_LOCAL_REMOTE" ]; then printf "%s\\n" "$FIXTURE_PUBLIC_URL"; else printf "%s\\n" "$value"; fi\n  exit 0\nfi\nexec "$FIXTURE_GIT" "$@"\n');
+  chmodSync(adapter, 0o755);
+  const runEnv: NodeJS.ProcessEnv = { ...env, PATH: `${bin}:${env.PATH}`, FIXTURE_GIT: realGit, FIXTURE_LOCAL_REMOTE: remote, FIXTURE_PUBLIC_URL: "https://github.com/Cork-Technology/cork-cli.git" };
   const run = (args: string[], envOver: NodeJS.ProcessEnv = {}) =>
-    spawnSync("sh", [script, ...args], { cwd: repo, env: { ...env, CORK_RELEASE_REPO: canonical, ...envOver }, encoding: "utf8" });
+    spawnSync("sh", [script, ...args], { cwd: repo, env: { ...runEnv, ...envOver }, encoding: "utf8" });
   const remoteTags = () => sh("git", ["ls-remote", "--tags", remote], repo, env);
   const localTags = () => sh("git", ["tag", "-l"], repo, env);
-  return { run, head, remoteTags, localTags, repo, env, remote, canonical };
+  return { run, head, remoteTags, localTags, repo, env, remote };
 }
 
 describe.skipIf(!hasKeygen)("release-tag.sh — sign, VERIFY, then push", () => {
@@ -126,21 +131,16 @@ describe.skipIf(!hasKeygen)("release-tag.sh — sign, VERIFY, then push", () => 
 
   it("accepts the same repo spelled as an ssh remote, and refuses a look-alike host", () => {
     const w = world({ trusted: true });
-    // scp-style URL for the SAME path: one identity once normalised, so the check passes and the
-    // run proceeds to the fetch (which cannot reach the invalid host — that is the assertion:
-    // the URL SPELLING was accepted).
-    sh("git", ["remote", "set-url", "cork-cli", `git@example.invalid:${w.canonical}.git`], w.repo, w.env);
-    const ssh = w.run(["v1.2.3", w.head], { CORK_RELEASE_REPO: `example.invalid/${w.canonical}` });
-    expect(ssh.stderr).not.toContain("not the canonical public repo");
-    expect(ssh.stderr).toContain("could not fetch");
-    expect(w.localTags()).toBe("");
+    const ssh = w.run(["v1.2.3", w.head], { FIXTURE_PUBLIC_URL: "git@github.com:Cork-Technology/cork-cli.git" });
+    expect(ssh.status, ssh.stderr).toBe(0);
+    expect(w.remoteTags()).toContain("refs/tags/v1.2.3");
 
-    sh("git", ["remote", "set-url", "cork-cli", w.remote], w.repo, w.env);
-    const impostor = w.run(["v1.2.3", w.head], { CORK_RELEASE_REPO: "github.com/cork-technology/cork-cli" });
+    const other = world({ trusted: true });
+    sh("git", ["remote", "set-url", "cork-cli", "https://evil.example/Cork-Technology/cork-cli.git"], other.repo, other.env);
+    const impostor = other.run(["v1.2.3", other.head]);
     expect(impostor.status).toBe(2);
-    expect(impostor.stderr).toContain("not the canonical public repo");
-    expect(w.localTags()).toBe("");
-    expect(w.remoteTags()).toBe("");
+    expect(other.localTags()).toBe("");
+    expect(other.remoteTags()).toBe("");
   });
 
   it("compares the PUSH url — that is the one that publishes objects", () => {

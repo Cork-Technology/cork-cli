@@ -19,6 +19,7 @@ import { configuredPoolManagerRefs, HYBRID_VERIFY_BUDGET, verifyVenueRows } from
 import { rolloverOrderFillability } from "./rollover-ranges.ts";
 import { readScanCache, SCAN_REORG_OVERLAP, scanCacheId, writeScanCache } from "../scan-cache.ts";
 import { handleQueryMarketPredict, handleQueryRegistry } from "./registry.ts";
+import type { ResolvedConstraint } from "../market-registry.ts";
 import { citedOptionKeys, citedRolloverOptionKeys, handleQueryOffers, markFirmOptions } from "./query-offers.ts";
 
 /** How many rollover RFQs on one rfqs page get their rollover-orders firmness read. */
@@ -497,7 +498,7 @@ export function venueNoticeWarnings(t: { venueWarnings: Array<Record<string, unk
   return out;
 }
 
-export async function handleQuery(input: QueryInput, ctx: HandlerContext, operation?: { capability?: Promise<NativeApiCapability> }): Promise<Envelope> {
+export async function handleQuery(input: QueryInput, ctx: HandlerContext, operation?: { capability?: Promise<NativeApiCapability>; carriedConstraint?: ResolvedConstraint }): Promise<Envelope> {
   const chainId = input.chainId ?? 1;
   const filters = parseQueryFilters(input.filters);
   // Applicability after shape: a globally unknown key gets parse's own did-you-mean; a known
@@ -841,7 +842,7 @@ export async function handleQuery(input: QueryInput, ctx: HandlerContext, operat
   }
   // derive-cork-pool — the registry+adapter derivation of a pool that may not exist yet.
   if (input.resource === "derive-cork-pool") {
-    return handleQueryMarketPredict(input, filters, chainId, ctx);
+    return handleQueryMarketPredict(input, filters, chainId, ctx, operation?.carriedConstraint);
   }
   const { dep, depWarn, generation, refusal } = await getDep(ctx, chainId);
 

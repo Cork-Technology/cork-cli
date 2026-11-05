@@ -23,7 +23,7 @@
 set -eu
 
 tag="${1:?tag}"; commit="${2:?commit}"; remote="${3:-cork-cli}"; message="${4:-$1}"
-canonical_repo="${CORK_RELEASE_REPO:-github.com/cork-technology/cork-cli}"
+canonical_repo="github.com/cork-technology/cork-cli"
 case "$tag" in v[0-9]*) ;; *) echo "release-tag: tag must start with v (got: $tag)" >&2; exit 2 ;; esac
 case "$tag" in
   *-*) release_branch="release/${tag%%-*}" ;;

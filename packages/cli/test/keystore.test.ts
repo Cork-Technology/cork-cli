@@ -260,6 +260,17 @@ describe("ch sign", () => {
     expect(existsSync(env.CORK_KEYSTORE_DIR)).toBe(false);
   });
 
+  it.each(["awaiting-signature", "unavailable"])("refuses a preliminary JIT order (%s) before key access", async status => {
+    const { env } = freshDir(); const p = scripted({});
+    const data = { orderSignable: false, typedData: TYPED, jit: { permitPreparation: { status } } };
+    const r = await runCli(["sign", "--account", "absent", "--json"], {}, env, { prompter: p, readStdin: async () => JSON.stringify({ state: "ok", data }) });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stderr).error.code).toBe("jit_permit_not_ready");
+    expect(r.stdout).toBe("");
+    expect(p.asked).toEqual([]);
+    expect(existsSync(env.CORK_KEYSTORE_DIR)).toBe(false);
+  });
+
   it("an artifact file that cannot be read is the caller's input error, named, before any password", async () => {
     const { env } = freshDir();
     storeAlice(env);

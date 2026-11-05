@@ -26,7 +26,7 @@ set -eu
 spec="${1:?spec path}"; tag="${2:?tag}"; apkver="${3:?apk version}"; commit="${4:?commit sha}"
 mise="${5:-$(dirname "$0")/../mise.toml}"
 repo="${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}"
-case "$repo" in Cork-Technology/cork-cli|Cork-Technology/cork-cli-private) ;; *) echo "apk-spec-identity: unrecognized component repository" >&2; exit 2 ;; esac
+case "$repo" in Cork-Technology/cork-cli) ;; *) echo "apk-spec-identity: unrecognized component repository" >&2; exit 2 ;; esac
 case "$tag" in v[0-9]*) ;; *) echo "apk-spec-identity: tag must start with v (got: $tag)" >&2; exit 2 ;; esac
 case "$commit" in ????????????????????????????????????????) ;; *) echo "apk-spec-identity: commit must be a 40-hex sha" >&2; exit 2 ;; esac
 # One parser for mise.toml (scripts/toolchain-pin.sh) — the melange spec's build-time assertion

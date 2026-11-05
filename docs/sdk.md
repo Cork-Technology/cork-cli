@@ -48,7 +48,7 @@ done
 ```
 
 Merge the dependencies **and the overrides** into your consumer's package.json. The example uses
-0.8.0-rc.1 archive names; download them only after that tag is published. Use the archive version
+0.8.0-rc.5 archive names; download them only after that tag is published. Use the archive version
 of the tag that you verified. The overrides keep transitive Cork dependencies on the same
 verified archives, so your package manager does not try unpublished npm versions. MCP is
 optional: if you need only core, omit both of its entries.
@@ -56,14 +56,14 @@ optional: if you need only core, omit both of its entries.
 ```json
 {
   "dependencies": {
-    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.1.tgz",
-    "@cork/core": "file:./cork-core-0.8.0-rc.1.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.1.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.5.tgz",
+    "@cork/core": "file:./cork-core-0.8.0-rc.5.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.5.tgz"
   },
   "overrides": {
-    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.1.tgz",
-    "@cork/core": "file:./cork-core-0.8.0-rc.1.tgz",
-    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.1.tgz"
+    "@cork/schemas": "file:./cork-schemas-0.8.0-rc.5.tgz",
+    "@cork/core": "file:./cork-core-0.8.0-rc.5.tgz",
+    "@cork/mcp": "file:./cork-mcp-0.8.0-rc.5.tgz"
   }
 }
 ```
@@ -73,9 +73,9 @@ bun install --ignore-scripts
 ```
 
 Third-party dependencies still come from their registries. On each upgrade, review the archive
-integrities in the lockfile. To read private remote config and releases, set CORK_GITHUB_TOKEN in
-the environment of the SDK process. This token is separate from CORK_RFQ_API_KEY, which
-authenticates you to the venue.
+integrities in the lockfile. Public config and release downloads need no repository credential.
+Custom config requests remain unauthenticated. `CORK_RFQ_API_KEY` authenticates venue writes;
+it is not forwarded to GitHub or config hosts.
 
 Working from a clone? Before you pack, build and validate with the repository's pinned Bun:
 
@@ -93,7 +93,7 @@ Copy those local archives into your consumer and use the dependency and override
 Locally packed bytes are not attested release assets. The release proves reproducibility
 separately, with its own gates: a checksum comparison of independent builds, and provenance.
 
-The `0.8.0-rc.4` candidate uses the emitted core package's stamped version for SDK/MCP build
+The `0.8.0-rc.5` candidate uses the emitted core package's stamped version for SDK/MCP build
 metadata and the default config line: an installed `0.8.x` package reads `config/0.8`.
 An explicit `CH_BUILD_VERSION` still takes precedence; source runs remain `dev` and read `main`.
 Previously published archives retain their original behavior. This is package identity, not
@@ -231,6 +231,56 @@ The `units` topic has the full table.
 **Digests are opaque.** Compare `provenance.digest` only with digests from this SDK. Do not parse
 them.
 </details>
+
+## JIT maker permit signing
+
+`runTool("cork_prepare_orders", ...)` shares the same maker producer with CLI and MCP.
+For a maker-cST JIT order, check `data.jit.permitPreparation` and `data.orderSignable`,
+not just the presence of `data.typedData`:
+
+1. When status is `awaiting-signature`, sign **only** `data.jit.permitTypedData`.
+   Its ERC-2612 domain is the cST token, not the LOP order. Owner is `account`, spender
+   is the LOP, value is `makingAmount` in cST base units.
+2. Copy the complete `data.jit.reprepareInput`; insert the permit signature into its
+   unsigned cST permit row. Keep `nonce`, `typedDataHash`, constraint, generation,
+   account, amounts, fees, recipe bytes, salt, requested TTL, deadline and request identity.
+   Cited RFQs retain `answerId`/`optionId` without adding uncited premium/expiry fields.
+   Use bytes or v/r/s according to the selected adapter; no signature is invented.
+3. Re-run `cork_prepare_orders` with that input. The helper checks the actual current
+   token domain/nonce and signature. Stale or mismatched pins refuse. A sufficient
+   existing allowance can satisfy the pull instead, including when an earlier permit
+   has already been used.
+4. Only after this prerequisite succeeds, sign the **new** `data.typedData` LOP order
+   and finalize it. Its extension and hash differ from the preliminary order.
+   `answer-rfq` then continues with its RFQ-write/submit sequence.
+
+`unavailable` permit status means no signable permit and `orderSignable:false`, even
+when an unsigned preliminary order is returned. Restore readable token state and
+supported simulation, or create the pool and approve cST to the LOP first. Failed
+reads never imply a fresh token/nonce zero. `satisfied` means a deployed allowance
+covers this pull; `verified` means the pinned permit passed; `supplied` preserves an
+unpinned signed row without new qualification. These are preparation facts, not a
+guarantee of later fillability.
+
+The default helper deadline is the initial requested order expiry, or ten minutes
+when TTL is omitted. `jitMarket.permitDeadline` pins a finite absolute timestamp.
+An order dependent on that permit expires no later than the pin: the earlier of
+current time plus the requested TTL and the deadline, or the deadline when TTL is
+omitted. Time spent signing shortens the final order's remaining lifetime; it does
+not extend the signed permit or require another signature. RFQ `fresh_until` and
+`answer.expirySeconds` describe that actual decoded order, not the original TTL.
+Standing-allowance, ordinary and unpinned-input lifetime semantics are unchanged.
+
+Pinned EOA signatures must be exactly 65 bytes with canonical `v=27/28` and low-S,
+matching the token's recovery rules; compact and parity-0/1 representations refuse.
+An exact EIP-7702 delegation designator remains ECDSA-capable on v/r/s. On the bytes
+wire, coded owners—including delegated EOAs—still require ERC-1271, and arbitrary
+valid ERC-1271 signature bytes remain supported. Existing unpinned permit arrays
+are not newly qualified; template capacity is checked only when a row is needed.
+Helper pins are unsupported on the opted-in legacy route and refuse rather than
+being discarded. Collateral approval to the adapter is separate.
+See the [contract-level permit rule](jit-order-anatomy.md#3-the-permit-rule).
+
 
 ## Import only what you need
 

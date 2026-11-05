@@ -30,6 +30,14 @@ ch <command> --explain                                                  # print 
   without automatic fallback. Env values are trimmed; blank values are absent. A different
   chain's suffix is never reused. RPC env is read when resolving a chain; recreate containers
   to change their environment.
+  Automatic HTTP/transport failures reach the existing outer wrapper after one attempt, so it can
+  re-resolve and retry once without nested HTTP retries. Numeric JSON-RPC codes `-1`, `-32005`,
+  `-32603` and `429` retain up to three same-endpoint retries (150/300/600ms backoff), then existing
+  error handling; other numeric errors are not retried. A subsequent transport failure reaches
+  outer failover immediately, even after an earlier numeric retry. Explicit clients and the
+  `CORK_RPC_NO_FAILOVER` path retain their existing behavior. Discovery, per-attempt timeouts and
+  public-provider availability are unchanged. Numeric exhaustion retains existing classification;
+  this does not claim to repair persistent provider-error attribution or guarantee a 30-second read.
 
 For one multichain MCP process, keep these in the operator's **private** environment, never
 in a committed project MCP config or public address document (RC4 names, not RC3 support):
@@ -540,6 +548,42 @@ the wire of the selected generation: nested on `phoenix/v0.5` and `phoenix/v0.4-
 `permits[].signature` as bytes (ERC-1271 works). `phoenix/v0.4-rc.1` and the flat wire take 65-byte
 ECDSA only.
 
+### JIT maker permit signing
+
+For `maker-order` and `answer-rfq`, JSON output can contain both the preliminary LOP
+`data.typedData` and a separate cST `data.jit.permitTypedData`. Inspect
+`data.jit.permitPreparation` and `data.orderSignable` before signing:
+
+1. `awaiting-signature`: sign only the cST permit payload (token domain, owner account,
+   LOP spender, makingAmount in cST base units, finite deadline).
+2. Insert its signature into the unsigned cST row in `data.jit.reprepareInput`, retaining
+   both `nonce` and `typedDataHash`. Re-prepare that complete input using `ch prepare
+   order --json '<complete input>'` or the same MCP `cork_prepare_orders` tool. Keep its action,
+   request identity, account, generation, recipe bytes, constraint, amounts, fees and salt.
+3. Only after verification or a sufficient standing allowance, sign the **new** LOP
+   order and finalize. The permit changes the extension and order hash. For an RFQ,
+   continue with the RFQ-write/answer steps after the final maker signature.
+
+`ch sign` refuses a preliminary envelope with `orderSignable:false` before any
+keystore access or prompt. Extract only `data.jit.permitTypedData` to a separate
+JSON artifact when signing the permit; do not pipe the preliminary order envelope.
+
+`unavailable` produces no signable permit and `orderSignable:false`; do not sign or
+submit the preliminary order. Restore readable state/simulation, or create the pool
+and approve cST to the LOP first. Metadata comes from the actual existing token or
+the successfully created token in one simulation, never a guessed name/nonce zero.
+`jitMarket.permitDeadline` pins a finite absolute deadline; otherwise the helper
+uses the initial requested order expiry or ten minutes when TTL is omitted.
+Helper-dependent orders cannot outlive that pin, including after signing delay or
+with omitted TTL. RFQ freshness/expiry echoes describe the actual bounded order.
+Cited re-preparation inputs retain their citation, not uncited premium/expiry fields.
+Pinned EOA permits require 65-byte canonical `v=27/28`, low-S signatures. Delegated
+EOAs use ECDSA on v/r/s, but bytes-wire coded owners still require ERC-1271.
+Legacy helper pins refuse; existing unpinned rows and standing allowances retain
+their prior behavior. Collateral approval to the JIT adapter stays separate.
+See the [SDK sequence](sdk.md#jit-maker-permit-signing) for exact lifetime and wire rules.
+
+
 ## 7. Inspect bytes — `ch decode`
 
 ```sh
@@ -777,20 +821,20 @@ build's allowlist, the tool warns `implementation_not_approved` on ABI-typed pre
 refuses the JIT hook paths unless `CORK_ALLOW_UNAPPROVED_CODE=1` is set. Expect this for a staging
 deployment that comes before the release that ships its hash.
 
-The build's repository identity also selects its release and update channel. `ch version --json`
-shows it. A private build uses only that repository, never the public channel. Set
-`CORK_GITHUB_TOKEN` explicitly to an authorized, read-only GitHub credential for private repository
-contents, releases, assets and attestation reads. It is a process environment value, not a CLI
-argument or URL parameter. Do not paste it into logs, configuration files or notes. The RFQ API key
-is unrelated and cannot authorize GitHub downloads. `ch` sends GitHub credentials only to the
-authorized API origin, never to a redirected asset host.
+Public builds use `Cork-Technology/cork-cli` for defaults, releases and self-update.
+`ch version --json` shows the repository identity. Unsupported build repository identities are
+refused. Config and asset requests are unauthenticated; ambient GitHub tokens are not forwarded
+to custom config URLs or redirected downloads. Config caches bind the public repository and
+exact resource/ref, and update caches reject foreign or unscoped entries.
 
-Private self-update requires the GitHub CLI (`gh`). It also requires a successful
-artifact-attestation check against the build's repository, release workflow, tag and commit. Release
-checksums stay available for manual comparison. Private self-update never uses them in place of
-provenance verification. A dry run reports the selected tag, asset and installation path. It does
-not download, attest or replace the binary. Separate caches per repository keep private and public
-release and config results apart.
+Self-update prefers GitHub CLI (`gh`) artifact-attestation verification against the public
+repository, release workflow, peeled tag commit and source ref. If `gh` is unavailable, public
+release checksums provide explicitly weaker integrity verification. A failed attestation never
+downgrades to checksums. Both paths validate the staged binary's version, commit and target
+before an atomic replacement; an exposed repository identity must match the public repository.
+A dry run reports the selected tag, asset and installation path without downloading, verifying
+or replacing the binary. The default update lookup uses GitHub's latest public release; select
+`--tag vX.Y.Z-rc.N` explicitly for a candidate.
 
 The README's synonym table lists the accepted synonyms, and the pre-rename names that answer with
 their new name.

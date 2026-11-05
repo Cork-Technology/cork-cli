@@ -210,12 +210,28 @@ async function realFetchChainlist(chainId: number): Promise<string[]> {
   }
 }
 
-/** The real transport for the failover client: viem's http transport, instantiated per URL with
- *  the known chain attached (same construction mkClient performs, minus the client shell). */
+/** Match the pinned viem numeric retry classes before consumer error wrapping. */
+function isRetryableNumericRpcError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = error.code;
+  return code === -1 || code === -32005 || code === -32603 || code === 429;
+}
+
+/** The outer wrapper owns transport-family retries; numeric provider errors retain viem's
+ *  bounded same-endpoint recovery. Explicit and kill-switch clients are unchanged. */
 function realTransportRequest(url: string, chainId: number | undefined): TransportRequest {
   const chain = chainId !== undefined ? CHAINS[chainId] : undefined;
-  const t = http(url)(chain ? { chain } : {});
-  return (args) => t.request(args as Parameters<typeof t.request>[0]);
+  const t = http(url, { retryCount: 0 })(chain ? { chain } : {});
+  return async (args) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await t.request(args as Parameters<typeof t.request>[0]);
+      } catch (error) {
+        if (isTransportError(error) || attempt >= 3 || !isRetryableNumericRpcError(error)) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 150 * 2 ** attempt));
+      }
+    }
+  };
 }
 
 export function realDeps(): RpcDeps {

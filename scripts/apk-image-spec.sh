@@ -22,11 +22,7 @@ spec="${APKO_SPEC:-packaging/cork-cli.apko.yaml}"
 PAGES_REPO="https://cork-technology.github.io/cork-cli/apk"
 PAGES_KEY="https://cork-technology.github.io/cork-cli/melange.rsa.pub"
 repo="${GITHUB_REPOSITORY:-Cork-Technology/cork-cli}"
-case "$repo" in Cork-Technology/cork-cli|Cork-Technology/cork-cli-private) ;; *) echo 'apk-image-spec: unrecognized component repository' >&2; exit 2 ;; esac
-if [ "$repo" = Cork-Technology/cork-cli-private ]; then
-  [ "$mode" = local ] || { echo 'apk-image-spec: private Pages channel is unsupported' >&2; exit 1; }
-  printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || { echo 'apk-image-spec: private image is candidate-only' >&2; exit 1; }
-fi
+case "$repo" in Cork-Technology/cork-cli) ;; *) echo 'apk-image-spec: unrecognized component repository' >&2; exit 2 ;; esac
 case "$revision" in ????????????????????????????????????????) ;; *) echo "apk-image-spec: revision must be a 40-hex commit (got: $revision)" >&2; exit 2 ;; esac
 case "$revision" in *[!0-9a-f]*) echo "apk-image-spec: revision must be a 40-hex commit (got: $revision)" >&2; exit 2 ;; esac
 test -f "$spec" || { echo "apk-image-spec: $spec not found" >&2; exit 1; }
@@ -74,7 +70,4 @@ yq '.contents.packages' "$spec"
 # version and revision are the RELEASE's.
 ANN_VERSION="$tag" ANN_REVISION="$revision" \
   yq -i '.annotations["org.opencontainers.image.version"] = strenv(ANN_VERSION) | .annotations["org.opencontainers.image.revision"] = strenv(ANN_REVISION)' "$spec"
-if [ "$repo" = Cork-Technology/cork-cli-private ]; then
-  REPO="$repo" yq -i '.annotations["org.opencontainers.image.source"] = "https://github.com/" + strenv(REPO) | .annotations["org.opencontainers.image.documentation"] = "https://github.com/" + strenv(REPO) + "#readme" | .annotations["org.opencontainers.image.title"] = "cork-cli-private"' "$spec"
-fi
 yq '.annotations' "$spec"
